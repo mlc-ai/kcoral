@@ -2,25 +2,16 @@
 
 ## 1. Overview
 
-GPU Server v2 is a synchronous remote GPU execution service. GPU stands for graphics processing unit, and API stands for application programming interface.
+GPU Server v2 lets a client send a program and input files to a remote GPU server, run them, and receive the result.
 
-To execute a program, the client provides:
+Main goals:
 
-- one entry script, with a default path of `main.py`;
-- zero or more artifact files required by the script;
-- optional execution settings, including the language, entry location, and timeout.
+- **General**: the server does not care what the task does; task logic stays in the submitted program.
+- **Isolated**: one GPU runs one request at a time, and runtime state is cleaned up when the request ends.
+- **Simple**: one request carries everything needed for one run, with no sessions or cross-request objects.
+- **Efficient**: identical files can reuse the cache without changing the files or execution behavior seen by the program.
 
-The corresponding file bytes may already be in the server cache, be uploaded before execution, or be included inline with the execution request.
-
-Here, an "artifact" means a configuration file, input data, Python module, dynamic-link library, or another file read by the entry script.
-
-The server creates an isolated working directory for the request, loads the entry file, invokes its no-argument entry function, and then returns the function's return value to the caller. By default, the entry file and entry function are `main.py` and `main()`.
-
-The protocol uses the `language` field to describe the entry script's language. The first version supports only Python, while the protocol structure reserves room for additional languages.
-
-The protocol has no instruction list, opcode, register, remote function name, or output file declaration. Module loading, tensor construction, GPU kernel execution, correctness checking, and performance measurement are all performed by the uploaded script.
-
-The first version is intended only for trusted clients. Uploaded code can perform arbitrary operations with the permissions of the worker process, and this interface provides no security sandbox.
+The first version is for trusted callers and does not isolate malicious code.
 
 ---
 
