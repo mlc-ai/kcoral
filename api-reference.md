@@ -1,74 +1,70 @@
-# GPU Server v2 API 参考
+# GPU Server v2 API Reference
 
-## 1. 概述
+## 1. Overview
 
-GPU Server v2 是一个同步远程 GPU 执行服务。GPU 指图形处理器，API 指应用程序编程接口。
+GPU Server v2 is a synchronous remote GPU execution service. GPU stands for graphics processing unit, and API stands for application programming interface.
 
-客户端在一次请求中上传：
+In a single request, the client uploads:
 
-- 一个入口脚本，默认路径为 `main.py`；
-- 零个或多个脚本运行所需的工件文件；
-- 可选的执行设置，包括语言、入口位置和超时时间。
+- one entry script, with a default path of `main.py`;
+- zero or more artifact files required by the script;
+- optional execution settings, including the language, entry location, and timeout.
 
-这里的“工件”指配置文件、输入数据、Python 模块、动态链接库以及其他供入口脚本读取的文件。
+Here, an "artifact" means a configuration file, input data, Python module, dynamic-link library, or another file read by the entry script.
 
-服务端为请求创建独立工作目录，加载入口文件，调用其中无参数的入口函数，然后把函数返回值传回调用方。入口文件和入口函数默认为 `main.py` 中的 `main()`。
+The server creates an isolated working directory for the request, loads the entry file, invokes its no-argument entry function, and then returns the function's return value to the caller. By default, the entry file and entry function are `main.py` and `main()`.
 
-协议使用 `language` 字段描述入口脚本的语言。第一版只支持 Python，协议形状为后续语言预留。
+The protocol uses the `language` field to describe the entry script's language. The first version supports only Python, while the protocol structure reserves room for additional languages.
 
-协议中没有指令列表、操作码、寄存器、远程函数名和输出文件声明。模块加载、张量构造、GPU 内核执行、正确性检查和性能测量都由上传的脚本完成。
+The protocol has no instruction list, opcode, register, remote function name, or output file declaration. Module loading, tensor construction, GPU kernel execution, correctness checking, and performance measurement are all performed by the uploaded script.
 
-第一版只面向可信客户端。上传的代码可以使用工作进程权限执行任意操作，该接口不提供安全沙箱。
+The first version is intended only for trusted clients. Uploaded code can perform arbitrary operations with the permissions of the worker process, and this interface provides no security sandbox.
 
 ---
 
-## 2. 接口
+## 2. Interfaces
 
 ### 2.1 `POST /execute`
 
-上传并在一张 GPU 上执行一个程序。
+Upload and execute a program on one GPU.
 
-该请求采用同步模式。请求在排队和执行期间保持连接，成功响应携带入口函数的返回值。
+The request is synchronous. The connection remains open while the request is queued and executed, and a successful response carries the entry function's return value.
 
-#### 2.1.1 请求格式
+#### 2.1.1 Request Format
 
-内容类型：
+Content type:
 
 ```text
 multipart/form-data
 ```
 
-`multipart/form-data` 是一种 HTTP 多段请求格式，可以在一个请求体中携带 JSON 元数据和多个二进制文件。HTTP 指超文本传输协议，JSON 指 JavaScript Object Notation，一种结构化文本数据格式。
+`multipart/form-data` is an HTTP multipart request format that can carry JSON metadata and multiple binary files in one request body. HTTP stands for Hypertext Transfer Protocol, and JSON stands for JavaScript Object Notation, a structured text data format.
 
-请求体支持以下部分：
+The request body supports the following parts:
 
-| 部分名称 | 内容类型 | 必需 | 说明 |
+| Part name | Content type | Required | Description |
 |---|---|---:|---|
-| `job` | `application/json` | 否 | 执行设置 |
-| `file:<path>` | `application/octet-stream` | 是 | 放到工作目录 `<path>` 的文件 |
+| `job` | `application/json` | Yes | Execution settings and file manifest |
+| `blob:<sha256>` | `application/octet-stream` | Yes | File content identified by its full SHA-256 hash |
 
-上传文件中必须恰好有一个文件的路径等于入口文件路径（默认 `main.py`）。
+A request must contain exactly one `job` part and one blob part for each unique hash referenced by `job.files`.
 
-工件部分名称示例：
+A manifest is JSON data describing file paths and their content references. `job.files` maps working-directory-relative paths to blobs. Uploaded content does not carry file paths in multipart part names.
 
-```text
-file:input.json
-file:data/input.bin
-file:modules/kernel.py
-file:build/kernel.so
-```
-
-`file:` 前缀属于协议元数据，创建文件时会被移除。例如，`file:data/input.bin` 会成为：
+Example blob part names:
 
 ```text
-<工作目录>/data/input.bin
+blob:81d4<remaining SHA-256 hexadecimal characters>
+blob:97ab<remaining SHA-256 hexadecimal characters>
 ```
 
-服务端为每个文件计算完整的 SHA-256 内容哈希。SHA-256 是一种密码学哈希函数，这里用来识别内容相同的文件。服务端可以在内部复用缓存文件；缓存不会改变请求语义，每个文件仍会出现在本次请求的工作目录中。
+Each `blob` value must contain 64 lowercase hexadecimal characters. A multipart part name is the concatenation of `blob:` and that value. The server recomputes each part's SHA-256 and verifies its name. SHA-256 is a cryptographic hash function used here for content addressing, integrity verification, and file caching.
 
-##### `job` 对象
+A request must carry every unique blob referenced by `job.files`, even when the server cache already contains identical content. Multiple paths may reference one blob, which is uploaded only once in the multipart body. A missing referenced blob, hash mismatch, duplicate blob part, or blob not referenced by the manifest produces `invalid_request`. Part order does not affect request semantics.
 
-可选的 `job` 部分格式如下：
+##### `job` Object
+
+The required `job` part has the following format:
 
 ```json
 {
@@ -77,19 +73,33 @@ file:build/kernel.so
     "file": "main.py",
     "function": "main"
   },
-  "timeout_seconds": 60
+  "files": {
+    "main.py": {
+      "blob": "<main_sha256>"
+    },
+    "data/input.bin": {
+      "blob": "<input_sha256>"
+    }
+  },
+  "timeout_seconds": 60,
+  "stdout_limit_bytes": 1048576,
+  "stderr_limit_bytes": 1048576
 }
 ```
 
-| 字段 | 必需 | 默认值 | 说明 |
+| Field | Required | Default | Description |
 |---|---:|---|---|
-| `language` | 否 | `"python"` | 入口脚本的语言 |
-| `entry` | 否 | 见下 | 入口位置 |
-| `entry.file` | 否 | `"main.py"` | 入口文件在工作目录中的路径 |
-| `entry.function` | 否 | `"main"` | 入口函数名 |
-| `timeout_seconds` | 否 | 服务端配置 | 正数，表示执行超时时间，单位为秒 |
+| `language` | No | `"python"` | The entry script's language |
+| `entry` | No | See below | The entry location |
+| `entry.file` | No | `"main.py"` | The entry file's path in the working directory |
+| `entry.function` | No | `"main"` | The entry function name |
+| `files` | Yes | None | Mapping from working-directory-relative paths to file-content references |
+| `files.<path>.blob` | Yes | None | Full SHA-256 hash of the corresponding file content |
+| `timeout_seconds` | No | Server configuration | A positive number specifying the execution timeout in seconds |
+| `stdout_limit_bytes` | No | Server configuration | Maximum standard-output bytes included in the response |
+| `stderr_limit_bytes` | No | Server configuration | Maximum standard-error bytes included in the response |
 
-所有字段都可以省略。省略 `job` 等价于全部使用默认值，此时服务端执行：
+`files` is the only required field. When the other fields are omitted, the server uses the default language and entry point, equivalent to executing:
 
 ```python
 from main import main
@@ -97,43 +107,45 @@ from main import main
 return_value = main()
 ```
 
-`language` 第一版只接受 `"python"`。其他取值返回 `invalid_request`。该字段决定服务端如何加载入口文件和调用入口函数；后续语言必须在协议修订中定义各自的加载和调用规则。
+In the first version, `language` accepts only `"python"`. Any other value returns `invalid_request`. This field determines how the server loads the entry file and invokes the entry function; a protocol revision must define the loading and invocation rules for each additional language.
 
-`entry.file` 必须满足 2.1.1 节的文件路径规则，并且必须指向本次请求上传的一个文件。`entry.function` 必须是入口文件中定义的无参数可调用函数。
+`entry.file` must satisfy the file path rules in Section 2.1.1 and must be a key in `files`. `entry.function` must be a no-argument callable defined in the entry file.
 
-服务端拒绝未知字段，避免客户端误以为某项未支持的设置已经生效。
+The server rejects unknown fields to prevent clients from assuming that an unsupported setting has taken effect.
 
-`job` 不声明输出。应用层结果只有入口函数的返回值。
+`job` does not declare outputs. The entry function's return value is the only application-level result.
 
-文档其余部分使用默认入口 `main.py` 和 `main()` 描述行为；除非特别说明，这些描述对自定义 `entry` 同样成立，把 `main.py` 替换为 `entry.file`、`main()` 替换为 `entry.function` 即可。
+`stdout_limit_bytes` and `stderr_limit_bytes` must be non-negative integers and cannot exceed the server-configured maximum. A value of `0` excludes that output stream from the response. These limits apply only to API responses and SDK execution results; the logs defined in Section 5 always preserve complete output.
 
-##### 文件路径规则
+The rest of this document describes behavior using the default entry point, `main.py` and `main()`. Unless stated otherwise, these descriptions also apply to a custom `entry`: replace `main.py` with `entry.file` and `main()` with `entry.function`.
 
-所有工件路径必须满足以下条件：
+##### File Path Rules
 
-- 使用 `/` 作为路径分隔符；
-- 使用相对于工作目录的路径；
-- 不包含空路径段、`.` 或 `..`；
-- 不包含空字符；
-- 不以 `/` 开头；
-- 不允许通过符号链接指向工作目录之外；
-- 在一次请求中保持唯一；
-- 不覆盖服务端创建的内部文件。
+Every key in `files` must:
 
-路径规范化之后必须与客户端提交的路径完全相同：
+- use `/` as the path separator;
+- be relative to the working directory;
+- contain no empty path segments, `.` segments, or `..` segments;
+- contain no null characters;
+- not begin with `/`;
+- not point outside the working directory through a symbolic link;
+- be unique within a request;
+- not overwrite internal files created by the server.
 
-| 客户端提交的部分 | 处理结果 |
+After path normalization, a path must be exactly identical to the path submitted by the client:
+
+| `files` key | Result |
 |---|---|
-| `file:data/input.bin` | 接受 |
-| `file:./input.bin` | 拒绝 |
-| `file:data/../input.bin` | 拒绝 |
-| `file:/etc/passwd` | 拒绝 |
+| `data/input.bin` | Accepted |
+| `./input.bin` | Rejected |
+| `data/../input.bin` | Rejected |
+| `/etc/passwd` | Rejected |
 
-服务端按需创建父目录。
+The server rejects duplicate JSON keys and collisions after path normalization, and creates parent directories as needed.
 
-##### Python 入口约定
+##### Python Entry Conventions
 
-`language` 为 `"python"` 时，入口文件必须定义一个与 `entry.function` 同名的可调用函数。使用默认值时即：
+When `language` is `"python"`, the entry file must define a callable with the same name as `entry.function`. With the default values, this is:
 
 ```python
 def main():
@@ -141,115 +153,146 @@ def main():
     return result
 ```
 
-入口函数必须满足：
+The entry function must:
 
-- 不接收参数；
-- 可以导入同一请求上传的其他 Python 文件；
-- 可以使用相对于当前工作目录的路径读取工件；
-- 运行时只能看到一张 GPU，该设备显示为 `cuda:0`；
-- 返回一个受支持的值；
-- 在请求超时前完成。
+- accept no arguments;
+- be able to import other Python files uploaded in the same request;
+- be able to read artifacts using paths relative to the current working directory;
+- see only one GPU at runtime, with that device appearing as `cuda:0`;
+- return a supported value;
+- finish before the request timeout.
 
-服务端在导入入口文件之前，把当前工作目录切换到请求工作目录，并在请求期间将该目录放到 Python 模块搜索路径的最前面。
+Before importing the entry file, the server changes the current working directory to the request's working directory and places that directory at the beginning of the Python module search path for the duration of the request.
 
-服务端以模块方式导入入口文件。文件顶层代码会在调用入口函数之前执行。建议把实际工作放在入口函数内，便于确定失败位置和测量执行时间。
+The server imports the entry file as a module. Top-level code in the file runs before the entry function is invoked. Placing the actual work inside the entry function is recommended to make failure locations and execution-time measurements clear.
 
-服务端不传递命令行参数，不注入应用对象，也不查找 `entry.function` 以外的函数名。
+The server passes no command-line arguments, injects no application object, and does not look for any function name other than `entry.function`.
 
-##### 脚本执行环境
+##### Script Execution Environment
 
-每张 GPU 对应一个工作槽位，同一槽位上的请求串行执行。
+Each GPU has one worker slot, and requests in the same slot execute serially.
 
-服务端在执行脚本前限制 GPU 可见范围，使分配到的物理 GPU 在脚本中显示为：
+Before running a script, the server limits GPU visibility so that the assigned physical GPU appears in the script as:
 
 ```text
 cuda:0
 ```
 
-脚本使用服务端预先配置的 Python 解释器和已安装依赖。客户端不能通过该接口选择其他解释器或安装依赖。
+The script uses the server's preconfigured Python interpreter and installed dependencies. Clients cannot select another interpreter or install dependencies through this interface.
 
-服务端提供以下环境变量：
+The server provides the following environment variables:
 
-| 环境变量 | 说明 |
+| Environment variable | Description |
 |---|---|
-| `GPU_SERVER_REQUEST_ID` | 用于日志和问题定位的唯一请求标识 |
-| `GPU_SERVER_WORK_DIR` | 本次请求工作目录的绝对路径 |
+| `GPU_SERVER_REQUEST_ID` | The unique request identifier used for logging and troubleshooting |
+| `GPU_SERVER_WORK_DIR` | The absolute path of the working directory for the current request |
 
-程序应优先使用相对路径访问上传的工件。工作目录绝对路径仅对当前请求有效，不应持久化使用。
+Programs should prefer relative paths when accessing uploaded artifacts. The absolute working-directory path is valid only for the current request and should not be retained for later use.
 
-#### 2.1.2 响应
+#### 2.1.2 Response
 
-##### 请求标识
+##### Request Identifier
 
-服务端在 `/execute` 请求进入处理函数后、解析请求体之前生成一个 UUID v4。UUID 指通用唯一标识符，v4 表示该标识符使用随机数生成。
+After an `/execute` request enters the request handler and before the request body is parsed, the server generates a UUID v4. UUID stands for universally unique identifier, and v4 means that the identifier is randomly generated.
 
-请求标识使用小写标准 UUID 字符串：
+The request identifier uses a lowercase canonical UUID string:
 
 ```text
 7f61b94e-034a-4e80-b67d-eca52bb952cc
 ```
 
-该值在协议中统一命名为 `request_id`，并贯穿请求解析、排队、工作进程执行、日志记录和响应生成。
+This value is consistently named `request_id` throughout the protocol and is used across request parsing, queuing, worker-process execution, logging, and response generation.
 
-每个 `/execute` 响应都通过 HTTP 响应头返回请求标识：
+Every `/execute` response returns the request identifier in an HTTP response header:
 
 ```http
 X-Request-ID: 7f61b94e-034a-4e80-b67d-eca52bb952cc
 ```
 
-成功和错误响应的 JSON 元数据也包含相同的 `request_id`。对于字节串和张量返回值，该字段位于 multipart 响应的 `result` 部分。
+The JSON metadata in successful and error responses also contains the same `request_id`. For byte-string and tensor return values, this field is in the `result` part of the multipart response.
 
-客户端不能指定或覆盖 `request_id`。同一次 HTTP 请求在服务端内部始终使用同一个值；客户端重试会产生新的 `request_id`。如果以后需要识别业务层重复提交，应增加独立的幂等键，不能使用 `request_id` 表示幂等关系。
+Clients cannot specify or override `request_id`. The server uses the same value throughout a single HTTP request; a client retry generates a new `request_id`. If business-level duplicate submissions need to be identified in the future, an independent idempotency key should be added; `request_id` must not represent an idempotency relationship.
 
-`GPU_SERVER_REQUEST_ID` 环境变量的值与响应中的 `request_id` 完全一致。
+The value of the `GPU_SERVER_REQUEST_ID` environment variable is exactly identical to the `request_id` in the response.
 
-##### 返回值
+##### Return Value
 
-入口函数可以返回由以下类型递归组成的值：
+The entry function may return a value recursively composed of the following types:
 
-- `None`、`bool`、`int`、有限的 `float` 和 `str`；
-- `bytes`、`bytearray` 和 `memoryview`；
-- 张量；
-- `list`；
-- `tuple`；
-- 键为字符串的 `dict`。
+- `None`, `bool`, `int`, finite `float`, and `str`;
+- `bytes`, `bytearray`, and `memoryview`;
+- tensor objects implementing the DLPack producer protocol, including `tvm_ffi.Tensor`;
+- `list`;
+- `tuple`;
+- `dict` with string keys.
 
-列表、元组和字典可以在任意层级包含上述类型。一个返回值可以同时包含多个字节串和多个张量。
+Lists, tuples, and dictionaries may contain the types above at any nesting level. A single return value may contain multiple byte strings and multiple tensors.
 
-张量指具有数据类型、形状和数值数据的多维数组。服务端通过运行环境提供的张量适配器读取张量，将其转换为连续的主机内存字节。
+DLPack is a standard protocol for exchanging tensors in memory. A DLPack producer object must provide `__dlpack__()` and `__dlpack_device__()`. Common tensor types that the entry function may return directly include:
 
-###### 返回值描述树
+- `torch.Tensor`;
+- `numpy.ndarray`;
+- `cupy.ndarray`;
+- `jax.Array`;
+- `tvm_ffi.Tensor`;
+- any other object implementing `__dlpack__()` and `__dlpack_device__()`.
 
-服务端将 Python 返回值递归编码为一棵描述树：
+The server first normalizes the tensor to `tvm_ffi.Tensor` from the `apache-tvm-ffi` package. An existing `tvm_ffi.Tensor` is used directly; other DLPack producers are converted through `tvm_ffi.from_dlpack(..., require_contiguous=True)`:
 
-| Python 值 | 描述节点 |
+```python
+import tvm_ffi
+
+
+def normalize_tensor(value):
+    if isinstance(value, tvm_ffi.Tensor):
+        tensor = value
+    elif hasattr(value, "__dlpack__") and hasattr(value, "__dlpack_device__"):
+        tensor = tvm_ffi.from_dlpack(value, require_contiguous=True)
+    else:
+        raise UnsupportedReturnTypeError()
+
+    if not tensor.is_contiguous():
+        raise ReturnSerializationError("tensor must be C-contiguous")
+
+    return tensor
+```
+
+The first version accepts only dense C-contiguous tensors. If a DLPack producer exports a non-contiguous tensor or cannot be imported by `tvm_ffi.from_dlpack`, the server returns `invalid_return_value`. The server does not attempt to make the tensor contiguous automatically. Other objects that do not implement the DLPack producer protocol also produce `invalid_return_value`.
+
+See the official [`tvm_ffi.from_dlpack` documentation](https://tvm.apache.org/ffi/reference/python/generated/tvm_ffi.from_dlpack.html).
+
+###### Return Value Description Tree
+
+The server recursively encodes the Python return value as a description tree:
+
+| Python value | Description node |
 |---|---|
-| 完全可表示为 JSON 的子树 | `{"type": "json", "value": ...}` |
-| `bytes`、`bytearray`、`memoryview` | `{"type": "bytes", ...}` |
-| 张量 | `{"type": "tensor", ...}` |
+| A subtree fully representable as JSON | `{"type": "json", "value": ...}` |
+| `bytes`, `bytearray`, `memoryview` | `{"type": "bytes", ...}` |
+| A C-contiguous tensor implementing the DLPack producer protocol | `{"type": "tensor", ...}` |
 | `list` | `{"type": "list", "items": [...]}` |
 | `tuple` | `{"type": "tuple", "items": [...]}` |
 | `dict` | `{"type": "dict", "items": {...}}` |
 
-JSON 节点可以包含：
+A JSON node may contain:
 
-- `null`；
-- 布尔值；
-- 整数；
-- 有限浮点数；
-- 字符串；
-- 只包含 JSON 值的数组；
-- 键为字符串、值为 JSON 值的对象。
+- `null`;
+- Boolean values;
+- integers;
+- finite floating-point numbers;
+- strings;
+- arrays containing only JSON values;
+- objects with string keys and JSON values.
 
-元组在描述树中保留为 `tuple`，客户端可以据此恢复元组。正无穷、负无穷和非数值等非有限浮点数不属于 JSON 值。
+A tuple remains a `tuple` in the description tree, allowing the client to restore it as a tuple. Non-finite floating-point numbers, including positive infinity, negative infinity, and not-a-number values, are not JSON values.
 
-如果一个完整子树都可以表示为 JSON，服务端将该子树合并为一个 `json` 节点，避免为每个标量生成描述节点。
+If an entire subtree can be represented as JSON, the server combines that subtree into a single `json` node to avoid generating a description node for every scalar.
 
-###### 纯 JSON 返回值
+###### Pure JSON Return Values
 
-返回值完全由 JSON 值组成时，响应内容类型为 `application/json`。
+When the return value consists entirely of JSON values, the response content type is `application/json`.
 
-`main.py` 示例：
+Example `main.py`:
 
 ```python
 def main():
@@ -260,7 +303,7 @@ def main():
     }
 ```
 
-成功响应：
+Successful response:
 
 ```json
 {
@@ -281,43 +324,43 @@ def main():
 }
 ```
 
-###### 包含二进制值的返回值
+###### Return Values Containing Binary Values
 
-返回值树中出现字节串或张量时，响应内容类型为 `multipart/form-data`，包含：
+When a byte string or tensor appears in the return value tree, the response content type is `multipart/form-data` and contains:
 
-| 部分名称 | 内容类型 | 说明 |
+| Part name | Content type | Description |
 |---|---|---|
-| `result` | `application/json` | 执行元数据和完整返回值描述树 |
-| `return:<index>` | `application/octet-stream` | 一个字节串或张量的原始字节 |
+| `result` | `application/json` | Execution metadata and the complete return value description tree |
+| `return:<index>` | `application/octet-stream` | The raw bytes of one byte string or tensor |
 
-`<index>` 从 `0` 开始。服务端按深度优先遍历顺序为二进制值分配 part 标识。part 标识在 JSON 中使用字符串表示，例如：
+`<index>` starts at `0`. The server assigns part identifiers to binary values in depth-first traversal order. A part identifier is represented as a string in JSON, for example:
 
 ```json
 "part": "return:0"
 ```
 
-该字符串与 multipart 部分的 `name` 完全相同：
+The string is exactly identical to the multipart part's `name`:
 
 ```http
 Content-Disposition: form-data; name="return:0"
 Content-Type: application/octet-stream
 ```
 
-客户端必须使用描述节点中的 `part` 字段查找数据，不应自行推算编号或解析标识符中的数字。part 标识只在当前 HTTP 响应中有效。
+The client must use the `part` field in the description node to locate the data and should not calculate the numbering or parse the number in the identifier. A part identifier is valid only within the current HTTP response.
 
-每个二进制节点同时携带：
+Each binary node also carries:
 
-| 字段 | 说明 |
+| Field | Description |
 |---|---|
-| `part` | 当前响应中的 multipart 部分名称 |
-| `size` | 原始数据字节数 |
-| `sha256` | 原始数据的完整 SHA-256 哈希 |
+| `part` | The multipart part name in the current response |
+| `size` | The number of raw data bytes |
+| `sha256` | The full SHA-256 hash of the raw data |
 
-`part` 用于定位数据，`sha256` 用于完整性校验。多个返回值节点可以引用同一个 part，以复用内容完全相同的二进制数据。
+`part` locates the data, while `sha256` verifies its integrity. Multiple return value nodes may refer to the same part to reuse binary data with exactly identical content.
 
-###### 字节串节点
+###### Byte String Nodes
 
-字节串节点格式：
+A byte string node has the following format:
 
 ```json
 {
@@ -328,11 +371,11 @@ Content-Type: application/octet-stream
 }
 ```
 
-对应的 multipart 部分保存 `bytes`、`bytearray` 或 `memoryview` 的原始字节。
+The corresponding multipart part stores the raw bytes of the `bytes`, `bytearray`, or `memoryview` value.
 
-###### 张量节点
+###### Tensor Nodes
 
-张量节点格式：
+A tensor node has the following format:
 
 ```json
 {
@@ -345,17 +388,17 @@ Content-Type: application/octet-stream
 }
 ```
 
-服务端对张量执行设备同步，将张量转换为连续布局并复制到主机内存。张量字节使用连续的行优先顺序存储，多字节标量使用小端字节序。
+The server normalizes a DLPack producer to `tvm_ffi.Tensor`, verifies that it has a C-contiguous layout, synchronizes its device, and copies it to host memory. Tensor bytes are stored in contiguous row-major order, and multibyte scalar values use little-endian byte order. A non-contiguous tensor produces `invalid_return_value`.
 
-张量节点中的：
+In a tensor node:
 
-- `dtype` 表示元素数据类型；
-- `shape` 表示各维长度；
-- `size` 必须等于形状中各维长度的乘积乘以单个元素的字节数。
+- `dtype` indicates the element data type;
+- `shape` indicates the length of each dimension;
+- `size` must equal the product of all dimension lengths in the shape multiplied by the number of bytes per element.
 
-###### 嵌套返回值示例
+###### Nested Return Value Example
 
-`main()` 可以返回：
+When `output_tensor` is any supported DLPack producer object, `main()` may return:
 
 ```python
 def main():
@@ -372,7 +415,7 @@ def main():
     }
 ```
 
-`result` 部分中的返回值描述树为：
+The return value description tree in the `result` part is:
 
 ```json
 {
@@ -420,94 +463,94 @@ def main():
 }
 ```
 
-multipart 响应还包含 `return:0` 和 `return:1` 两个二进制部分。
+The multipart response also contains the two binary parts `return:0` and `return:1`.
 
-###### 类型和序列化限制
+###### Type and Serialization Limits
 
-返回值不属于本节列出的类型时，服务端返回 `unsupported_return_type`。例如：
+If the return value has a type not listed in this section, the server returns `invalid_return_value`. Examples include:
 
-- 生成器和迭代器；
-- 打开的文件对象；
-- 任意其他 Python 类实例；
-- 函数和模块；
-- 键不是字符串的字典。
+- generators and iterators;
+- open file objects;
+- instances of other Python classes that do not implement the DLPack producer protocol;
+- functions and modules;
+- dictionaries whose keys are not strings.
 
-服务端应在错误信息中提供无法编码的值路径，例如：
+The server should provide the path of the value that cannot be encoded in the error message, for example:
 
 ```json
 {
   "status": "error",
-  "error": "unsupported_return_type",
+  "error": "invalid_return_value",
   "message": "unsupported value at $.outputs[2].metadata",
   "request_id": "7f61b94e-034a-4e80-b67d-eca52bb952cc"
 }
 ```
 
-服务端不保留 Python 对象引用关系。同一个对象在返回值树中出现多次时，客户端得到多个独立引用；对应二进制内容可以共享同一个 part。
+The server does not preserve relationships between Python object references. If the same object appears multiple times in the return value tree, the client receives multiple independent references; the corresponding binary content may share the same part.
 
-循环引用无法表示为有限描述树。服务端在递归构建描述树时必须主动检查循环引用，不能等待 Python 达到递归深度限制。
+A circular reference cannot be represented as a finite description tree. The server must proactively check for circular references while recursively constructing the description tree and cannot wait for Python to reach its recursion depth limit.
 
-检查时记录当前递归路径上 `list`、`tuple` 和 `dict` 的对象标识：
+During this check, the server records the object identities of `list`, `tuple`, and `dict` values on the current recursion path:
 
-1. 进入容器前，如果它的对象标识已经位于当前递归路径中，则发现循环引用；
-2. 进入容器时，将对象标识加入当前递归路径；
-3. 完成该容器编码后，将对象标识移出当前递归路径。
+1. Before entering a container, if its object identity is already on the current recursion path, a circular reference has been found.
+2. When entering a container, add its object identity to the current recursion path.
+3. After encoding the container, remove its object identity from the current recursion path.
 
-该集合只记录当前递归路径，不记录所有已经访问的对象。因此，多个位置可以引用同一个非循环对象；这些位置会分别编码。
+This set records only the current recursion path, not every object already visited. Consequently, multiple locations may refer to the same non-circular object; those locations are encoded separately.
 
-发现循环引用时，服务端返回 `return_serialization_failed`，并在错误信息中携带发现循环的位置：
+When a circular reference is found, the server returns `invalid_return_value` and includes the location where the cycle was found in the error message:
 
 ```json
 {
   "status": "error",
-  "error": "return_serialization_failed",
+  "error": "invalid_return_value",
   "message": "circular reference at $.outputs[1]",
   "request_id": "7f61b94e-034a-4e80-b67d-eca52bb952cc"
 }
 ```
 
-描述树构建完成后，服务端使用 Python `json.dumps` 生成 `result`。调用时保持默认的 `check_circular=True`，并设置 `allow_nan=False`，对循环引用和非有限浮点数再做一次校验。自定义递归检查仍然必需，因为循环可能在描述树构建完成之前发生。
+After constructing the description tree, the server uses Python `json.dumps` to generate `result`. The call keeps the default `check_circular=True` and sets `allow_nan=False`, providing an additional check for circular references and non-finite floating-point numbers. The custom recursive check remains necessary because a cycle may occur before construction of the description tree is complete.
 
-服务端必须配置：
+The server must configure:
 
-- 最大嵌套深度；
-- 最大描述节点数量；
-- 最大 JSON 元数据字节数；
-- 单个二进制值最大字节数；
-- 整个响应最大字节数。
+- a maximum nesting depth;
+- a maximum number of description nodes;
+- a maximum number of JSON metadata bytes;
+- a maximum number of bytes for an individual binary value;
+- a maximum number of bytes for the entire response.
 
-服务端在发送 HTTP 响应头之前完成返回值遍历，并将所有二进制内容序列化到临时文件。这样可以在遍历、同步或序列化失败时返回完整的 JSON 错误响应。
+Before sending the HTTP response headers, the server completes traversal of the return value and serializes all binary content to temporary files. This allows the server to return a complete JSON error response if traversal, synchronization, or serialization fails.
 
-##### 成功响应元数据
+##### Successful Response Metadata
 
-每个成功响应都包含：
+Every successful response contains:
 
-| 字段 | 说明 |
+| Field | Description |
 |---|---|
-| `status` | 固定为 `"ok"` |
-| `request_id` | 服务端为本次 HTTP 请求生成的 UUID v4 |
-| `return` | 入口函数返回值的类型和表示 |
-| `elapsed_ms` | 从开始导入入口文件到返回值序列化完成的时间 |
-| `queue_ms` | 等待可用 GPU 工作进程的时间 |
-| `stdout` | 导入入口文件和执行入口函数期间捕获的标准输出 |
-| `stderr` | 导入入口文件和执行入口函数期间捕获的标准错误 |
+| `status` | Always `"ok"` |
+| `request_id` | The UUID v4 generated by the server for the current HTTP request |
+| `return` | The type and representation of the entry function's return value |
+| `elapsed_ms` | The time from starting to import the entry file through completion of return value serialization |
+| `queue_ms` | The time spent waiting for an available GPU worker process |
+| `stdout` | Standard output captured while importing the entry file and executing the entry function |
+| `stderr` | Standard error captured while importing the entry file and executing the entry function |
 
-`elapsed_ms` 包含：
+`elapsed_ms` includes:
 
-- 导入入口文件；
-- 执行文件顶层代码；
-- 执行入口函数；
-- 同步并序列化返回值。
+- importing the entry file;
+- executing top-level code in the file;
+- executing the entry function;
+- synchronizing and serializing the return value.
 
-`elapsed_ms` 不包含：
+`elapsed_ms` does not include:
 
-- HTTP 请求上传时间；
-- 排队时间；
-- HTTP 响应下载时间。
+- HTTP request upload time;
+- queueing time;
+- HTTP response download time.
 
-GPU 内核性能应由入口函数使用适合该运行环境的 GPU 同步和计时方式测量。`elapsed_ms` 描述服务端执行总耗时，不能作为内核性能结果。
+GPU kernel performance should be measured by the entry function using GPU synchronization and timing methods appropriate for the runtime environment. `elapsed_ms` describes the server's total execution time and must not be used as a kernel performance result.
 
-服务端可以按配置限制标准输出和标准错误的最大字节数。发生截断时，响应额外包含：
+The server uses `stdout_limit_bytes` and `stderr_limit_bytes` to limit standard output and standard error in the response. Limits are measured in raw bytes. The response keeps the first N bytes of each stream and decodes them as UTF-8, replacing invalid byte sequences. If truncation occurs, the response additionally contains:
 
 ```json
 {
@@ -516,11 +559,11 @@ GPU 内核性能应由入口函数使用适合该运行环境的 GPU 同步和�
 }
 ```
 
-#### 2.1.3 错误
+#### 2.1.3 Errors
 
-所有错误响应都使用 `application/json`。
+All error responses use `application/json`.
 
-通用格式：
+General format:
 
 ```json
 {
@@ -533,24 +576,22 @@ GPU 内核性能应由入口函数使用适合该运行环境的 GPU 同步和�
 }
 ```
 
-错误响应中的 `request_id` 是小写标准 UUID v4，与 `X-Request-ID` 响应头完全一致。如果脚本已经开始执行，响应会包含 `stdout` 和 `stderr`。
+The `request_id` in an error response is a lowercase canonical UUID v4 and is exactly identical to the `X-Request-ID` response header. If the script has started executing, the response includes `stdout` and `stderr`.
 
-##### 错误类型
+##### Error Types
 
-| 错误 | HTTP 状态码 | 说明 |
+| Error | HTTP status code | Description |
 |---|---:|---|
-| `invalid_request` | 400 | 多段请求体或 `job` 对象无效 |
-| `invalid_path` | 400 | 工件路径不安全、无效或重复 |
-| `missing_entry` | 400 | 上传文件中没有 `entry.file` 指定的入口文件（默认 `main.py`） |
-| `invalid_entry` | 400 | 无法导入入口文件，或文件没有定义与 `entry.function` 同名的可调用函数 |
-| `execution_failed` | 400 | 导入阶段或入口函数抛出异常 |
-| `unsupported_return_type` | 400 | 入口函数返回协议无法序列化的值 |
-| `return_serialization_failed` | 500 | 同步或序列化受支持的返回值失败 |
-| `timeout` | 408 | 执行时间超过 `timeout_seconds` |
-| `worker_unavailable` | 503 | 没有健康的 GPU 工作进程可以接收请求 |
-| `worker_crashed` | 503 | 工作进程退出且没有返回有效响应 |
+| `invalid_request` | 400 | The request format, fields, paths, or entry declaration are invalid |
+| `execution_failed` | 400 | Importing the entry file or executing the entry function raises an exception |
+| `invalid_return_value` | 400 | The entry function's return value does not conform to the protocol |
+| `timeout` | 408 | Execution time exceeds `timeout_seconds` |
+| `unavailable` | 503 | No worker process is currently available, or a worker process crashes |
+| `internal_error` | 500 | A valid request triggers an internal server error |
 
-执行失败响应包含 Python 调用栈：
+`invalid_return_value` covers unsupported Python types, DLPack tensors that cannot be imported or are non-contiguous, non-string dictionary keys, circular references, non-finite floating-point values, and return values that exceed resource limits. If a return value conforms to the protocol but synchronization or serialization still fails, the server returns `internal_error`.
+
+An execution failure response contains a Python traceback:
 
 ```json
 {
@@ -564,24 +605,24 @@ GPU 内核性能应由入口函数使用适合该运行环境的 GPU 同步和�
 }
 ```
 
-调用栈可能泄露源代码和本地路径。面向不可信调用方的部署应关闭调用栈详情或对其进行清理。
+A traceback may expose source code and local paths. Deployments serving untrusted callers should disable traceback details or sanitize them.
 
 ### 2.2 `GET /health`
 
-返回服务状态、GPU 工作进程状态和排队请求数量。
+Return service status, GPU worker-process status, and the number of queued requests.
 
-#### 2.2.1 请求格式
+#### 2.2.1 Request Format
 
-`GET /health` 不接收请求体、查询参数或其他执行设置：
+`GET /health` accepts no request body, query parameters, or other execution settings:
 
 ```http
 GET /health HTTP/1.1
 Host: server:8000
 ```
 
-#### 2.2.2 响应
+#### 2.2.2 Response
 
-成功响应的内容类型为 `application/json`：
+A successful response has the content type `application/json`:
 
 ```json
 {
@@ -603,141 +644,446 @@ Host: server:8000
 }
 ```
 
-工作进程状态取值：
+Worker-process status values:
 
-| 状态 | 说明 |
+| Status | Description |
 |---|---|
-| `idle` | 可以接收请求 |
-| `busy` | 正在执行请求 |
-| `restarting` | 正在替换超时或失败的运行进程 |
-| `unhealthy` | 无法执行请求 |
+| `idle` | Can accept a request |
+| `busy` | Is executing a request |
+| `restarting` | Is replacing a runtime process that timed out or failed |
+| `unhealthy` | Cannot execute requests |
 
-只要至少一个工作进程能够继续执行请求，服务端就返回 HTTP 200。响应可以同时包含 `restarting` 或 `unhealthy` 工作进程。健康检查只读取服务端状态，每次调用不会额外执行 GPU 内核。
+As long as at least one worker process can continue executing requests, the server returns HTTP 200. The response may also include `restarting` or `unhealthy` worker processes. A health check only reads server state and does not execute an additional GPU kernel on each call.
 
-#### 2.2.3 错误
+#### 2.2.3 Errors
 
-没有任何工作进程能够执行请求时，服务端返回 HTTP 503：
+When no worker process can execute requests, the server returns HTTP 503:
 
 ```json
 {
   "status": "error",
-  "error": "worker_unavailable",
+  "error": "unavailable",
   "message": "no healthy GPU worker is available"
 }
 ```
 
-服务端无法读取内部状态时返回 HTTP 500，错误类型为 `health_check_failed`。
+If the server cannot read its internal state, it returns HTTP 500 with the error type `internal_error`.
 
 ---
 
-## 3. 执行模型
+## 3. Python Client SDK
 
-### 3.1 进程与调度
+SDK stands for software development kit. The first version provides a synchronous Python client whose `execute()` method matches the synchronous `POST /execute` interface.
 
-#### 进程模型
+The SDK is a convenience wrapper around the protocol and does not form a security boundary. The server repeats all validation. If the SDK runs in an environment that an automated agent can modify, the agent can bypass or change the SDK. Preventing reward hacking—manipulating the submission path to obtain an undeserved evaluation reward—requires a trusted orchestrator outside the agent-controlled environment to control submission.
 
-服务端包含：
+The public API is deliberately small: `Client(...)`, `client.execute(...)`, and `client.health()`. It provides no request builder that assembles a request through chained configuration calls, upload session, handle to a server-side object, pickle serialization, or automatic retry of `POST /execute`. The first version provides no asynchronous client.
 
-- 一个接收 HTTP 请求并调度任务的前端进程；
-- 每张已配置 GPU 对应一个工作槽位；
-- 每张 GPU 同一时间最多执行一个请求。
+### 3.1 Client
 
-前端进程不初始化 GPU 运行环境。每个工作进程通过 CUDA 设备可见性设置绑定到一张物理 GPU。CUDA 是工作环境使用的 GPU 编程和运行平台。
+The primary call is:
 
-#### 请求生命周期
+```python
+from benchmark_server import Client, Entry
 
-每个请求按以下步骤执行：
 
-1. 生成请求 UUID，并建立请求日志上下文。
-2. 解析并验证多段请求体。
-3. 验证 `job`、所有上传路径以及入口文件是否存在。
-4. 计算文件内容哈希并获取缓存文件引用。
-5. 等待一个空闲 GPU 工作进程。
-6. 创建新的请求工作目录。
-7. 在工作目录中放置所有上传文件。
-8. 设置当前工作目录和 Python 模块搜索路径。
-9. 导入入口文件。
-10. 获取并验证入口函数。
-11. 无参数调用入口函数。
-12. 同步并序列化返回值。
-13. 捕获标准输出和标准错误。
-14. 删除工作目录并释放缓存文件引用。
-15. 在响应头和响应元数据中返回请求 UUID。
+with Client("http://server:8000") as client:
+    result = client.execute(
+        files={
+            "main.py": benchmark_source,
+            "submission/kernel.py": kernel_source,
+            "data/input.bin": input_bytes,
+        },
+        language="python",
+        entry=Entry(file="main.py", function="main"),
+        timeout_seconds=60,
+    )
+```
 
-成功、脚本失败、序列化失败和超时都会执行清理流程。
+The public call signatures are:
 
-#### 调度
+| API | Contract |
+|---|---|
+| `Client(base_url, *, headers=None, connect_timeout_seconds=10)` | Creates a client for `base_url`. Optional `headers` are sent with each request. |
+| `client.execute(files, *, language="python", entry=Entry(), timeout_seconds=None, stdout_limit_bytes=None, stderr_limit_bytes=None) -> ExecutionResult` | Uploads files and synchronously executes the entry function. |
+| `client.health() -> Health` | Synchronously reads server and worker health. |
+| `client.close() -> None` | Releases the client's HTTP transport resources. |
+| `client.__enter__() -> Client` | Returns the open client. |
+| `client.__exit__(...) -> None` | Calls `close()` when the context exits. |
 
-前端维护先进先出的请求队列。多个 GPU 工作进程同时空闲时，前端按轮转顺序选择下一个工作进程。
+`Entry` is a frozen dataclass with the fields `file: str = "main.py"` and `function: str = "main"`.
 
-每个工作进程串行执行请求，防止多个基准测试请求同时共享一张 GPU，减少性能测量受到的干扰。
+The common call can omit all execution defaults:
 
-`queue_ms` 统计从请求验证完成到分配工作进程之间的时间。
+```python
+from benchmark_server import Client
 
-#### 超时与恢复
 
-超时范围包含：
+with Client("http://server:8000") as client:
+    result = client.execute(
+        files={"main.py": "def main():\n    return 42\n"},
+    )
+```
 
-- 导入入口文件；
-- 执行文件顶层代码；
-- 执行入口函数；
-- 同步并序列化返回值。
+The SDK always sends the required `job`, including explicit `language` and `entry` values and the file manifest generated from `files`. When `timeout_seconds`, `stdout_limit_bytes`, or `stderr_limit_bytes` is `None`, the SDK omits the corresponding field so that the server-configured default applies.
 
-排队时间不计入执行超时。
+`connect_timeout_seconds` covers only connection establishment. The SDK does not automatically derive a response-reading deadline from the execution timeout, because request upload time and queueing time are excluded from the server's execution timeout.
 
-超时发生后，服务端执行：
+### 3.2 File Inputs
 
-1. 终止正在执行上传脚本的进程；
-2. 等待一段较短且可配置的退出宽限时间；
-3. 如果进程仍未退出，则强制结束；
-4. 在该 GPU 接收下一个请求前替换受影响的运行进程；
-5. 删除本次请求工作目录；
-6. 返回 `timeout` 错误。
+The public input type is `FileContent = str | bytes | bytearray | memoryview | pathlib.Path`.
 
-服务端不尝试恢复已经超时的 Python 代码。
+UTF-8 means the 8-bit Unicode Transformation Format used here to encode text.
 
-### 3.2 文件缓存
+| Value type | Uploaded content |
+|---|---|
+| `str` | The string encoded as UTF-8 |
+| `bytes` | The raw bytes |
+| `bytearray` | The value converted to raw bytes |
+| `memoryview` | The viewed data converted to raw bytes |
+| `pathlib.Path` | The contents read from the local file |
 
-文件缓存只用于优化传输和工作目录构建。
+The `files` argument maps remote relative paths to `FileContent` values. Mapping keys become keys in `job.files` and paths in the request's working directory. A plain `str` value always means UTF-8 file content and never denotes a local path; callers must use `pathlib.Path` explicitly for a local file.
 
-缓存键是文件内容的完整 SHA-256 哈希，缓存条目不可修改。两个请求上传完全相同的字节时，可以引用同一缓存文件，同时在各自工作目录中使用不同路径。
+The SDK reads or encodes each value, computes its full SHA-256 hash, writes the path-to-hash mapping into `job.files`, and sends each unique content value as a `blob:<sha256>` part. Multiple paths with identical content produce only one blob part. Every blob part has content type `application/octet-stream`.
 
-文件缓存：
+The SDK sends every unique blob referenced by the manifest in each request and does not omit uploads based on server cache state. Before sending a request, the client validates path safety, verifies that `entry.file` is present in `files`, requires a positive `timeout_seconds` when one is provided, and requires both output limits to be non-negative integers. Duplicate keys cannot occur in a Python mapping, but the SDK must still normalize all remote paths and reject any collision after normalization. These client-side checks improve error reporting; the server recomputes hashes, validates the manifest, and remains authoritative.
 
-- 不改变入口函数可见的文件路径；
-- 不保留脚本对工作目录中文件的修改；
-- 不缓存入口函数返回值；
-- 不缓存已导入的 Python 模块；
-- 不缓存 GPU 内存。
+### 3.3 Execution Results
 
-工作目录中的文件必须采用私有副本、写时复制视图或具有同等隔离效果的实现。服务端不能把指向共享缓存的可写硬链接或符号链接直接暴露给脚本。
+`client.execute()` returns a frozen `ExecutionResult` dataclass with the following fields:
 
-缓存驱逐只能删除没有活跃请求引用的条目。
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `request_id` | `str` | Required | The request identifier returned by the server |
+| `value` | `ReturnValue` | Required | The recursively decoded entry-function return value |
+| `elapsed_ms` | `float` | Required | Total server execution time defined in Section 2.1.2 |
+| `queue_ms` | `float` | Required | Worker queue time defined in Section 2.1.2 |
+| `stdout` | `str` | Required | Captured standard output |
+| `stderr` | `str` | Required | Captured standard error |
+| `stdout_truncated` | `bool` | `False` | Whether standard output was truncated |
+| `stderr_truncated` | `bool` | `False` | Whether standard error was truncated |
 
-### 3.3 隔离
+Fields are accessed directly:
 
-以下状态只属于一个请求：
+```python
+print(result.request_id)
+print(result.value)
+print(result.elapsed_ms, result.queue_ms)
+print(result.stdout, result.stderr)
+```
 
-- 工作目录；
-- 上传文件布局；
-- 导入的入口模块；
-- 捕获的标准输出和标准错误；
-- 返回的 Python 对象；
-- 只能从本次请求对象访问的 GPU 内存。
+`ReturnValue` is decoded recursively:
 
-服务端不提供会话、跨请求 Python 对象、函数句柄、寄存器或应用层共享状态。
+| Description node | Decoded Python value |
+|---|---|
+| `json` | Ordinary Python JSON values: `None`, `bool`, `int`, finite `float`, `str`, `list`, and string-keyed `dict` |
+| `bytes` | `bytes` |
+| `tensor` | `tvm_ffi.Tensor` |
+| `list` | `list[ReturnValue]` |
+| `tuple` | `tuple[ReturnValue, ...]` |
+| `dict` | `dict[str, ReturnValue]` |
 
-文件内容缓存可以跨请求存活。缓存只保存不可变的上传字节，不保存 Python 模块、GPU 张量或执行结果。
+For a multipart response, the client looks up each binary value by the node's `part` field and verifies its `size` and full SHA-256 hash. It rejects duplicate, missing, and unreferenced binary parts. It also verifies that the `request_id` in the response body is a canonical UUID v4 and exactly matches the `X-Request-ID` response header.
 
-Python 和原生动态链接库可能创建进程级全局状态。实现必须保证请求无法观察到上一个请求导入的入口模块或工作目录。如果长期运行的工作进程无法彻底清理这些状态，在执行下一个请求前必须替换脚本运行进程。
+The SDK never uses `pickle`. Malformed JSON metadata, multipart structure, hashes, description trees, binary-part references, or request identifiers raise `ProtocolError`.
 
-工作目录是请求私有目录。脚本可以读取、修改、删除或创建其中的文件，所有修改只对当前请求可见。请求结束后，服务端删除整个工作目录。
+### 3.4 Tensors
+
+The SDK declares `apache-tvm-ffi` as a required runtime dependency. TVM FFI means the TVM Foreign Function Interface, which supplies the `tvm_ffi.Tensor` class. DLPack is a standard protocol for exchanging tensors in memory.
+
+Regardless of which supported DLPack producer the entry function returns, a decoded tensor node returns a `tvm_ffi.Tensor`. It resides in central processing unit (CPU) memory and has a C-contiguous, row-major layout because the network transport has already copied the raw bytes to host memory. Its shape and data type exactly match the response metadata. SDK-owned backing storage remains alive for the lifetime of the `tvm_ffi.Tensor`.
+
+Callers can convert the value through DLPack:
+
+```python
+import numpy as np
+import torch
+import tvm_ffi
+
+
+value = result.value
+assert isinstance(value, tvm_ffi.Tensor)
+np_value = np.from_dlpack(value)
+torch_value = torch.from_dlpack(value)
+```
+
+NumPy and PyTorch are optional caller dependencies. The SDK does not require either package merely to hold a `tvm_ffi.Tensor`.
+
+DLPack conversion is local and zero-copy after the HTTP payload has already been downloaded. It does not make the network transport zero-copy.
+
+Official documentation:
+
+- [`tvm_ffi.Tensor`](https://tvm.apache.org/ffi/reference/python/generated/tvm_ffi.Tensor.html)
+- [`tvm_ffi.from_dlpack`](https://tvm.apache.org/ffi/reference/python/generated/tvm_ffi.from_dlpack.html)
+
+### 3.5 Health Checks
+
+The health API uses exactly these frozen dataclasses:
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class WorkerHealth:
+    gpu_id: int
+    status: str
+    uptime_seconds: float
+
+
+@dataclass(frozen=True)
+class Health:
+    status: str
+    gpu_count: int
+    queue_length: int
+    workers: tuple[WorkerHealth, ...]
+```
+
+Example:
+
+```python
+from benchmark_server import Client
+
+
+with Client("http://server:8000") as client:
+    health = client.health()
+
+for worker in health.workers:
+    print(worker.gpu_id, worker.status, worker.uptime_seconds)
+```
+
+`client.health()` synchronously calls `GET /health` and decodes an HTTP 200 response into `Health`. An HTTP 503 response raises `BenchmarkServerError` with `code == "unavailable"`. Other structured health errors use the same `BenchmarkServerError` mapping.
+
+### 3.6 Errors and Retries
+
+`BenchmarkServerError` exposes:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status_code` | `int` | HTTP status code |
+| `code` | `str` | Server error name from the `error` field |
+| `message` | `str` | Human-readable server message |
+| `request_id` | `str` or `None` | Request identifier when one is present |
+| `stdout` | `str` | Captured standard output, or an empty string when absent |
+| `stderr` | `str` | Captured standard error, or an empty string when absent |
+| `traceback` | `str` or `None` | Python traceback when one is present |
+
+Failures map to exceptions as follows:
+
+| Failure | Exception |
+|---|---|
+| A structured server error response | `BenchmarkServerError` |
+| Connection establishment, upload, download, connection loss, or another transport failure | `TransportError` |
+| Malformed JSON, multipart data, binary size or hash, return-value tree, or request-identifier mismatch | `ProtocolError` |
+| An invalid local argument | `ValueError` |
+
+The SDK does not automatically retry `POST /execute`. If a connection fails after the request reaches the server, execution may have completed even though the client did not receive the response. A higher-level caller may retry only when its application semantics can tolerate a possible duplicate execution.
+
+`timeout_seconds` is the server execution timeout and excludes request upload and queueing. The SDK does not derive a short response-reading timeout from it.
 
 ---
 
-## 4. 完整示例
+## 4. Execution Model
 
-### 4.1 上传的 `main.py`
+### 4.1 Processes and Scheduling
+
+#### Process Model
+
+The server contains:
+
+- one front-end process that receives HTTP requests and schedules tasks;
+- one worker slot for each configured GPU;
+- at most one request executing on each GPU at any time.
+
+The front-end process does not initialize the GPU runtime environment. Each worker process is bound to one physical GPU through CUDA device visibility settings. CUDA is the GPU programming and runtime platform used by the execution environment.
+
+#### Request Lifecycle
+
+Each request executes through the following steps:
+
+1. Generate the request UUID and establish the request logging context.
+2. Parse and validate the multipart request body.
+3. Validate the `job.files` manifest, every target path, the entry file, and the set of blob references.
+4. Recompute each blob's SHA-256, verify its hash, and acquire references to cached files.
+5. Wait for an idle GPU worker process.
+6. Create a new working directory for the request.
+7. Place files in the working directory according to the `job.files` manifest.
+8. Set the current working directory and Python module search path.
+9. Import the entry file.
+10. Retrieve and validate the entry function.
+11. Invoke the entry function without arguments.
+12. Synchronize and serialize the return value.
+13. Capture standard output and standard error.
+14. Delete the working directory and release references to cached files.
+15. Return the request UUID in the response header and response metadata.
+
+Cleanup runs after success, script failure, serialization failure, and timeout.
+
+#### Scheduling
+
+The front end maintains a first-in, first-out request queue. When multiple GPU worker processes become idle at the same time, the front end selects the next worker process in round-robin order.
+
+Each worker process executes requests serially, preventing multiple benchmark requests from sharing one GPU at the same time and reducing interference with performance measurements.
+
+`queue_ms` measures the time from completion of request validation until a worker process is assigned.
+
+#### Timeout and Recovery
+
+The timeout covers:
+
+- importing the entry file;
+- executing top-level code in the file;
+- executing the entry function;
+- synchronizing and serializing the return value.
+
+Queueing time does not count toward the execution timeout.
+
+After a timeout, the server:
+
+1. Terminates the process executing the uploaded script.
+2. Waits for a short, configurable exit grace period.
+3. Forcefully terminates the process if it has not exited.
+4. Replaces the affected runtime process before that GPU accepts another request.
+5. Deletes the working directory for the request.
+6. Returns a `timeout` error.
+
+The server does not attempt to recover Python code that has timed out.
+
+### 4.2 File Cache
+
+The file cache is used only to optimize transfers and working-directory construction.
+
+The cache key is the file content's full SHA-256 hash, and cache entries are immutable. When two requests upload exactly identical bytes, they may refer to the same cached file while using different paths in their respective working directories.
+
+The cache optimizes only internal file storage and working-directory construction. Every request must still upload all unique blobs referenced by its manifest, so request validity never depends on current cache contents.
+
+The file cache:
+
+- does not change the file paths visible to the entry function;
+- does not retain changes made by a script to files in the working directory;
+- does not cache the entry function's return value;
+- does not cache imported Python modules;
+- does not cache GPU memory.
+
+Files in the working directory must use private copies, copy-on-write views, or an implementation with equivalent isolation. The server cannot directly expose writable hard links or symbolic links pointing to the shared cache to the script.
+
+Cache eviction may delete only entries that have no references from active requests.
+
+### 4.3 Isolation
+
+The following state belongs to only one request:
+
+- the working directory;
+- the uploaded file layout;
+- the imported entry module;
+- captured standard output and standard error;
+- returned Python objects;
+- GPU memory reachable only from objects in the current request.
+
+The server provides no sessions, cross-request Python objects, function handles, registers, or application-level shared state.
+
+The file content cache may persist across requests. The cache stores only immutable uploaded bytes and does not store Python modules, GPU tensors, or execution results.
+
+Python and native dynamic-link libraries may create process-global state. The implementation must ensure that a request cannot observe an entry module or working directory imported by the previous request. If a long-running worker process cannot completely clear this state, the script runtime process must be replaced before executing the next request.
+
+The working directory is private to the request. The script can read, modify, delete, or create files in it, and all changes are visible only to the current request. After the request ends, the server deletes the entire working directory.
+
+---
+
+## 5. Observability
+
+The deployment setting `log_dir` specifies the server's log root. Logs are outside the HTTP API, and the Python SDK does not read the log directory.
+
+### 5.1 Log Directory
+
+Each server-process start creates an independent run directory:
+
+```text
+<log_dir>/
+└── runs/
+    ├── 20260716T235012.123456Z/
+    │   ├── events.jsonl
+    │   ├── server.stdout.log
+    │   ├── server.stderr.log
+    │   └── requests/
+    │       └── <request_id>/
+    │           ├── stdout.log
+    │           └── stderr.log
+    └── 20260716T235012.123456Z-1/
+        └── ...
+```
+
+The run directory name is the server start timestamp in Coordinated Universal Time (UTC), with microsecond precision. Directory creation directly calls atomic `mkdir(..., exist_ok=False)`. If the name already exists, the server tries the numeric suffixes `-1`, `-2`, and so on. Generating a log directory requires no file lock and must not check for existence before attempting creation.
+
+Every restart creates a new directory and never continues writing previous-run log files. Concurrently starting server processes also receive distinct directories. Preventing multiple server processes from using the same GPU or shared cache is a separate resource-management concern and may independently use file locks.
+
+### 5.2 Structured Events
+
+`events.jsonl` uses JSON Lines format, storing one complete JSON object per line. Worker processes send structured events to the front end, which is the file's sole writer. Each event is emitted with one write operation and immediately flushed.
+
+The following events are defined:
+
+- `server_started`: the server process started;
+- `request_started`: request processing started;
+- `request_finished`: a request succeeded or failed;
+- `worker_restarted`: a worker process was replaced;
+- `server_error`: the server itself encountered an error;
+- `server_stopped`: the server shut down normally.
+
+Every event contains `server_run`, the current run directory name. Request-related events also contain `request_id`.
+
+Example `request_finished` event:
+
+```json
+{
+  "timestamp": "2026-07-16T23:50:12.123Z",
+  "level": "INFO",
+  "event": "request_finished",
+  "server_run": "20260716T235012.123456Z",
+  "request_id": "7f61b94e-034a-4e80-b67d-eca52bb952cc",
+  "http_status": 200,
+  "error": null,
+  "gpu_id": 0,
+  "queue_ms": 18.2,
+  "elapsed_ms": 1245.6,
+  "stdout_path": "requests/7f61b94e-034a-4e80-b67d-eca52bb952cc/stdout.log",
+  "stderr_path": "requests/7f61b94e-034a-4e80-b67d-eca52bb952cc/stderr.log"
+}
+```
+
+On failure, `error` uses an error type defined in Section 2.1.3.
+
+### 5.3 Standard Output and Standard Error
+
+The files contain:
+
+- `server.stdout.log`: standard output written directly by the server process, worker processes, and their dependencies;
+- `server.stderr.log`: standard error written directly by the server process, worker processes, and their dependencies;
+- `requests/<request_id>/stdout.log`: standard output from the entry script and its child processes;
+- `requests/<request_id>/stderr.log`: standard error from the entry script and its child processes.
+
+While running the entry script, the server redirects standard output and standard error by file descriptor in the script runtime process. This captures output written by Python, native dynamic-link libraries, and child processes in the corresponding request logs.
+
+Log files always preserve complete output. They do not use `stdout_limit_bytes` or `stderr_limit_bytes` and have no truncation fields. API responses and the SDK's `ExecutionResult` return prefixes according to the request limits and report truncation through `stdout_truncated` and `stderr_truncated`.
+
+Complete logs may consume disk space indefinitely. The deployment operator allocates space for `log_dir` and enforces retention by deleting complete old run directories; the server does not truncate individual log files.
+
+### 5.4 Restarts and Abnormal Termination
+
+During a normal shutdown, the server writes `server_stopped` to the current `events.jsonl`. If the server process is forcibly terminated, this event may be absent, and an executing request may have `request_started` without `request_finished`.
+
+After abnormal termination, previously written `events.jsonl`, request output, and server output remain in place. The final JSON line may be incomplete, and readers should ignore an unparseable final line. The next start creates a new run directory and does not modify old logs.
+
+At startup, the server removes stale working directories and incomplete cache temporary files while preserving the complete content-addressed cache and all logs. Incomplete synchronous requests from the previous run are not resumed; clients observe a transport failure and decide whether to resubmit.
+
+The first version provides no `/logs`, `/metrics`, or distributed-tracing endpoint. `GET /health` continues to report the state of the current server instance.
+
+---
+
+## 6. Complete Example
+
+### 6.1 Uploaded `main.py`
 
 ```python
 import json
@@ -759,17 +1105,19 @@ def main():
     }
 ```
 
-### 4.2 请求
+### 6.2 Request
 
 ```bash
 curl -X POST http://server:8000/execute \
-  -F 'job={"timeout_seconds":60};type=application/json' \
-  -F 'file:main.py=@main.py;type=application/octet-stream' \
-  -F 'file:config.json=@config.json;type=application/octet-stream' \
-  -F 'file:data/input.bin=@input.bin;type=application/octet-stream'
+  -F 'job={"language":"python","entry":{"file":"main.py","function":"main"},"files":{"main.py":{"blob":"<main_sha256>"},"config.json":{"blob":"<config_sha256>"},"data/input.bin":{"blob":"<input_sha256>"}},"timeout_seconds":60,"stdout_limit_bytes":1048576,"stderr_limit_bytes":1048576};type=application/json' \
+  -F 'blob:<main_sha256>=@main.py;type=application/octet-stream' \
+  -F 'blob:<config_sha256>=@config.json;type=application/octet-stream' \
+  -F 'blob:<input_sha256>=@input.bin;type=application/octet-stream'
 ```
 
-### 4.3 响应
+Replace `<main_sha256>`, `<config_sha256>`, and `<input_sha256>` with the corresponding file content's full lowercase SHA-256, using the same values in `job.files` and the multipart part names.
+
+### 6.3 Response
 
 ```json
 {

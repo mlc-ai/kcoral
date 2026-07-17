@@ -2,6 +2,7 @@
 
 An asynchronous remote GPU execution service.
 
-## Documents
+## Documentation
 
-- [api-reference.md](api-reference.md): full API reference (in Chinese).
+- [English API reference](api-reference.md)
+- [Chinese API reference](api-reference-zh.md)
