@@ -23,7 +23,7 @@ test = ["pytest>=8"]
 benchmark-server = "benchmark_server.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/benchmark_server"]
+packages = ["python/benchmark_server"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
