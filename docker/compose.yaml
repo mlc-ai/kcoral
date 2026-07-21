@@ -1,16 +1,18 @@
+name: benchmark-server
+
 services:
   benchmark-server:
     build:
-      context: .
-      dockerfile: Dockerfile.dev
+      context: ..
+      dockerfile: docker/Dockerfile.dev
     init: true
     gpus: all
     ports:
       - "${BENCHMARK_PORT:-8000}:8000"
     volumes:
-      - .:/workspace/benchmark-server
-      - ./cache:/data/cache
-      - ./logs:/data/logs
+      - ..:/workspace/benchmark-server
+      - ../cache:/data/cache
+      - ../logs:/data/logs
     command:
       - benchmark-server
       - --host

@@ -24,20 +24,20 @@ they actually use CUDA.
 Build the development image and start the server:
 
 ```bash
-docker compose up --build
+docker compose -f docker/compose.yaml up --build
 ```
 
 After the image has been built, source changes are available through the bind
 mount and do not require another build:
 
 ```bash
-docker compose up
+docker compose -f docker/compose.yaml up
 ```
 
 Run the test suite in a temporary container:
 
 ```bash
-docker compose run --rm benchmark-server \
+docker compose -f docker/compose.yaml run --rm benchmark-server \
   pytest -q /workspace/benchmark-server/tests/test_server.py
 ```
 
@@ -45,7 +45,8 @@ The server uses GPU `0` and host port `8000` by default. Override them when
 needed:
 
 ```bash
-BENCHMARK_DEVICES=0,1 BENCHMARK_PORT=8001 docker compose up
+BENCHMARK_DEVICES=0,1 BENCHMARK_PORT=8001 \
+  docker compose -f docker/compose.yaml up
 ```
 
 ## Python client
