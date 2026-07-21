@@ -1,0 +1,41 @@
+name: benchmark-server
+
+services:
+  benchmark-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.cu130.dev
+    init: true
+    gpus: all
+    ports:
+      - "${BENCHMARK_PORT:-8000}:8000"
+    volumes:
+      - ..:/workspace/benchmark-server
+      - ../cache:/data/cache
+      - ../logs:/data/logs
+    command:
+      - benchmark-server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --devices
+      - "${BENCHMARK_DEVICES:-0}"
+      - --cache-dir
+      - /data/cache
+      - --cache-capacity-bytes
+      - "${BENCHMARK_CACHE_CAPACITY_BYTES:-10737418240}"
+      - --work-dir
+      - /data/work
+      - --log-dir
+      - /data/logs
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
