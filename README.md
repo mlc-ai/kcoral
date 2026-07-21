@@ -34,6 +34,14 @@ mount and do not require another build:
 docker compose -f docker/compose.yaml up
 ```
 
+Dependencies are locked in `uv.lock`. After changing dependencies in
+`pyproject.toml`, refresh the lockfile and rebuild the image:
+
+```bash
+uv lock
+docker compose -f docker/compose.yaml up --build
+```
+
 Run the test suite in a temporary container:
 
 ```bash

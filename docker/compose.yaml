@@ -4,7 +4,7 @@ services:
   benchmark-server:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.dev
+      dockerfile: docker/Dockerfile.cu130.dev
     init: true
     gpus: all
     ports:
