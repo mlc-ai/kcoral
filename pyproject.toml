@@ -17,7 +17,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+test = [
+  "numpy>=1.24",
+  "pytest>=8",
+]
 
 [project.scripts]
 benchmark-server = "benchmark_server.cli:main"

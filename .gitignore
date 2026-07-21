@@ -16,4 +16,7 @@ venv/
 
 # Misc
 *.log
+cache/
+logs/
+work/
 tmp/

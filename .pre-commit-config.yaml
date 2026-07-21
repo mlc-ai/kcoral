@@ -1,0 +1,20 @@
+repos:
+  - repo: local
+    hooks:
+      - id: check-large-files
+        name: "Reject files >10MiB"
+        entry: |
+          bash -c '
+          max_size=$((10 * 1024 * 1024));
+          for file in $(git diff --cached --name-only); do
+            if [ -f "$file" ]; then
+              size=$(wc -c <"$file");
+              if [ "$size" -gt "$max_size" ]; then
+                echo "❌ File $file is too large: $(numfmt --to=iec $size), limit is 10MiB";
+                exit 1;
+              fi;
+            fi;
+          done
+          '
+        language: system
+        types: [file]
