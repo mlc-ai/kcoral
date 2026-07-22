@@ -200,7 +200,8 @@ reports the failure. Non-`200` is reserved for transport/infra problems.
 
 ## Worked example
 
-Compile a TIRx kernel, run it, assert it matches a reference, and benchmark it.
+Upload an input tensor and a TIRx kernel, compile the kernel, run it on the
+tensor, assert it matches a reference, and benchmark it.
 
 **Request**
 
@@ -211,13 +212,14 @@ Compile a TIRx kernel, run it, assert it matches a reference, and benchmark it.
       "inline": { "source": "from __future__ import annotations\nfrom tvm.script import tirx as T\n@T.jit\ndef main(A: T.Buffer((N,), \"float32\"), B: T.Buffer((N,), \"float32\"), *, N: T.constexpr):\n    T.device_entry()\n    i = T.cta_id([N])\n    t = T.thread_id([1])\n    B[i] = A[i] + 1.0\n" } },
     { "id": "reffn", "op": "upload", "kind": "function", "key": "sha256:…",
       "inline": { "source": "def main(a):\n    return a + 1.0\n" } },
-    { "id": "x",   "op": "run", "fn": "builtin.randn", "args": [ { "shape": [256], "dtype": "float32", "seed": 0 } ] },
+    { "id": "a",   "op": "upload", "kind": "tensor", "key": "sha256:…",
+      "inline": { "dtype": "float32", "shape": [256], "data_b64": "…" } },
     { "id": "out", "op": "run", "fn": "builtin.empty", "args": [ { "shape": [256], "dtype": "float32" } ] },
     { "id": "mod", "op": "run", "fn": "builtin.compile_tirx", "args": [ { "$ref": "kernel" }, { "N": 256 } ] },
-    { "id": "run", "op": "run", "fn": { "$ref": "mod" }, "args": [ { "$ref": "x" }, { "$ref": "out" } ] },
-    { "id": "ref", "op": "run", "fn": { "$ref": "reffn" }, "args": [ { "$ref": "x" } ] },
+    { "id": "run", "op": "run", "fn": { "$ref": "mod" }, "args": [ { "$ref": "a" }, { "$ref": "out" } ] },
+    { "id": "ref", "op": "run", "fn": { "$ref": "reffn" }, "args": [ { "$ref": "a" } ] },
     { "id": "chk", "op": "run", "fn": "builtin.assert_close", "args": [ { "$ref": "out" }, { "$ref": "ref" } ] },
-    { "id": "perf","op": "run", "fn": "builtin.benchmark", "args": [ { "$ref": "mod" }, { "$ref": "x" }, { "$ref": "out" }, { "warmup": 10, "repeat": 50 } ] }
+    { "id": "perf","op": "run", "fn": "builtin.benchmark", "args": [ { "$ref": "mod" }, { "$ref": "a" }, { "$ref": "out" }, { "warmup": 10, "repeat": 50 } ] }
   ],
   "options": { "timeout_seconds": 120 }
 }
@@ -231,7 +233,7 @@ Compile a TIRx kernel, run it, assert it matches a reference, and benchmark it.
   "results": [
     { "id": "kernel", "op": "upload", "status": "OK" },
     { "id": "reffn",  "op": "upload", "status": "OK" },
-    { "id": "x",   "op": "run", "status": "OK", "value": { "handle": "x" } },
+    { "id": "a",   "op": "upload", "status": "OK" },
     { "id": "out", "op": "run", "status": "OK", "value": { "handle": "out" } },
     { "id": "mod", "op": "run", "status": "OK", "value": { "handle": "mod" } },
     { "id": "run", "op": "run", "status": "OK" },

@@ -61,8 +61,8 @@ each). `BENCH_HOST` / `BENCH_PORT` default to `127.0.0.1:8000`.
 ### 2. Send a request
 
 `examples/example_client.py` is a standalone client (only needs `httpx`). It
-uploads a TIRx kernel and a torch reference, compiles the kernel, runs it, asserts
-it matches the reference, and benchmarks it:
+uploads an input tensor, a TIRx kernel, and a torch reference, compiles the
+kernel, runs it on the tensor, asserts it matches the reference, and benchmarks it:
 
 ```bash
 python examples/example_client.py 8000
@@ -78,7 +78,7 @@ For a correct kernel, every instruction is `OK` and the body `status` is
   "status": "COMPLETED",
   "results": [
     {"id": "kernel", "op": "upload", "status": "OK"},
-    {"id": "x",   "op": "run", "status": "OK", "value": {"handle": "x"}},
+    {"id": "a",   "op": "upload", "status": "OK"},
     {"id": "mod", "op": "run", "status": "OK", "value": {"handle": "mod"}},
     {"id": "run", "op": "run", "status": "OK"},
     {"id": "chk", "op": "run", "status": "OK",

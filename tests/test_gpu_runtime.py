@@ -127,3 +127,26 @@ def test_assert_close_fails_correctness_and_skips_rest():
     chk = _by_id(res, "chk")
     assert chk.status == "FAILED" and chk.error["kind"] == "correctness"
     assert _by_id(res, "perf").status == "SKIPPED"  # benchmark does not run
+
+
+def test_upload_tensor_and_run_kernel():
+    import base64
+
+    import numpy as np
+
+    a = np.arange(256, dtype=np.float32)
+    tensor = {"dtype": "float32", "shape": [256],
+              "data_b64": base64.b64encode(a.tobytes()).decode()}
+    res = _run(Program(instructions=[
+        _up("kernel", "function", {"source": KERNEL}),
+        _up("reffn", "function", {"source": REF}),
+        _up("a", "tensor", tensor),  # client-provided input tensor
+        Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+        Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
+        Run("_run", {"$ref": "mod"}, [{"$ref": "a"}, {"$ref": "out"}]),
+        Run("ref", {"$ref": "reffn"}, [{"$ref": "a"}]),
+        Run("chk", "builtin.check_close", [{"$ref": "out"}, {"$ref": "ref"}]),
+    ]))
+    assert [r.status for r in res] == ["OK"] * 8
+    chk = _by_id(res, "chk").value
+    assert chk["passed"] and chk["max_abs_err"] == 0.0  # kernel ran on the uploaded tensor

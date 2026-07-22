@@ -147,16 +147,26 @@ def _upload(id, source):
             "key": compute_key("function", {"source": source}), "inline": {"source": source}}
 
 
+def _tensor_upload(id, arr):
+    import base64
+
+    inline = {"dtype": "float32", "shape": list(arr.shape),
+              "data_b64": base64.b64encode(arr.tobytes()).decode()}
+    return {"id": id, "op": "upload", "kind": "tensor",
+            "key": compute_key("tensor", inline), "inline": inline}
+
+
 @pytest.mark.skipif(
     os.environ.get("BENCH_GPU_TEST") != "1",
     reason="real-kernel e2e; set BENCH_GPU_TEST=1 with the TIRX env to run",
 )
 def test_real_kernel_end_to_end():
+    import numpy as np
+
     body = {"instructions": [
         _upload("kernel", KERNEL),
         _upload("reffn", REF),
-        {"id": "x", "op": "run", "fn": "builtin.randn",
-         "args": [{"shape": [256], "dtype": "float32", "seed": 0}]},
+        _tensor_upload("x", np.arange(256, dtype=np.float32)),  # client-provided input tensor
         {"id": "out", "op": "run", "fn": "builtin.empty",
          "args": [{"shape": [256], "dtype": "float32"}]},
         {"id": "mod", "op": "run", "fn": "builtin.compile_tirx",
