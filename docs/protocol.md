@@ -133,9 +133,9 @@ object is an optional config.
 | `builtin.randn` | `spec = {shape, dtype, seed?}` | a random tensor (→ handle) |
 | `builtin.empty` | `spec = {shape, dtype}` | an uninitialized tensor (→ handle) |
 | `builtin.zeros` | `spec = {shape, dtype}` | a zero tensor (→ handle) |
-| `builtin.compile_tirx` | `(kernel, bindings?)` — `bindings` binds `T.constexpr` dims, e.g. `{"N": 256}` | a compiled module (→ handle) |
+| `builtin.compile_tirx` | `(kernel, bindings?)` — `kernel` is a `@T.jit` handle or an already-concrete `@T.prim_func`; `bindings` binds `T.constexpr` dims of a `@T.jit` kernel, e.g. `{"N": 256}` | a compiled module (→ handle) |
 | `builtin.benchmark` | `(mod, *tensors, cfg?)` — `cfg = {warmup?, repeat?}` | `{latency_ms, warmup, repeat}` |
-| `builtin.check_close` | `(actual, expected, cfg?)` — `cfg = {atol?, rtol?}` | `{passed, max_abs_err, rtol, atol}` |
+| `builtin.check_close` | `(actual, expected, cfg?)` — `cfg = {atol?, rtol?}` | `{passed, max_abs_err, max_rel_err, rtol, atol}` — `max_rel_err` is over elements where `expected != 0` |
 | `builtin.assert_close` | same as `check_close` | same on success; **fails** the instruction (`kind: "correctness"`) on mismatch |
 
 `check_close` is a measurement (a mismatch is data, the instruction stays `OK`);
@@ -240,7 +240,7 @@ tensor, assert it matches a reference, and benchmark it.
     { "id": "mod", "op": "run", "status": "OK", "value": { "handle": "mod" } },
     { "id": "run", "op": "run", "status": "OK" },
     { "id": "ref", "op": "run", "status": "OK", "value": { "handle": "ref" } },
-    { "id": "chk", "op": "run", "status": "OK", "value": { "passed": true, "max_abs_err": 0.0, "rtol": 0.01, "atol": 0.001 } },
+    { "id": "chk", "op": "run", "status": "OK", "value": { "passed": true, "max_abs_err": 0.0, "max_rel_err": 0.0, "rtol": 0.01, "atol": 0.001 } },
     { "id": "perf","op": "run", "status": "OK", "value": { "latency_ms": 0.0073, "warmup": 10, "repeat": 50 } }
   ]
 }
@@ -254,7 +254,7 @@ tensor, assert it matches a reference, and benchmark it.
   "results": [
     "… earlier instructions OK …",
     { "id": "chk",  "op": "run", "status": "FAILED",
-      "error": { "kind": "correctness", "message": "outputs differ: max_abs_err=1.0 exceeds atol=0.001, rtol=0.01" } },
+      "error": { "kind": "correctness", "message": "outputs differ: max_abs_err=1.0, max_rel_err=0.5 exceed atol=0.001, rtol=0.01" } },
     { "id": "perf", "op": "run", "status": "SKIPPED",
       "error": { "reason": "predecessor_failed" } }
   ]

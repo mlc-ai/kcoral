@@ -74,7 +74,7 @@ def test_compile_run_correctness_and_benchmark():
     assert [r.status for r in res] == ["OK"] * 9
     assert _by_id(res, "x").value == {"handle": "x"}  # tensor -> handle, not transmitted
     chk = _by_id(res, "chk").value
-    assert chk["passed"] and chk["max_abs_err"] == 0.0
+    assert chk["passed"] and chk["max_abs_err"] == 0.0 and chk["max_rel_err"] == 0.0
     perf = _by_id(res, "perf").value
     assert perf["latency_ms"] > 0 and perf["repeat"] == 20
 
@@ -98,6 +98,44 @@ def test_compile_on_non_kernel_is_compile_error():
     res = _run(Program(instructions=[
         Run("x", "builtin.randn", [{"shape": [4], "dtype": "float32"}]),
         Run("m", "builtin.compile_tirx", [{"$ref": "x"}]),
+    ]))
+    assert res[1].status == "FAILED" and res[1].error["kind"] == "compile"
+
+
+PRIM_KERNEL = """from tvm.script import tirx as T
+
+@T.prim_func
+def main(A: T.Buffer((256,), "float32"), B: T.Buffer((256,), "float32")):
+    T.device_entry()
+    i = T.cta_id([256])
+    t = T.thread_id([1])
+    B[i] = A[i] + 1.0
+"""
+
+
+def test_prim_func_kernel_compiles_directly():
+    res = _run(Program(instructions=[
+        _up("kernel", "function", {"source": PRIM_KERNEL}),
+        Run("x", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+        Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+        Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}]),
+        Run("_run", {"$ref": "mod"}, [{"$ref": "x"}, {"$ref": "out"}]),
+    ]))
+    assert [r.status for r in res] == ["OK"] * 5
+
+
+def test_prim_func_with_bindings_is_compile_error():
+    res = _run(Program(instructions=[
+        _up("kernel", "function", {"source": PRIM_KERNEL}),
+        Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
+    ]))
+    assert res[1].status == "FAILED" and res[1].error["kind"] == "compile"
+
+
+def test_bad_binding_name_is_compile_error():
+    res = _run(Program(instructions=[
+        _up("kernel", "function", {"source": KERNEL}),
+        Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"WRONG": 1}]),
     ]))
     assert res[1].status == "FAILED" and res[1].error["kind"] == "compile"
 
