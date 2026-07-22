@@ -32,14 +32,12 @@ See [docs/protocol.md](docs/protocol.md) for the full wire format of `upload`,
 
 ## Requirements
 
-- Python 3.12, a CUDA GPU, and CUDA-enabled `torch`.
-- A TIRx-enabled `tvm`: either `pip install apache-tvm`, or a from-source build
-  (put its Python tree on `PYTHONPATH` and point `TVM_LIBRARY_PATH` at the built
-  library dir). The front-end process never imports either — each GPU worker does.
+- Python 3.12 and a CUDA GPU.
+- **Mandatory** (GPU worker): CUDA-enabled `torch` and `tvm_ffi`.
+- **Optional:** `tvm` — only `builtin.compile_tirx` uses it; without it that builtin
+  returns an `unavailable` error and everything else still runs.
 
-Install the server itself with `pip install -e .` (its own deps are just
-`fastapi` + `uvicorn`; `torch`/`tvm` come from the environment above). Without an
-install, run with `PYTHONPATH=src`.
+Install with `pip install -e .`; `torch`/`tvm_ffi`/`tvm` come from the environment.
 
 ## Example
 
@@ -113,7 +111,8 @@ still returns **HTTP 200** (the server *did* run the program), but the body says
 - **Body `status`**: `COMPLETED` (every instruction OK), `FAILED` (some instruction
   failed → the rest are `SKIPPED`), or `CACHE_MISS` (resend the listed uploads with
   their `inline` bytes). A per-instruction failure carries `error.kind` — one of
-  `parse`, `compile`, `runtime`, `correctness`, `engine`.
+  `parse`, `compile`, `runtime`, `correctness`, `unavailable` (a needed optional
+  dependency like tvm isn't installed), `engine`.
 - **HTTP status**: `200` for any program the server ran (including instruction
   failures and cache misses); `400` malformed request; `503` all workers busy;
   `504` execution timed out; `500` worker crashed.

@@ -14,10 +14,12 @@ class ValidationError(ValueError):
 
 
 class ExecutionError(Exception):
-    """A failure caused by submitted code -> a ``FAILED`` instruction result.
+    """An instruction failure -> a ``FAILED`` instruction result.
 
-    ``kind`` names the stage: ``parse``, ``compile``, ``runtime``, or
-    ``correctness`` (an assertion the kernel failed).
+    ``kind`` names the cause: ``parse``, ``compile``, ``runtime``, or
+    ``correctness`` (an assertion the kernel failed) — all submitted-code faults —
+    or ``unavailable`` when the instruction needs an optional server dependency
+    (e.g. tvm) that is not installed.
     """
 
     def __init__(self, kind: str, message: str):

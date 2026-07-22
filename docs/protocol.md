@@ -177,8 +177,10 @@ For any program the server actually ran, the HTTP status is **`200`** and the bo
 | `error` | `FAILED` / `SKIPPED` | On `FAILED`: `{ "kind": …, "message": … }`. On `SKIPPED`: `{ "reason": "predecessor_failed" }`. |
 
 `error.kind` names the failing stage — `parse`, `compile`, `runtime`,
-`correctness`, or `engine` (an unexpected server fault). `timeout` is not a
-per-instruction kind; it appears only at the top level on a `504` (see below).
+`correctness`, `unavailable` (the instruction needs an optional server dependency,
+e.g. tvm, that isn't installed), or `engine` (an unexpected server fault).
+`timeout` is not a per-instruction kind; it appears only at the top level on a
+`504` (see below).
 
 ### Status / error codes
 

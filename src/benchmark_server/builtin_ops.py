@@ -4,7 +4,8 @@ Each builtin is a module-level function registered as ``builtin.<name>`` by
 :func:`register_builtin`; the runtime looks one up with :func:`resolve`. Extend
 the server by adding a builtin, not a runtime. torch/tvm are imported lazily, so
 importing this module touches no GPU. Builtins raise :class:`ExecutionError`
-tagged with the failing stage (parse / compile / runtime / correctness).
+tagged with the failing stage (parse / compile / runtime / correctness), or
+``unavailable`` when an optional dependency (tvm) is not installed.
 """
 
 from __future__ import annotations
@@ -63,7 +64,13 @@ def zeros(spec: Any) -> Any:
 
 @register_builtin("compile_tirx")
 def compile_tirx(fn: Any, bindings: Any = None) -> Any:
-    import tvm
+    try:
+        import tvm
+    except ImportError as exc:  # tvm is an optional server dependency
+        raise ExecutionError(
+            "unavailable",
+            "server-side compilation requires tvm, which is not installed on this server",
+        ) from exc
 
     if not hasattr(fn, "specialize"):
         raise ExecutionError("compile", "compile_tirx expects a @T.jit kernel handle")

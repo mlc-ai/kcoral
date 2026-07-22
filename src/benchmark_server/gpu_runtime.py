@@ -21,12 +21,13 @@ ENTRY_POINT = "main"
 
 
 class GPURuntime:
-    """Construct inside the worker after its GPU is pinned. Building it checks
-    that torch imports, so a broken environment fails at startup, not mid-run.
-    (``compile_tirx`` also needs tvm, imported when that builtin first runs.)"""
+    """Construct inside the worker after its GPU is pinned. Building it checks that
+    torch and tvm_ffi import (the mandatory deps), so a broken environment fails at
+    startup, not mid-run. Full tvm is optional — only ``compile_tirx`` needs it, and
+    it fails gracefully when tvm is absent."""
 
     def __init__(self) -> None:
-        _require_torch()
+        _require_torch_and_ffi()
         self._seeded_fnames: list[str] = []  # linecache keys to clear on reset
 
     def materialize(self, kind: str, data: bytes) -> Any:
@@ -77,13 +78,14 @@ class GPURuntime:
         return ns[ENTRY_POINT]
 
 
-def _require_torch() -> None:
+def _require_torch_and_ffi() -> None:
     try:
         import torch  # noqa: F401
+        import tvm_ffi  # noqa: F401
     except Exception as exc:  # pragma: no cover - environment misconfiguration
         raise RuntimeError(
-            "The GPU runtime needs torch to materialize tensors, but importing it "
-            f"failed. Install a CUDA-enabled torch in the worker. Cause: {exc!r}"
+            "The GPU runtime requires torch and tvm_ffi in the worker environment "
+            f"(full tvm is optional). Importing them failed: {exc!r}"
         ) from exc
 
 

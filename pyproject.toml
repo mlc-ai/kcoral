@@ -13,9 +13,9 @@ dependencies = [
   "uvicorn>=0.29",
 ]
 
-# torch and the TIRx-enabled `tvm` build are supplied by the GPU runtime and are
-# imported only inside the worker's real Runtime (Phase 2). The engine, cache,
-# server, and worker-management layer run and test without them.
+# torch and tvm_ffi are mandatory in the GPU worker but are supplied by the
+# environment (not pinned here). Full tvm is optional — only `compile_tirx` needs
+# it. The front-end, engine, cache, and worker-management layers import none.
 [project.optional-dependencies]
 test = [
   "pytest>=8",
