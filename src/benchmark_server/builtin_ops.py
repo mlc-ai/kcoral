@@ -72,13 +72,27 @@ def compile_tirx(fn: Any, bindings: Any = None) -> Any:
             "server-side compilation requires tvm, which is not installed on this server",
         ) from exc
 
-    if not hasattr(fn, "specialize"):
-        raise ExecutionError("compile", "compile_tirx expects a @T.jit kernel handle")
-    kwargs = bindings if isinstance(bindings, dict) else {}
-    try:
-        pf = fn.specialize(**kwargs)  # TIRX parse happens here
-    except tvm.error.DiagnosticError as exc:
-        raise ExecutionError("parse", _short(exc)) from exc
+    if bindings is not None and not isinstance(bindings, dict):
+        raise ExecutionError("compile", "compile_tirx bindings must be a dict of constexpr values")
+    kwargs = bindings or {}
+    if isinstance(fn, tvm.tirx.PrimFunc):  # a @T.prim_func kernel — already concrete
+        if kwargs:
+            raise ExecutionError(
+                "compile",
+                "bindings apply only to @T.jit kernels; this kernel is already a PrimFunc",
+            )
+        pf = fn
+    elif hasattr(fn, "specialize"):  # a @T.jit kernel handle (TIRJit)
+        try:
+            pf = fn.specialize(**kwargs)  # TIRX parse happens here
+        except tvm.error.DiagnosticError as exc:
+            raise ExecutionError("parse", _short(exc)) from exc
+        except TypeError as exc:  # wrong, missing, or unhashable constexpr bindings
+            raise ExecutionError("compile", _short(exc)) from exc
+    else:
+        raise ExecutionError(
+            "compile", "compile_tirx expects a @T.jit or @T.prim_func kernel handle"
+        )
     try:
         mod = tvm.IRModule({"main": pf})
         return tvm.compile(mod, target=tvm.target.Target("cuda"), tir_pipeline="tirx")
@@ -128,11 +142,21 @@ def check_close(actual: Any, expected: Any, *rest: Any) -> dict:
         torch.cuda.synchronize()
         a = actual.float()
         e = expected.float()
-        max_abs = float((a - e).abs().max())
+        diff = (a - e).abs()
+        max_abs = float(diff.max())
+        # max |a-e|/|e| over nonzero e; masking keeps it finite (JSON-safe).
+        nz = e != 0
+        max_rel = float((diff[nz] / e[nz].abs()).max()) if bool(nz.any()) else 0.0
         passed = bool(torch.allclose(a, e, rtol=rtol, atol=atol))
     except RuntimeError as exc:
         raise ExecutionError("runtime", _short(exc)) from exc
-    return {"passed": passed, "max_abs_err": max_abs, "rtol": rtol, "atol": atol}
+    return {
+        "passed": passed,
+        "max_abs_err": max_abs,
+        "max_rel_err": max_rel,
+        "rtol": rtol,
+        "atol": atol,
+    }
 
 
 @register_builtin("assert_close")
@@ -143,7 +167,8 @@ def assert_close(actual: Any, expected: Any, *rest: Any) -> dict:
     if not result["passed"]:
         raise ExecutionError(
             "correctness",
-            f"outputs differ: max_abs_err={result['max_abs_err']} exceeds "
+            f"outputs differ: max_abs_err={result['max_abs_err']}, "
+            f"max_rel_err={result['max_rel_err']} exceed "
             f"atol={result['atol']}, rtol={result['rtol']}",
         )
     return result
