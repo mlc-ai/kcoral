@@ -92,9 +92,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
                 job_part = job_parts[0]
                 if job_part.content_type != "application/json":
                     raise ValueError("job part content type must be application/json")
-                raw_job = strict_json_loads(
-                    job_part.read(runtime.config.max_json_metadata_bytes)
-                )
+                raw_job = strict_json_loads(job_part.read(runtime.config.max_json_metadata_bytes))
                 job = validate_job(raw_job, runtime.config)
 
                 inline: dict[str, Path] = {}
@@ -116,9 +114,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
                     if isinstance(job, ValidatedProgram)
                     else set(job.files.values())
                 )
-                missing, unused = await runtime.cache.ingest_and_acquire(
-                    manifest_digests, inline
-                )
+                missing, unused = await runtime.cache.ingest_and_acquire(manifest_digests, inline)
                 if missing:
                     raise APIError(
                         404,
@@ -146,8 +142,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
                 if isinstance(job, ValidatedProgram):
                     work_dir.mkdir(parents=True, exist_ok=False)
                     blob_paths = {
-                        digest: runtime.cache.object_path(digest)
-                        for digest in job.blob_digests
+                        digest: runtime.cache.object_path(digest) for digest in job.blob_digests
                     }
                 else:
                     await runtime.cache.materialize(job.files, work_dir)
@@ -194,16 +189,12 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
                 if outcome.metadata.get("traceback") is not None:
                     extra["traceback"] = outcome.metadata["traceback"]
                 if outcome.metadata.get("instruction_index") is not None:
-                    extra["instruction_index"] = outcome.metadata[
-                        "instruction_index"
-                    ]
+                    extra["instruction_index"] = outcome.metadata["instruction_index"]
                 if stdout_truncated:
                     extra["stdout_truncated"] = True
                 if stderr_truncated:
                     extra["stderr_truncated"] = True
-                raise APIError(
-                    status, code, outcome.metadata.get("message", code), **extra
-                )
+                raise APIError(status, code, outcome.metadata.get("message", code), **extra)
 
             metadata: dict[str, Any] = {
                 "status": "ok",
@@ -235,12 +226,8 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
                     metadata_bytes, 200, headers=headers, media_type="application/json"
                 )
             else:
-                binary_payloads = [
-                    (part.name, part.path.read_bytes()) for part in outcome.binaries
-                ]
-                response_body, boundary = encode_multipart(
-                    metadata_bytes, binary_payloads
-                )
+                binary_payloads = [(part.name, part.path.read_bytes()) for part in outcome.binaries]
+                response_body, boundary = encode_multipart(metadata_bytes, binary_payloads)
                 if len(response_body) > runtime.config.max_response_bytes:
                     raise APIError(
                         400,
@@ -289,9 +276,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
             )
             return JSONResponse(payload, status_code=exc.status, headers=headers)
         except Exception as exc:
-            events.emit(
-                "server_error", level="ERROR", request_id=request_id, message=str(exc)
-            )
+            events.emit("server_error", level="ERROR", request_id=request_id, message=str(exc))
             events.emit(
                 "request_finished",
                 level="ERROR",
@@ -340,9 +325,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         except ValueError as exc:
             return _simple_error(400, "invalid_request", str(exc))
         except Exception:
-            return _simple_error(
-                500, "internal_error", "could not inspect the blob cache"
-            )
+            return _simple_error(500, "internal_error", "could not inspect the blob cache")
 
     @app.post("/blobs")
     async def blobs_upload(request: Request) -> Response:
@@ -357,22 +340,16 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
                     raise ValueError(f"unexpected multipart part {part.name!r}")
                 digest = validate_hash(part.name[5:])
                 if part.content_type != "application/octet-stream":
-                    raise ValueError(
-                        f"blob part {part.name!r} must use application/octet-stream"
-                    )
+                    raise ValueError(f"blob part {part.name!r} must use application/octet-stream")
                 if digest in sources:
                     raise ValueError(f"duplicate blob part {digest}")
                 sources[digest] = part.path
             stored, already = await runtime.cache.upload(sources)
-            return JSONResponse(
-                {"status": "ok", "stored": stored, "already_present": already}
-            )
+            return JSONResponse({"status": "ok", "stored": stored, "already_present": already})
         except ValueError as exc:
             return _simple_error(400, "invalid_request", str(exc))
         except Exception:
-            return _simple_error(
-                500, "internal_error", "could not store uploaded content"
-            )
+            return _simple_error(500, "internal_error", "could not store uploaded content")
         finally:
             if body is not None:
                 body.close()
@@ -385,14 +362,10 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
             )
         workers = runtime.scheduler.health()
         healthy = [
-            worker
-            for worker in workers
-            if worker["status"] in {"idle", "busy", "restarting"}
+            worker for worker in workers if worker["status"] in {"idle", "busy", "restarting"}
         ]
         if not healthy:
-            return _simple_error(
-                503, "unavailable", "no healthy GPU worker is available"
-            )
+            return _simple_error(503, "unavailable", "no healthy GPU worker is available")
         return JSONResponse(
             {
                 "status": "ok",
@@ -419,9 +392,7 @@ def _read_output(path: Path, limit: int) -> tuple[str, bool]:
 
 
 def _simple_error(status: int, code: str, message: str) -> JSONResponse:
-    return JSONResponse(
-        {"status": "error", "error": code, "message": message}, status_code=status
-    )
+    return JSONResponse({"status": "error", "error": code, "message": message}, status_code=status)
 
 
 def _base_content_type(request: Request) -> str:

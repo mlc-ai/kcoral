@@ -67,6 +67,46 @@ with Client("http://127.0.0.1:8000") as client:
     print(result.value)
 ```
 
+## Instruction execution
+
+The same `/execute` endpoint can run request-local instruction programs. Uploaded
+Python modules may register TVM FFI global functions, calls may read and write
+integer-indexed registers, and return instructions expose named results:
+
+```python
+import hashlib
+
+from benchmark_server import Client
+
+source = """
+import tvm_ffi
+
+@tvm_ffi.register_global_func("example.add")
+def add(left, right):
+    return left + right
+"""
+module_hash = hashlib.sha256(source.encode()).hexdigest()
+instructions = [
+    {"op": "upload_module", "blob": module_hash},
+    {"op": "call", "dst": 0, "func": "example.add", "args": [2, 3]},
+    {"op": "return", "reg": 0, "key": "sum"},
+]
+
+with Client("http://127.0.0.1:8000") as client:
+    result = client.execute_instructions(
+        instructions,
+        {module_hash: source},
+    )
+    print(result.value["sum"])
+```
+
+`upload_tensor` supports `cpu` and the worker-local `cuda:0` device. Tensor
+upload requires PyTorch in the server runtime.
+
+`random_tensor` creates a deterministic uniformly distributed floating-point
+tensor directly in the worker from `shape`, `dtype`, `seed`, and `device`
+fields, then stores it in `dst`.
+
 ## Documentation
 
 - [English API reference](api-reference.md)

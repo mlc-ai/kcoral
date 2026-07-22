@@ -79,9 +79,7 @@ def test_binary_and_tuple_return(client):
         + response.content
     )
     parts = {
-        part.get_param("name", header="content-disposition"): part.get_payload(
-            decode=True
-        )
+        part.get_param("name", header="content-disposition"): part.get_payload(decode=True)
         for part in message.iter_parts()
     }
     metadata = json.loads(parts["result"])
@@ -92,18 +90,14 @@ def test_binary_and_tuple_return(client):
 def test_blob_endpoints_and_cache_only_execute(client):
     source = b"def main():\n return 7\n"
     digest = hashlib.sha256(source).hexdigest()
-    assert client.post("/blobs/check", json={"blobs": [digest]}).json() == {
-        "missing": [digest]
-    }
+    assert client.post("/blobs/check", json={"blobs": [digest]}).json() == {"missing": [digest]}
     upload = client.post(
         "/blobs",
         files=[(f"blob:{digest}", (digest, source, "application/octet-stream"))],
     )
     assert upload.json() == {"status": "ok", "stored": [digest], "already_present": []}
     job = {"files": {"main.py": {"blob": digest}}}
-    response = client.post(
-        "/execute", files=[("job", (None, json.dumps(job), "application/json"))]
-    )
+    response = client.post("/execute", files=[("job", (None, json.dumps(job), "application/json"))])
     assert response.status_code == 200
     assert response.json()["return"] == {"type": "json", "value": 7}
 
@@ -114,9 +108,7 @@ def test_invalid_request_execution_error_and_timeout(client):
     assert invalid.json()["error"] == "invalid_request"
     assert invalid.headers["x-request-id"] == invalid.json()["request_id"]
 
-    failed = _execute(
-        client, b"def main():\n print('before')\n raise RuntimeError('boom')\n"
-    )
+    failed = _execute(client, b"def main():\n print('before')\n raise RuntimeError('boom')\n")
     assert failed.status_code == 400
     assert failed.json()["error"] == "execution_failed"
     assert failed.json()["stdout"] == "before\n"
@@ -139,14 +131,10 @@ def test_unused_blob_warning_and_validation(client):
     response = _execute(
         client,
         source,
-        extra=[
-            (f"blob:{unused_hash}", (unused_hash, unused, "application/octet-stream"))
-        ],
+        extra=[(f"blob:{unused_hash}", (unused_hash, unused, "application/octet-stream"))],
     )
     assert response.status_code == 200
-    assert response.json()["warnings"] == [
-        {"code": "unused_blob", "blobs": [unused_hash]}
-    ]
+    assert response.json()["warnings"] == [{"code": "unused_blob", "blobs": [unused_hash]}]
     assert client.post("/blobs/check", json={"blobs": [unused_hash]}).json() == {
         "missing": [unused_hash]
     }
@@ -213,6 +201,9 @@ def test_instruction_sdk_module_call_and_request_isolation(client):
         "@tvm_ffi.register_global_func('benchmark_server_test.add')\n"
         "def add(left, right):\n"
         " return left + right\n"
+        "@tvm_ffi.register_global_func('benchmark_server_test.values')\n"
+        "def values(left, right):\n"
+        " return {'values': [left, right]}\n"
     )
     digest = hashlib.sha256(source.encode()).hexdigest()
     instructions = [
@@ -224,10 +215,17 @@ def test_instruction_sdk_module_call_and_request_isolation(client):
             "args": [4, 5],
         },
         {"op": "return", "reg": 0, "key": "sum"},
+        {
+            "op": "call",
+            "dst": 1,
+            "func": "benchmark_server_test.values",
+            "args": [4, 5],
+        },
+        {"op": "return", "reg": 1, "key": "details"},
     ]
 
     result = sdk.execute_instructions(instructions, {digest: source})
-    assert result.value == {"sum": 9}
+    assert result.value == {"sum": 9, "details": {"values": [4, 5]}}
 
     with pytest.raises(BenchmarkServerError, match="invalid_program") as error:
         sdk.execute_instructions(instructions[1:], {})
@@ -273,15 +271,47 @@ def test_instruction_tensor_call_round_trip(client):
         instructions,
         {module_digest: source, tensor_digest: tensor_bytes},
     )
-    np.testing.assert_array_equal(
-        np.from_dlpack(result.value["output"]), tensor_data * 2
-    )
+    np.testing.assert_array_equal(np.from_dlpack(result.value["output"]), tensor_data * 2)
+
+
+def test_instruction_random_tensor_is_deterministic(client):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("torch")
+    instructions = [
+        {
+            "op": "random_tensor",
+            "dst": 0,
+            "shape": [128, 4096],
+            "dtype": "float16",
+            "seed": 0,
+            "device": "cpu",
+        },
+        {
+            "op": "random_tensor",
+            "dst": 1,
+            "shape": [128, 4096],
+            "dtype": "float16",
+            "seed": 0,
+            "device": "cpu",
+        },
+        {"op": "return", "reg": 0, "key": "first"},
+        {"op": "return", "reg": 1, "key": "second"},
+    ]
+    sdk = SDKClient("http://testserver")
+    sdk._http.close()
+    sdk._http = client
+    result = sdk.execute_instructions(instructions, {})
+
+    first = np.from_dlpack(result.value["first"])
+    second = np.from_dlpack(result.value["second"])
+    assert first.shape == (128, 4096)
+    assert first.dtype == np.float16
+    assert np.all((first >= 0) & (first < 1))
+    np.testing.assert_array_equal(first, second)
 
 
 def test_instruction_validation_and_runtime_errors(client):
-    undefined = _execute_instructions(
-        client, [{"op": "return", "reg": 0, "key": "output"}], {}
-    )
+    undefined = _execute_instructions(client, [{"op": "return", "reg": 0, "key": "output"}], {})
     assert undefined.status_code == 400
     assert undefined.json()["error"] == "invalid_request"
 
@@ -304,6 +334,49 @@ def test_instruction_validation_and_runtime_errors(client):
     assert wrong_size.status_code == 400
     assert wrong_size.json()["error"] == "invalid_program"
     assert wrong_size.json()["instruction_index"] == 0
+
+    integer_overflow = _execute_instructions(
+        client,
+        [
+            {
+                "op": "call",
+                "dst": None,
+                "func": "unused",
+                "args": [2**63],
+            }
+        ],
+        {},
+    )
+    assert integer_overflow.status_code == 400
+    assert integer_overflow.json()["error"] == "invalid_request"
+
+    invalid_seed = _execute_instructions(
+        client,
+        [
+            {
+                "op": "random_tensor",
+                "dst": 0,
+                "shape": [1],
+                "dtype": "float32",
+                "seed": -1,
+                "device": "cpu",
+            }
+        ],
+        {},
+    )
+    assert invalid_seed.status_code == 400
+    assert invalid_seed.json()["error"] == "invalid_request"
+
+    sdk = SDKClient("http://testserver")
+    sdk._http.close()
+    sdk._http = client
+    unused_blob = b"unused"
+    unused_digest = hashlib.sha256(unused_blob).hexdigest()
+    with pytest.raises(ValueError, match="not referenced"):
+        sdk.execute_instructions([], {unused_digest: unused_blob})
+    assert client.post("/blobs/check", json={"blobs": [unused_digest]}).json() == {
+        "missing": [unused_digest]
+    }
 
 
 def test_tensor_round_trip_through_sdk(client):

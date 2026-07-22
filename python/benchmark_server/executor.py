@@ -10,8 +10,10 @@ from typing import Any, Mapping
 
 import tvm_ffi
 
+from ._dlpack import tensor_from_bytes
 from .models import (
     CallInstruction,
+    RandomTensorInstruction,
     RegisterReference,
     ReturnInstruction,
     UploadModuleInstruction,
@@ -45,16 +47,12 @@ class ExecutionContext:
     def get_blob_path(self, digest: str, instruction_index: int) -> Path:
         path = self.blob_paths.get(digest)
         if path is None or not path.is_file():
-            raise InvalidProgramError(
-                f"blob {digest} is unavailable", instruction_index
-            )
+            raise InvalidProgramError(f"blob {digest} is unavailable", instruction_index)
         return path
 
     def get_register(self, register: int, instruction_index: int) -> Any:
         if register not in self.registers:
-            raise InvalidProgramError(
-                f"register r{register} is undefined", instruction_index
-            )
+            raise InvalidProgramError(f"register r{register} is undefined", instruction_index)
         return self.registers[register]
 
 
@@ -70,6 +68,8 @@ def execute_program(
             _upload_module(context, instruction, instruction_index)
         elif isinstance(instruction, UploadTensorInstruction):
             _upload_tensor(context, instruction, instruction_index)
+        elif isinstance(instruction, RandomTensorInstruction):
+            _random_tensor(context, instruction, instruction_index)
         elif isinstance(instruction, CallInstruction):
             _call(context, instruction, instruction_index)
         elif isinstance(instruction, ReturnInstruction):
@@ -90,8 +90,7 @@ def _upload_module(
     module_path = module_dir / f"{instruction_index}-{instruction.blob}.py"
     module_path.write_bytes(source.read_bytes())
     module_name = (
-        f"_benchmark_server_instruction_{context.request_id.replace('-', '_')}"
-        f"_{instruction_index}"
+        f"_benchmark_server_instruction_{context.request_id.replace('-', '_')}_{instruction_index}"
     )
     specification = importlib.util.spec_from_file_location(module_name, module_path)
     if specification is None or specification.loader is None:
@@ -118,8 +117,7 @@ def _upload_tensor(
     actual_size = blob_path.stat().st_size
     if actual_size != expected_size:
         raise InvalidProgramError(
-            "upload_tensor blob size mismatch: "
-            f"expected {expected_size} bytes, got {actual_size}",
+            f"upload_tensor blob size mismatch: expected {expected_size} bytes, got {actual_size}",
             instruction_index,
         )
     try:
@@ -130,14 +128,41 @@ def _upload_tensor(
         ) from error
 
     try:
-        host_tensor = torch.from_dlpack(
-            tvm_ffi.frombuffer(blob_path.read_bytes(), instruction.dtype)
-        ).reshape(instruction.shape)
-        tensor = (
-            host_tensor
-            if instruction.device == "cpu"
-            else host_tensor.to(instruction.device)
+        blob_data = blob_path.read_bytes()
+        if hasattr(tvm_ffi, "frombuffer"):
+            source_tensor = tvm_ffi.frombuffer(blob_data, instruction.dtype)
+        else:
+            source_tensor = tensor_from_bytes(blob_data, instruction.dtype, instruction.shape)
+        host_tensor = torch.from_dlpack(source_tensor).reshape(instruction.shape)
+        tensor = host_tensor if instruction.device == "cpu" else host_tensor.to(instruction.device)
+    except BaseException as error:
+        raise InstructionExecutionError(str(error), instruction_index) from error
+    context.registers[instruction.destination] = tensor
+
+
+def _random_tensor(
+    context: ExecutionContext,
+    instruction: RandomTensorInstruction,
+    instruction_index: int,
+) -> None:
+    try:
+        import torch
+    except ImportError as error:
+        raise InstructionExecutionError(
+            "random_tensor requires PyTorch", instruction_index
+        ) from error
+
+    try:
+        random_generator = torch.Generator(device="cpu")
+        random_generator.manual_seed(instruction.seed)
+        tensor = torch.rand(
+            instruction.shape,
+            dtype=getattr(torch, instruction.dtype),
+            generator=random_generator,
+            device="cpu",
         )
+        if instruction.device != "cpu":
+            tensor = tensor.to(instruction.device)
     except BaseException as error:
         raise InstructionExecutionError(str(error), instruction_index) from error
     context.registers[instruction.destination] = tensor
@@ -155,8 +180,7 @@ def _call(
             instruction_index,
         )
     arguments = [
-        _resolve_operand(context, argument, instruction_index)
-        for argument in instruction.arguments
+        _resolve_operand(context, argument, instruction_index) for argument in instruction.arguments
     ]
     try:
         result = function(*arguments)
@@ -166,13 +190,9 @@ def _call(
         context.registers[instruction.destination] = result
 
 
-def _resolve_operand(
-    context: ExecutionContext, operand: Any, instruction_index: int
-) -> Any:
+def _resolve_operand(context: ExecutionContext, operand: Any, instruction_index: int) -> Any:
     if isinstance(operand, RegisterReference):
         return context.get_register(operand.index, instruction_index)
     if isinstance(operand, list):
-        return [
-            _resolve_operand(context, item, instruction_index) for item in operand
-        ]
+        return [_resolve_operand(context, item, instruction_index) for item in operand]
     return operand

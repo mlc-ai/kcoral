@@ -31,6 +31,7 @@ from .validation import (
     strict_json_loads,
     validate_hash,
     validate_manifest_paths,
+    validate_program_payload,
     validate_remote_path,
 )
 
@@ -46,9 +47,7 @@ class Client:
         if connect_timeout_seconds <= 0:
             raise ValueError("connect_timeout_seconds must be positive")
         timeout = httpx.Timeout(None, connect=connect_timeout_seconds)
-        self._http = httpx.Client(
-            base_url=base_url.rstrip("/"), headers=headers, timeout=timeout
-        )
+        self._http = httpx.Client(base_url=base_url.rstrip("/"), headers=headers, timeout=timeout)
 
     def __enter__(self) -> Client:
         return self
@@ -100,7 +99,13 @@ class Client:
             stdout_limit_bytes,
             stderr_limit_bytes,
         )
+        validated_program = validate_program_payload(job)
         content = _encode_blobs(blobs)
+        unreferenced = sorted(set(content) - set(validated_program.blob_digests))
+        if unreferenced:
+            raise ValueError(
+                "blobs contains hashes not referenced by instructions: " + ", ".join(unreferenced)
+            )
         return self._execute_with_content(job, content)
 
     def execute_prepared(
@@ -211,9 +216,7 @@ class Client:
         except (KeyError, TypeError, ValueError) as exc:
             raise ProtocolError(f"malformed blob-upload response: {exc}") from exc
 
-    def _post_execute(
-        self, job: Mapping[str, Any], inline: Mapping[str, bytes]
-    ) -> httpx.Response:
+    def _post_execute(self, job: Mapping[str, Any], inline: Mapping[str, bytes]) -> httpx.Response:
         files: list[tuple[str, tuple[str | None, bytes, str]]] = [
             (
                 "job",
@@ -295,9 +298,7 @@ def _decode_execution_response(response: httpx.Response) -> ExecutionResult:
     elif media_type == "multipart/form-data":
         raw, binary_parts = _parse_multipart_response(response.content, content_type)
     else:
-        raise ProtocolError(
-            f"unexpected execution response content type {content_type!r}"
-        )
+        raise ProtocolError(f"unexpected execution response content type {content_type!r}")
     try:
         if raw.get("status") != "ok":
             raise ValueError("status is not ok")
@@ -340,11 +341,7 @@ def _decode_node(
     path: str,
     depth: int,
 ) -> Any:
-    if (
-        depth > 256
-        or not isinstance(node, dict)
-        or not isinstance(node.get("type"), str)
-    ):
+    if depth > 256 or not isinstance(node, dict) or not isinstance(node.get("type"), str):
         raise ValueError(f"invalid return-value node at {path}")
     node_type = node["type"]
     if node_type == "json":
@@ -378,14 +375,10 @@ def _decode_node(
         return tuple(decoded) if node_type == "tuple" else decoded
     if node_type == "dict":
         items = node.get("items")
-        if not isinstance(items, dict) or any(
-            not isinstance(key, str) for key in items
-        ):
+        if not isinstance(items, dict) or any(not isinstance(key, str) for key in items):
             raise ValueError(f"items must be an object at {path}")
         return {
-            key: _decode_node(
-                value, binary_parts, referenced, f"{path}.{key}", depth + 1
-            )
+            key: _decode_node(value, binary_parts, referenced, f"{path}.{key}", depth + 1)
             for key, value in items.items()
         }
     raise ValueError(f"unknown return-value node type {node_type!r} at {path}")
@@ -399,10 +392,7 @@ def _decode_tensor(node: Mapping[str, Any], data: bytes, path: str) -> Any:
         shape = node["shape"]
         if not isinstance(dtype_name, str) or not isinstance(shape, list):
             raise ValueError("dtype or shape has the wrong type")
-        if any(
-            isinstance(item, bool) or not isinstance(item, int) or item < 0
-            for item in shape
-        ):
+        if any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in shape):
             raise ValueError("shape contains an invalid dimension")
         ffi_dtype = tvm_ffi.dtype(dtype_name)
         expected = math.prod(shape) * int(ffi_dtype.itemsize)
@@ -417,8 +407,7 @@ def _parse_multipart_response(
     content: bytes, content_type: str
 ) -> tuple[dict[str, Any], dict[str, bytes]]:
     message = BytesParser(policy=email_policy).parsebytes(
-        f"MIME-Version: 1.0\r\nContent-Type: {content_type}\r\n\r\n".encode("ascii")
-        + content
+        f"MIME-Version: 1.0\r\nContent-Type: {content_type}\r\n\r\n".encode("ascii") + content
     )
     if not message.is_multipart():
         raise ProtocolError("malformed multipart execution response")

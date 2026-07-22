@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -42,15 +43,11 @@ def serialize_return(
     if len(metadata) > config.max_json_metadata_bytes:
         raise InvalidReturnValue("return value metadata exceeds the configured limit")
     if len(metadata) + state.binary_bytes > config.max_response_bytes:
-        raise InvalidReturnValue(
-            "return value exceeds the configured response-size limit"
-        )
+        raise InvalidReturnValue("return value exceeds the configured response-size limit")
     return tree, state.parts
 
 
-def _encode(
-    value: Any, path: str, depth: int, active: set[int], state: _State
-) -> dict[str, Any]:
+def _encode(value: Any, path: str, depth: int, active: set[int], state: _State) -> dict[str, Any]:
     if depth > state.config.max_nesting_depth:
         raise InvalidReturnValue(f"maximum nesting depth exceeded at {path}")
     state.nodes += 1
@@ -94,9 +91,7 @@ def _encode(
         except InvalidReturnValue:
             raise
         except Exception as exc:
-            raise InvalidReturnValue(
-                f"tensor cannot be serialized at {path}: {exc}"
-            ) from exc
+            raise InvalidReturnValue(f"tensor cannot be serialized at {path}: {exc}") from exc
         part = _store_binary(data, state)
         return {
             "type": "tensor",
@@ -107,13 +102,13 @@ def _encode(
             "sha256": part.sha256,
         }
 
-    if isinstance(value, (list, tuple, dict)):
+    if isinstance(value, (Sequence, Mapping)):
         identity = id(value)
         if identity in active:
             raise InvalidReturnValue(f"circular reference at {path}")
         active.add(identity)
         try:
-            if isinstance(value, list):
+            if isinstance(value, Sequence) and not isinstance(value, tuple):
                 return {
                     "type": "list",
                     "items": [
@@ -132,12 +127,8 @@ def _encode(
             items: dict[str, Any] = {}
             for key, item in value.items():
                 if not isinstance(key, str):
-                    raise InvalidReturnValue(
-                        f"dictionary key is not a string at {path}"
-                    )
-                child_path = (
-                    f"{path}.{key}" if key.isidentifier() else f"{path}[{key!r}]"
-                )
+                    raise InvalidReturnValue(f"dictionary key is not a string at {path}")
+                child_path = f"{path}.{key}" if key.isidentifier() else f"{path}[{key!r}]"
                 items[key] = _encode(item, child_path, depth + 1, active, state)
             return {"type": "dict", "items": items}
         finally:
@@ -163,7 +154,7 @@ def _is_json_subtree(
         if not math.isfinite(value):
             raise InvalidReturnValue(f"non-finite float at {path}")
         return True
-    if isinstance(value, tuple):
+    if isinstance(value, (bytes, bytearray, memoryview, tuple)):
         return False
     if isinstance(value, list):
         identity = id(value)
@@ -172,9 +163,7 @@ def _is_json_subtree(
         active.add(identity)
         try:
             return all(
-                _is_json_subtree(
-                    item, f"{path}[{index}]", depth + 1, active, maximum_depth
-                )
+                _is_json_subtree(item, f"{path}[{index}]", depth + 1, active, maximum_depth)
                 for index, item in enumerate(value)
             )
         finally:
@@ -187,15 +176,9 @@ def _is_json_subtree(
         try:
             for key, item in value.items():
                 if not isinstance(key, str):
-                    raise InvalidReturnValue(
-                        f"dictionary key is not a string at {path}"
-                    )
-                child_path = (
-                    f"{path}.{key}" if key.isidentifier() else f"{path}[{key!r}]"
-                )
-                if not _is_json_subtree(
-                    item, child_path, depth + 1, active, maximum_depth
-                ):
+                    raise InvalidReturnValue(f"dictionary key is not a string at {path}")
+                child_path = f"{path}.{key}" if key.isidentifier() else f"{path}[{key!r}]"
+                if not _is_json_subtree(item, child_path, depth + 1, active, maximum_depth):
                     return False
             return True
         finally:
@@ -224,18 +207,14 @@ def _tensor_bytes(tensor: Any) -> bytes:
         raise InvalidReturnValue(
             "serializing a GPU tensor requires PyTorch in the server environment"
         )
-    size = math.prod(int(dimension) for dimension in tensor.shape) * int(
-        tensor.dtype.itemsize
-    )
+    size = math.prod(int(dimension) for dimension in tensor.shape) * int(tensor.dtype.itemsize)
     return cpu_tensor_bytes(tensor, size)
 
 
 def _store_binary(data: bytes, state: _State) -> BinaryPart:
     size = len(data)
     if size > state.config.max_binary_value_bytes:
-        raise InvalidReturnValue(
-            "an individual binary return value exceeds the configured limit"
-        )
+        raise InvalidReturnValue("an individual binary return value exceeds the configured limit")
     digest = hashlib.sha256(data).hexdigest()
     key = (digest, size)
     existing = state.by_content.get(key)
@@ -249,7 +228,5 @@ def _store_binary(data: bytes, state: _State) -> BinaryPart:
     state.by_content[key] = part
     state.binary_bytes += size
     if state.binary_bytes > state.config.max_response_bytes:
-        raise InvalidReturnValue(
-            "binary return values exceed the configured response-size limit"
-        )
+        raise InvalidReturnValue("binary return values exceed the configured response-size limit")
     return part

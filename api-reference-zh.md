@@ -53,9 +53,9 @@ blob:97ab<其余 SHA-256 十六进制字符>
 
 每个 `blob` 值必须是 64 个小写十六进制字符。multipart part 名由 `blob:` 和该值拼接而成。服务端重新计算每个已提供 part 的 SHA-256 并验证名称。SHA-256 是一种密码学哈希函数，这里同时用于内容寻址、完整性校验和文件缓存。
 
-`job.files` 引用的每个 hash 可以由内联 multipart part 提供，也可以从服务端缓存中已有的不可变对象解析。服务端验证所有内联 blob；被 manifest 引用的 blob 写入缓存并立即持有能够阻止驱逐的引用，未被引用的 blob 按下一段规则处理。服务端再通过一次原子缓存操作解析并获取其余引用，然后才允许请求进入队列或分配 GPU。任何 hash 无法获得时，服务端返回 HTTP 404，其中 `error` 为 `blob_not_found`，并携带 `missing_blobs` 数组。该请求不会进入队列、获得 GPU 或执行脚本。
+`job.files` 或指令引用的每个 hash 可以由内联 multipart part 提供，也可以从服务端缓存中已有的不可变对象解析。服务端验证所有内联 blob；被引用的 blob 写入缓存并立即持有能够阻止驱逐的引用，未被引用的 blob 按下一段规则处理。服务端再通过一次原子缓存操作解析并获取其余引用，然后才允许请求进入队列或分配 GPU。任何 hash 无法获得时，服务端返回 HTTP 404，其中 `error` 为 `blob_not_found`，并携带 `missing_blobs` 数组。该请求不会进入队列、获得 GPU 或执行脚本。
 
-重复 blob part 或内容与 part 名中的 hash 不一致会产生 `invalid_request`。没有被 `job.files` 引用的内联 blob 在完成 hash 校验后被丢弃，不写入缓存；请求继续处理，成功响应携带 `unused_blob` warning，服务端也记录 WARNING 日志。一个 blob 可以被多个路径引用，multipart part 顺序不影响请求语义。一次性客户端仍可在 `POST /execute` 中内联提供所有引用的 blob，无需预检请求。
+重复 blob part 或内容与 part 名中的 hash 不一致会产生 `invalid_request`。没有被当前入口任务或指令任务引用的内联 blob 在完成 hash 校验后被丢弃，不写入缓存；请求继续处理，成功响应携带 `unused_blob` warning，服务端也记录 WARNING 日志。一个 blob 可以被多处引用，multipart part 顺序不影响请求语义。一次性客户端仍可在 `POST /execute` 中内联提供所有引用的 blob，无需预检请求。
 
 ##### `job` 对象
 
@@ -113,6 +113,56 @@ return_value = main()
 `stdout_limit_bytes` 和 `stderr_limit_bytes` 必须是非负整数，并且不能超过服务端配置的上限。`0` 表示响应不携带对应输出。限制只作用于 API 响应和 SDK 执行结果；第 5 章定义的日志始终保存完整输出。
 
 文档其余部分使用默认入口 `main.py` 和 `main()` 描述行为；除非特别说明，这些描述对自定义 `entry` 同样成立，把 `main.py` 替换为 `entry.file`、`main()` 替换为 `entry.function` 即可。
+
+##### 指令任务
+
+任务也可以使用 `instructions` 数组，代替 `files` 和 `entry`：
+
+```json
+{
+  "instructions": [
+    {"op": "upload_module", "blob": "<module_sha256>"},
+    {
+      "op": "upload_tensor",
+      "dst": 0,
+      "blob": "<tensor_sha256>",
+      "shape": [1024],
+      "dtype": "float32",
+      "device": "cuda:0"
+    },
+    {
+      "op": "random_tensor",
+      "dst": 1,
+      "shape": [128, 4096],
+      "dtype": "float16",
+      "seed": 0,
+      "device": "cuda:0"
+    },
+    {
+      "op": "call",
+      "dst": 2,
+      "func": "example.run",
+      "args": [{"reg": 0}, {"reg": 1}]
+    },
+    {"op": "return", "reg": 2, "key": "output"}
+  ],
+  "timeout_seconds": 60
+}
+```
+
+指令任务不能包含 `language`、`entry` 或 `files`。所有指令按照数组顺序，在同一个隔离请求进程中执行：
+
+- `upload_module` 把一个 Python 源码 blob 作为模块执行。模块可以通过 `tvm_ffi.register_global_func` 注册请求级函数。该指令没有输出寄存器。
+- `upload_tensor` 按给定形状和数据类型解释行优先的原始 blob，将张量放到 `cpu` 或 worker 内可见的 `cuda:0`，然后写入 `dst`。服务端运行环境需要安装 PyTorch。
+- `random_tensor` 使用独立的 PyTorch 随机数生成器产生 `[0, 1)` 均匀分布浮点张量，然后写入 `dst`。数据先在中央处理器上生成，再按需复制到 `cuda:0`；在相同运行时版本中，相同形状、数据类型和种子在两个目标设备上得到相同数据。
+- `call` 通过 `tvm_ffi.get_global_func` 查找 `func`，解析参数并调用函数。`dst` 为整数时保存结果，为 null 时丢弃结果。
+- `return` 读取 `reg`，并以 `key` 为键写入最终结果字典。
+
+对象 `{"reg": N}` 表示寄存器引用。JSON null、布尔值、数字、字符串和数组均为字面量。整数参数必须在有符号 64 位整数范围内。寄存器必须先写后读，寄存器编号必须是非负整数，返回键不能重复。寄存器和上传模块只在当前请求内存活。
+
+上传张量支持 `bool`、`bfloat16`、`float16`、`float32`、`float64`、`int8`、`int16`、`int32`、`int64` 和 `uint8`。随机张量支持 `bfloat16`、`float16`、`float32` 和 `float64`，`seed` 必须位于 0 到 2^63 - 1 之间。上传 blob 的字节数必须与声明的形状和数据类型完全一致。
+
+成功响应继续使用现有格式。`return` 描述树表示一个字典，其中包含所有 `return` 指令选中的键。
 
 ##### 文件路径规则
 
@@ -612,14 +662,17 @@ SDK 根据 `blob_not_found` 和机器可读的 `missing_blobs` 字段执行缓�
 | 错误                   | HTTP 状态码 | 说明                                                               |
 | ---------------------- | ----------: | ------------------------------------------------------------------ |
 | `invalid_request`      |         400 | 请求格式、字段、路径或入口声明无效                                 |
-| `blob_not_found`       |         404 | `job.files` 引用的一个或多个 blob 不在 inline parts 或服务端缓存中 |
-| `execution_failed`     |         400 | 导入入口文件或执行入口函数时抛出异常                               |
+| `blob_not_found`       |         404 | 当前任务引用的一个或多个 blob 不在 inline parts 或服务端缓存中     |
+| `invalid_program`      |         400 | 指令引用了不可用函数、寄存器或无效张量数据                         |
+| `execution_failed`     |         400 | 导入或执行入口代码、指令代码时抛出异常                             |
 | `invalid_return_value` |         400 | 入口函数返回值不符合协议                                           |
 | `timeout`              |         408 | 执行时间超过 `timeout_seconds`                                     |
 | `unavailable`          |         503 | 暂时没有可用工作进程，或工作进程崩溃                               |
 | `internal_error`       |         500 | 合法请求触发服务端内部错误                                         |
 
 `invalid_return_value` 包括不支持的 Python 类型、无法导入或非连续的 DLPack 张量、非字符串字典键、循环引用、非有限浮点数以及超过返回值资源限制。返回值满足协议但同步或序列化仍然失败时，服务端返回 `internal_error`。
+
+指令失败响应包含从零开始的 `instruction_index` 字段。Python 客户端通过 `BenchmarkServerError.instruction_index` 暴露该字段。
 
 执行失败响应包含 Python 调用栈：
 
@@ -814,6 +867,7 @@ with Client("http://server:8000") as client:
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
 | `Client(base_url, *, headers=None, connect_timeout_seconds=10)`                                                                                                     | 为 `base_url` 创建客户端。可选的 `headers` 随每个请求发送。 |
 | `client.execute(files, *, language="python", entry=Entry(), timeout_seconds=None, stdout_limit_bytes=None, stderr_limit_bytes=None) -> ExecutionResult`             | 上传文件并同步执行入口函数。                                |
+| `client.execute_instructions(instructions, blobs, *, timeout_seconds=None, stdout_limit_bytes=None, stderr_limit_bytes=None) -> ExecutionResult`                    | 上传指令引用的 blob，并同步执行指令任务。                   |
 | `client.prepare_files(files) -> PreparedFiles`                                                                                                                      | 计算 hash、去重并上传当前缺失的文件内容，不执行入口函数。   |
 | `client.execute_prepared(prepared, *, language="python", entry=Entry(), timeout_seconds=None, stdout_limit_bytes=None, stderr_limit_bytes=None) -> ExecutionResult` | 同步执行已经准备好的文件 manifest。                         |
 | `client.health() -> Health`                                                                                                                                         | 同步读取服务端和工作进程的健康状态。                        |
@@ -1202,11 +1256,12 @@ capacity 只统计 `objects/` 下的完整 blob，不统计 `.lock` 和 `tmp/`�
 - 工作目录；
 - 上传文件布局；
 - 导入的入口模块；
+- 请求级指令寄存器和上传模块；
 - 捕获的标准输出和标准错误；
 - 返回的 Python 对象；
 - 只能从本次请求对象访问的 GPU 内存。
 
-服务端不提供会话、跨请求 Python 对象、函数句柄、寄存器或应用层共享状态。
+服务端不提供会话、跨请求 Python 对象、函数句柄、寄存器或应用层共享状态。指令寄存器只存在于一个请求进程内。
 
 文件内容缓存可以跨请求存活。缓存只保存不可变的上传字节，不保存 Python 模块、GPU 张量或执行结果。
 

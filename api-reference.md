@@ -53,9 +53,9 @@ blob:97ab<remaining SHA-256 hexadecimal characters>
 
 Each `blob` value must contain 64 lowercase hexadecimal characters. A multipart part name is the concatenation of `blob:` and that value. The server recomputes each supplied part's SHA-256 and verifies its name. SHA-256 is a cryptographic hash function used here for content addressing, integrity verification, and file caching.
 
-Each hash referenced by `job.files` may be supplied by an inline multipart part or resolved from an immutable object already in the server cache. The server verifies every inline blob. It stores manifest-referenced blobs and immediately holds references that prevent eviction; it handles unreferenced blobs according to the next paragraph. The server then performs one atomic cache operation that resolves and acquires the remaining references before the request is queued or assigned a GPU. If any hash is unavailable, the server returns HTTP 404 with `error` set to `blob_not_found` and a `missing_blobs` array. It does not queue the request, assign a GPU, or execute the script.
+Each hash referenced by `job.files` or an instruction may be supplied by an inline multipart part or resolved from an immutable object already in the server cache. The server verifies every inline blob. It stores referenced blobs and immediately holds references that prevent eviction; it handles unreferenced blobs according to the next paragraph. The server then performs one atomic cache operation that resolves and acquires the remaining references before the request is queued or assigned a GPU. If any hash is unavailable, the server returns HTTP 404 with `error` set to `blob_not_found` and a `missing_blobs` array. It does not queue the request, assign a GPU, or execute the script.
 
-A duplicate blob part or content that does not match the hash in its part name produces `invalid_request`. An inline blob not referenced by `job.files` is discarded after hash verification and is not stored in the cache; request processing continues, the successful response carries an `unused_blob` warning, and the server also records a WARNING log entry. Multiple paths may reference one blob, and multipart part order does not affect request semantics. A one-shot client may still include all referenced blobs inline in `POST /execute` without any preflight request.
+A duplicate blob part or content that does not match the hash in its part name produces `invalid_request`. An inline blob not referenced by the active entry job or instruction job is discarded after hash verification and is not stored in the cache; request processing continues, the successful response carries an `unused_blob` warning, and the server also records a WARNING log entry. Multiple references may use one blob, and multipart part order does not affect request semantics. A one-shot client may still include all referenced blobs inline in `POST /execute` without any preflight request.
 
 ##### `job` Object
 
@@ -113,6 +113,56 @@ The server rejects unknown fields to prevent clients from assuming that an unsup
 `stdout_limit_bytes` and `stderr_limit_bytes` must be non-negative integers and cannot exceed the server-configured maximum. A value of `0` excludes that output stream from the response. These limits apply only to API responses and SDK execution results; the logs defined in Section 5 always preserve complete output.
 
 The rest of this document describes behavior using the default entry point, `main.py` and `main()`. Unless stated otherwise, these descriptions also apply to a custom `entry`: replace `main.py` with `entry.file` and `main()` with `entry.function`.
+
+##### Instruction Jobs
+
+As an alternative to `files` and `entry`, a job may contain an `instructions` array:
+
+```json
+{
+  "instructions": [
+    {"op": "upload_module", "blob": "<module_sha256>"},
+    {
+      "op": "upload_tensor",
+      "dst": 0,
+      "blob": "<tensor_sha256>",
+      "shape": [1024],
+      "dtype": "float32",
+      "device": "cuda:0"
+    },
+    {
+      "op": "random_tensor",
+      "dst": 1,
+      "shape": [128, 4096],
+      "dtype": "float16",
+      "seed": 0,
+      "device": "cuda:0"
+    },
+    {
+      "op": "call",
+      "dst": 2,
+      "func": "example.run",
+      "args": [{"reg": 0}, {"reg": 1}]
+    },
+    {"op": "return", "reg": 2, "key": "output"}
+  ],
+  "timeout_seconds": 60
+}
+```
+
+An instruction job cannot contain `language`, `entry`, or `files`. Instructions execute in array order inside the same isolated request process:
+
+- `upload_module` executes a Python source blob as a module. The module can register request-local functions with `tvm_ffi.register_global_func`. The instruction has no output register.
+- `upload_tensor` interprets a raw row-major blob using the declared shape and data type, moves it to `cpu` or the worker-local `cuda:0`, and stores it in `dst`. Tensor upload requires PyTorch in the server runtime.
+- `random_tensor` uses an isolated PyTorch random generator to create a uniformly distributed floating-point tensor in `[0, 1)`, then stores it in `dst`. Generation starts on the CPU before an optional copy to `cuda:0`, so the same shape, data type, and seed produce identical values on either target device within the same runtime version.
+- `call` resolves `func` with `tvm_ffi.get_global_func`, resolves operands, invokes the function, and stores its result in `dst`. A null `dst` discards the result.
+- `return` includes the value from `reg` in the result dictionary under `key`.
+
+The object `{"reg": N}` is a register-reference operand. JSON null, booleans, numbers, strings, and arrays are literal operands. Integer operands must fit in the signed 64-bit range. A register must be written before it is referenced, register indexes must be non-negative integers, and return keys must be unique. Registers and uploaded modules live only for the current request.
+
+Uploaded tensors support `bool`, `bfloat16`, `float16`, `float32`, `float64`, `int8`, `int16`, `int32`, `int64`, and `uint8`. Random tensors support `bfloat16`, `float16`, `float32`, and `float64`; `seed` must be between 0 and 2^63 - 1. A raw upload blob must exactly match the declared shape and data type.
+
+The existing successful response format is unchanged. The `return` description tree represents a dictionary containing all keys selected by `return` instructions.
 
 ##### File Path Rules
 
@@ -612,14 +662,17 @@ The SDK performs cache fallback based on `blob_not_found` and the machine-readab
 | Error | HTTP status code | Description |
 |---|---:|---|
 | `invalid_request` | 400 | The request format, fields, paths, or entry declaration are invalid |
-| `blob_not_found` | 404 | One or more blobs referenced by `job.files` are absent from both inline parts and the server cache |
-| `execution_failed` | 400 | Importing the entry file or executing the entry function raises an exception |
+| `blob_not_found` | 404 | One or more blobs referenced by the active job are absent from both inline parts and the server cache |
+| `invalid_program` | 400 | An instruction references an unavailable function, register, or invalid tensor payload |
+| `execution_failed` | 400 | Importing or executing entry or instruction code raises an exception |
 | `invalid_return_value` | 400 | The entry function's return value does not conform to the protocol |
 | `timeout` | 408 | Execution time exceeds `timeout_seconds` |
 | `unavailable` | 503 | No worker process is currently available, or a worker process crashes |
 | `internal_error` | 500 | A valid request triggers an internal server error |
 
 `invalid_return_value` covers unsupported Python types, DLPack tensors that cannot be imported or are non-contiguous, non-string dictionary keys, circular references, non-finite floating-point values, and return values that exceed resource limits. If a return value conforms to the protocol but synchronization or serialization still fails, the server returns `internal_error`.
+
+Instruction failures include a zero-based `instruction_index` field. The Python client exposes it as `BenchmarkServerError.instruction_index`.
 
 An execution failure response contains a Python traceback:
 
@@ -813,6 +866,7 @@ The public call signatures are:
 |---|---|
 | `Client(base_url, *, headers=None, connect_timeout_seconds=10)` | Creates a client for `base_url`. Optional `headers` are sent with each request. |
 | `client.execute(files, *, language="python", entry=Entry(), timeout_seconds=None, stdout_limit_bytes=None, stderr_limit_bytes=None) -> ExecutionResult` | Uploads files and synchronously executes the entry function. |
+| `client.execute_instructions(instructions, blobs, *, timeout_seconds=None, stdout_limit_bytes=None, stderr_limit_bytes=None) -> ExecutionResult` | Uploads referenced blobs and synchronously executes an instruction job. |
 | `client.prepare_files(files) -> PreparedFiles` | Hashes, deduplicates, and uploads currently missing file content without executing it. |
 | `client.execute_prepared(prepared, *, language="python", entry=Entry(), timeout_seconds=None, stdout_limit_bytes=None, stderr_limit_bytes=None) -> ExecutionResult` | Synchronously executes a previously prepared file manifest. |
 | `client.health() -> Health` | Synchronously reads server and worker health. |
@@ -1201,11 +1255,12 @@ The following state belongs to only one request:
 - the working directory;
 - the uploaded file layout;
 - the imported entry module;
+- request-local instruction registers and uploaded modules;
 - captured standard output and standard error;
 - returned Python objects;
 - GPU memory reachable only from objects in the current request.
 
-The server provides no sessions, cross-request Python objects, function handles, registers, or application-level shared state.
+The server provides no sessions, cross-request Python objects, function handles, registers, or application-level shared state. Instruction registers exist only inside one request process.
 
 The file content cache may persist across requests. The cache stores only immutable uploaded bytes and does not store Python modules, GPU tensors, or execution results.
 

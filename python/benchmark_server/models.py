@@ -32,6 +32,15 @@ class UploadTensorInstruction:
 
 
 @dataclass(frozen=True)
+class RandomTensorInstruction:
+    destination: int
+    shape: tuple[int, ...]
+    dtype: str
+    seed: int
+    device: str
+
+
+@dataclass(frozen=True)
 class CallInstruction:
     destination: int | None
     function: str
@@ -47,6 +56,7 @@ class ReturnInstruction:
 Instruction = (
     UploadModuleInstruction
     | UploadTensorInstruction
+    | RandomTensorInstruction
     | CallInstruction
     | ReturnInstruction
 )

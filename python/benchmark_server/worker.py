@@ -39,8 +39,7 @@ class Scheduler:
     def __init__(self, devices: tuple[str, ...]) -> None:
         now = time.monotonic()
         self.slots = [
-            WorkerSlot(index, device, "idle", now)
-            for index, device in enumerate(devices)
+            WorkerSlot(index, device, "idle", now) for index, device in enumerate(devices)
         ]
         self.available: asyncio.Queue[WorkerSlot] = asyncio.Queue()
         for slot in self.slots:
@@ -113,9 +112,7 @@ async def run_job(
     except Exception as exc:
         receive.close()
         send.close()
-        return WorkerOutcome(
-            "crash", {"message": f"could not start worker process: {exc}"}
-        )
+        return WorkerOutcome("crash", {"message": f"could not start worker process: {exc}"})
     send.close()
     try:
         return await _monitor_process(process, receive, job, config)
@@ -135,9 +132,7 @@ async def _monitor_process(
     if not started:
         await _stop_process(process, config.worker_termination_grace_seconds)
         receive.close()
-        return WorkerOutcome(
-            "crash", {"message": "worker process did not become ready"}
-        )
+        return WorkerOutcome("crash", {"message": "worker process did not become ready"})
     try:
         handshake = receive.recv()
     except EOFError:
@@ -147,9 +142,7 @@ async def _monitor_process(
             _terminate_process_tree(process, signal.SIGTERM)
         await asyncio.to_thread(process.join)
         receive.close()
-        return WorkerOutcome(
-            "crash", {"message": "worker process exited during startup"}
-        )
+        return WorkerOutcome("crash", {"message": "worker process exited during startup"})
     ready = await asyncio.to_thread(receive.poll, job.timeout_seconds)
     if not ready:
         await _stop_process(process, config.worker_termination_grace_seconds)
@@ -177,9 +170,7 @@ async def _monitor_process(
             "crash",
             {"message": f"worker process exited with status {process.exitcode}"},
         )
-    return WorkerOutcome(
-        payload["kind"], payload.get("metadata", {}), payload.get("binaries", [])
-    )
+    return WorkerOutcome(payload["kind"], payload.get("metadata", {}), payload.get("binaries", []))
 
 
 def _runtime_main(
@@ -228,9 +219,7 @@ def _runtime_main(
             spec.loader.exec_module(module)
             function = getattr(module, job.entry.function, None)
             if not callable(function):
-                raise RuntimeError(
-                    f"entry function {job.entry.function!r} is not callable"
-                )
+                raise RuntimeError(f"entry function {job.entry.function!r} is not callable")
             signature = inspect.signature(function)
             try:
                 signature.bind()
@@ -303,9 +292,7 @@ def _runtime_main(
         connection.close()
 
 
-def _terminate_process_tree(
-    process: multiprocessing.Process, sig: signal.Signals
-) -> None:
+def _terminate_process_tree(process: multiprocessing.Process, sig: signal.Signals) -> None:
     if process.pid is None:
         return
     if hasattr(os, "killpg"):

@@ -10,6 +10,7 @@ from typing import Any
 from .models import (
     CallInstruction,
     Entry,
+    RandomTensorInstruction,
     RegisterReference,
     ReturnInstruction,
     ServerConfig,
@@ -25,6 +26,7 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_INSTRUCTIONS = 10_000
 MAX_REGISTER_INDEX = 2**31 - 1
 MAX_NAME_LENGTH = 1_024
+MAX_CLIENT_LIMIT = 2**63 - 1
 TENSOR_DTYPE_SIZES = {
     "bool": 1,
     "bfloat16": 2,
@@ -38,6 +40,7 @@ TENSOR_DTYPE_SIZES = {
     "uint8": 1,
 }
 TENSOR_DEVICES = {"cpu", "cuda:0"}
+RANDOM_TENSOR_DTYPES = {"bfloat16", "float16", "float32", "float64"}
 
 
 class DuplicateKeyError(ValueError):
@@ -75,9 +78,7 @@ def strict_json_loads(data: bytes | str) -> Any:
 
 def validate_hash(value: Any) -> str:
     if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
-        raise ValueError(
-            "blob hash must contain exactly 64 lowercase hexadecimal characters"
-        )
+        raise ValueError("blob hash must contain exactly 64 lowercase hexadecimal characters")
     return value
 
 
@@ -212,13 +213,31 @@ def _validate_program(raw: dict[str, Any], config: ServerConfig) -> ValidatedPro
                 raise ValueError(f"{path} tensor exceeds the configured binary-size limit")
             blob_digests.add(blob)
             defined_registers.add(destination)
-            instructions.append(
-                UploadTensorInstruction(destination, blob, shape, dtype, device)
-            )
-        elif operation == "call":
+            instructions.append(UploadTensorInstruction(destination, blob, shape, dtype, device))
+        elif operation == "random_tensor":
             _require_instruction_fields(
-                raw_instruction, {"op", "dst", "func", "args"}, path
+                raw_instruction,
+                {"op", "dst", "shape", "dtype", "seed", "device"},
+                path,
             )
+            destination = _validate_register(raw_instruction["dst"], f"{path}.dst")
+            shape = _validate_tensor_shape(raw_instruction["shape"], path)
+            dtype = raw_instruction["dtype"]
+            if not isinstance(dtype, str) or dtype not in RANDOM_TENSOR_DTYPES:
+                raise ValueError(f"{path}.dtype is not supported for random_tensor")
+            seed = raw_instruction["seed"]
+            if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0 or seed > 2**63 - 1:
+                raise ValueError(f"{path}.seed must be an integer between 0 and {2**63 - 1}")
+            device = raw_instruction["device"]
+            if not isinstance(device, str) or device not in TENSOR_DEVICES:
+                raise ValueError(f"{path}.device must be 'cpu' or 'cuda:0'")
+            tensor_size = math.prod(shape) * TENSOR_DTYPE_SIZES[dtype]
+            if tensor_size > config.max_binary_value_bytes:
+                raise ValueError(f"{path} tensor exceeds the configured binary-size limit")
+            defined_registers.add(destination)
+            instructions.append(RandomTensorInstruction(destination, shape, dtype, seed, device))
+        elif operation == "call":
+            _require_instruction_fields(raw_instruction, {"op", "dst", "func", "args"}, path)
             destination_raw = raw_instruction["dst"]
             destination = (
                 None
@@ -255,12 +274,7 @@ def _validate_program(raw: dict[str, Any], config: ServerConfig) -> ValidatedPro
             if register not in defined_registers:
                 raise ValueError(f"{path}.reg references undefined register r{register}")
             key = raw_instruction["key"]
-            if (
-                not isinstance(key, str)
-                or not key
-                or len(key) > MAX_NAME_LENGTH
-                or "\x00" in key
-            ):
+            if not isinstance(key, str) or not key or len(key) > MAX_NAME_LENGTH or "\x00" in key:
                 raise ValueError(f"{path}.key must be a valid non-empty string")
             if key in return_keys:
                 raise ValueError(f"{path}.key duplicates return key {key!r}")
@@ -279,9 +293,7 @@ def _validate_program(raw: dict[str, Any], config: ServerConfig) -> ValidatedPro
     )
 
 
-def _require_instruction_fields(
-    instruction: dict[str, Any], expected: set[str], path: str
-) -> None:
+def _require_instruction_fields(instruction: dict[str, Any], expected: set[str], path: str) -> None:
     missing = expected - set(instruction)
     unknown = set(instruction) - expected
     if missing:
@@ -297,9 +309,7 @@ def _validate_register(value: Any, path: str) -> int:
         or value < 0
         or value > MAX_REGISTER_INDEX
     ):
-        raise ValueError(
-            f"{path} must be an integer between 0 and {MAX_REGISTER_INDEX}"
-        )
+        raise ValueError(f"{path} must be an integer between 0 and {MAX_REGISTER_INDEX}")
     return value
 
 
@@ -314,9 +324,7 @@ def _validate_tensor_shape(value: Any, path: str) -> tuple[int, ...]:
             or dimension < 0
             or dimension > 2**63 - 1
         ):
-            raise ValueError(
-                f"{path}.shape[{dimension_index}] must be a non-negative integer"
-            )
+            raise ValueError(f"{path}.shape[{dimension_index}] must be a non-negative integer")
         shape.append(dimension)
     return tuple(shape)
 
@@ -348,7 +356,11 @@ def _validate_operand(
             )
             for index, item in enumerate(value)
         ]
-    if value is None or isinstance(value, (bool, int, str)):
+    if value is None or isinstance(value, (bool, str)):
+        return value
+    if isinstance(value, int):
+        if value < -(2**63) or value > 2**63 - 1:
+            raise ValueError(f"{path} integer is outside the signed 64-bit range")
         return value
     if isinstance(value, float) and math.isfinite(value):
         return value
@@ -362,11 +374,7 @@ def _validate_execution_limits(
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
         raise ValueError("timeout_seconds must be a positive number")
     timeout = float(timeout)
-    if (
-        not math.isfinite(timeout)
-        or timeout <= 0
-        or timeout > config.max_timeout_seconds
-    ):
+    if not math.isfinite(timeout) or timeout <= 0 or timeout > config.max_timeout_seconds:
         raise ValueError("timeout_seconds is outside the allowed range")
 
     stdout_limit = _validate_limit(
@@ -383,15 +391,8 @@ def _validate_execution_limits(
 
 
 def _validate_limit(value: Any, name: str, maximum: int) -> int:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or value < 0
-        or value > maximum
-    ):
-        raise ValueError(
-            f"{name} must be a non-negative integer no greater than {maximum}"
-        )
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > maximum:
+        raise ValueError(f"{name} must be a non-negative integer no greater than {maximum}")
     return value
 
 
@@ -419,9 +420,7 @@ def make_job_payload(
         "files": {path: {"blob": digest} for path, digest in clean_manifest.items()},
     }
     if timeout_seconds is not None:
-        if isinstance(timeout_seconds, bool) or not isinstance(
-            timeout_seconds, (int, float)
-        ):
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
             raise ValueError("timeout_seconds must be a positive number")
         value = float(timeout_seconds)
         if not math.isfinite(value) or value <= 0:
@@ -448,13 +447,9 @@ def make_program_payload(
         not isinstance(instruction, Mapping) for instruction in instructions
     ):
         raise ValueError("instructions must be an array of objects")
-    payload: dict[str, Any] = {
-        "instructions": [dict(instruction) for instruction in instructions]
-    }
+    payload: dict[str, Any] = {"instructions": [dict(instruction) for instruction in instructions]}
     if timeout_seconds is not None:
-        if isinstance(timeout_seconds, bool) or not isinstance(
-            timeout_seconds, (int, float)
-        ):
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
             raise ValueError("timeout_seconds must be a positive number")
         value = float(timeout_seconds)
         if not math.isfinite(value) or value <= 0:
@@ -469,3 +464,13 @@ def make_program_payload(
                 raise ValueError(f"{name} must be a non-negative integer")
             payload[name] = value
     return payload
+
+
+def validate_program_payload(raw: dict[str, Any]) -> ValidatedProgram:
+    config = ServerConfig(
+        max_timeout_seconds=float("inf"),
+        max_stdout_limit_bytes=MAX_CLIENT_LIMIT,
+        max_stderr_limit_bytes=MAX_CLIENT_LIMIT,
+        max_binary_value_bytes=MAX_CLIENT_LIMIT,
+    )
+    return _validate_program(raw, config)
