@@ -1,4 +1,4 @@
-# TIRx Benchmark Server
+# Benchmark Server
 
 A stateless, synchronous HTTP service for compiling, running, and benchmarking
 GPU kernels. A request is a small **program** — an ordered sequence of
@@ -26,6 +26,9 @@ a result), `assert_close` (compare, *fails* on mismatch). A compiled module hand
 is itself callable, so a kernel runs in place via a `run` whose `fn` is that handle.
 
 The server only measures — interpreting or scoring the numbers is the client's job.
+
+See [docs/protocol.md](docs/protocol.md) for the full wire format of `upload`,
+`run`, and the request/response envelope.
 
 ## Requirements
 
@@ -110,7 +113,7 @@ still returns **HTTP 200** (the server *did* run the program), but the body says
 - **Body `status`**: `COMPLETED` (every instruction OK), `FAILED` (some instruction
   failed → the rest are `SKIPPED`), or `CACHE_MISS` (resend the listed uploads with
   their `inline` bytes). A per-instruction failure carries `error.kind` — one of
-  `parse`, `compile`, `runtime`, `correctness`, `timeout`.
+  `parse`, `compile`, `runtime`, `correctness`, `engine`.
 - **HTTP status**: `200` for any program the server ran (including instruction
   failures and cache misses); `400` malformed request; `503` all workers busy;
   `504` execution timed out; `500` worker crashed.

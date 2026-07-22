@@ -16,8 +16,8 @@ class ValidationError(ValueError):
 class ExecutionError(Exception):
     """A failure caused by submitted code -> a ``FAILED`` instruction result.
 
-    ``kind`` names the stage: ``parse``, ``compile``, ``runtime``,
-    ``correctness`` (an assertion the kernel failed), or ``timeout``.
+    ``kind`` names the stage: ``parse``, ``compile``, ``runtime``, or
+    ``correctness`` (an assertion the kernel failed).
     """
 
     def __init__(self, kind: str, message: str):
