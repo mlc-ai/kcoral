@@ -11,9 +11,19 @@ import time
 import traceback as traceback_module
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-from .models import ServerConfig, ValidatedJob, WorkerOutcome
+from .executor import (
+    InstructionExecutionError,
+    InvalidProgramError,
+    execute_program,
+)
+from .models import (
+    ServerConfig,
+    ValidatedProgram,
+    ValidatedRequest,
+    WorkerOutcome,
+)
 from .serialization import InvalidReturnValue, serialize_return
 
 
@@ -71,9 +81,10 @@ class Scheduler:
 
 async def run_job(
     slot: WorkerSlot,
-    job: ValidatedJob,
+    job: ValidatedRequest,
     request_id: str,
     work_dir: Path,
+    blob_paths: Mapping[str, Path],
     result_dir: Path,
     stdout_path: Path,
     stderr_path: Path,
@@ -89,6 +100,7 @@ async def run_job(
             job,
             request_id,
             work_dir,
+            blob_paths,
             result_dir,
             stdout_path,
             stderr_path,
@@ -116,7 +128,7 @@ async def run_job(
 async def _monitor_process(
     process: multiprocessing.Process,
     receive: Any,
-    job: ValidatedJob,
+    job: ValidatedRequest,
     config: ServerConfig,
 ) -> WorkerOutcome:
     started = await asyncio.to_thread(receive.poll, 60.0)
@@ -158,6 +170,7 @@ async def _monitor_process(
         await asyncio.to_thread(process.join)
     if process.exitcode not in (0, None) and payload.get("kind") not in {
         "execution_failed",
+        "invalid_program",
         "invalid_return_value",
     }:
         return WorkerOutcome(
@@ -172,9 +185,10 @@ async def _monitor_process(
 def _runtime_main(
     connection: Any,
     device: str,
-    job: ValidatedJob,
+    job: ValidatedRequest,
     request_id: str,
     work_dir: Path,
+    blob_paths: Mapping[str, Path],
     result_dir: Path,
     stdout_path: Path,
     stderr_path: Path,
@@ -201,31 +215,55 @@ def _runtime_main(
     started = time.perf_counter()
     payload: dict[str, Any]
     try:
-        entry_path = work_dir.joinpath(*job.entry.file.split("/"))
-        module_name = f"_benchmark_server_entry_{request_id.replace('-', '_')}"
-        spec = importlib.util.spec_from_file_location(module_name, entry_path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"cannot import entry file {job.entry.file}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        function = getattr(module, job.entry.function, None)
-        if not callable(function):
-            raise RuntimeError(f"entry function {job.entry.function!r} is not callable")
-        signature = inspect.signature(function)
-        try:
-            signature.bind()
-        except TypeError as exc:
-            raise RuntimeError(
-                f"entry function {job.entry.function!r} must accept no arguments"
-            ) from exc
-        value = function()
+        if isinstance(job, ValidatedProgram):
+            value = execute_program(job, blob_paths, work_dir, request_id)
+        else:
+            entry_path = work_dir.joinpath(*job.entry.file.split("/"))
+            module_name = f"_benchmark_server_entry_{request_id.replace('-', '_')}"
+            spec = importlib.util.spec_from_file_location(module_name, entry_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"cannot import entry file {job.entry.file}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+            function = getattr(module, job.entry.function, None)
+            if not callable(function):
+                raise RuntimeError(
+                    f"entry function {job.entry.function!r} is not callable"
+                )
+            signature = inspect.signature(function)
+            try:
+                signature.bind()
+            except TypeError as exc:
+                raise RuntimeError(
+                    f"entry function {job.entry.function!r} must accept no arguments"
+                ) from exc
+            value = function()
         tree, binaries = serialize_return(value, result_dir, config)
         elapsed = (time.perf_counter() - started) * 1000
         payload = {
             "kind": "ok",
             "metadata": {"return": tree, "elapsed_ms": elapsed},
             "binaries": binaries,
+        }
+    except InvalidProgramError as exc:
+        payload = {
+            "kind": "invalid_program",
+            "metadata": {
+                "message": str(exc),
+                "instruction_index": exc.instruction_index,
+                "elapsed_ms": (time.perf_counter() - started) * 1000,
+            },
+        }
+    except InstructionExecutionError as exc:
+        payload = {
+            "kind": "execution_failed",
+            "metadata": {
+                "message": f"instruction {exc.instruction_index} failed: {exc}",
+                "instruction_index": exc.instruction_index,
+                "traceback": traceback_module.format_exc(),
+                "elapsed_ms": (time.perf_counter() - started) * 1000,
+            },
         }
     except InvalidReturnValue as exc:
         payload = {
@@ -236,10 +274,15 @@ def _runtime_main(
             },
         }
     except BaseException as exc:
+        execution_name = (
+            "instruction program"
+            if isinstance(job, ValidatedProgram)
+            else f"{job.entry.function}()"
+        )
         payload = {
             "kind": "execution_failed",
             "metadata": {
-                "message": f"{job.entry.function}() raised {type(exc).__name__}: {exc}",
+                "message": f"{execution_name} raised {type(exc).__name__}: {exc}",
                 "traceback": traceback_module.format_exc(),
                 "elapsed_ms": (time.perf_counter() - started) * 1000,
             },

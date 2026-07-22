@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, Response
 
 from .cache import BlobCache
 from .events import EventLogger
-from .models import ServerConfig
+from .models import ServerConfig, ValidatedProgram
 from .multipart import MultipartBody, encode_multipart, parse_multipart_request
 from .validation import strict_json_loads, validate_hash, validate_job
 from .worker import Scheduler, run_job
@@ -111,7 +111,11 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
                     if digest in inline:
                         raise ValueError(f"duplicate blob part {digest}")
                     inline[digest] = part.path
-                manifest_digests = set(job.files.values())
+                manifest_digests = (
+                    set(job.blob_digests)
+                    if isinstance(job, ValidatedProgram)
+                    else set(job.files.values())
+                )
                 missing, unused = await runtime.cache.ingest_and_acquire(
                     manifest_digests, inline
                 )
@@ -137,8 +141,16 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
             assigned_gpu_id = slot.index
             queue_ms = (time.perf_counter() - queued_at) * 1000
             work_dir = runtime.work_root / request_id
+            blob_paths: dict[str, Path] = {}
             try:
-                await runtime.cache.materialize(job.files, work_dir)
+                if isinstance(job, ValidatedProgram):
+                    work_dir.mkdir(parents=True, exist_ok=False)
+                    blob_paths = {
+                        digest: runtime.cache.object_path(digest)
+                        for digest in job.blob_digests
+                    }
+                else:
+                    await runtime.cache.materialize(job.files, work_dir)
             except Exception as exc:
                 raise APIError(
                     500, "internal_error", f"could not materialize request files: {exc}"
@@ -149,6 +161,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
                 job,
                 request_id,
                 work_dir,
+                blob_paths,
                 result_dir,
                 stdout_path,
                 stderr_path,
@@ -171,6 +184,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
             if outcome.kind != "ok":
                 mapping = {
                     "execution_failed": (400, "execution_failed"),
+                    "invalid_program": (400, "invalid_program"),
                     "invalid_return_value": (400, "invalid_return_value"),
                     "timeout": (408, "timeout"),
                     "crash": (503, "unavailable"),
@@ -179,6 +193,10 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
                 extra: dict[str, Any] = {"stdout": stdout, "stderr": stderr}
                 if outcome.metadata.get("traceback") is not None:
                     extra["traceback"] = outcome.metadata["traceback"]
+                if outcome.metadata.get("instruction_index") is not None:
+                    extra["instruction_index"] = outcome.metadata[
+                        "instruction_index"
+                    ]
                 if stdout_truncated:
                     extra["stdout_truncated"] = True
                 if stderr_truncated:

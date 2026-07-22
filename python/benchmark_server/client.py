@@ -27,6 +27,7 @@ from .models import (
 )
 from .validation import (
     make_job_payload,
+    make_program_payload,
     strict_json_loads,
     validate_hash,
     validate_manifest_paths,
@@ -82,22 +83,25 @@ class Client:
             stdout_limit_bytes,
             stderr_limit_bytes,
         )
-        self._prepare(content)
-        try:
-            response = self._post_execute(job, {})
-            return _decode_execution_response(response)
-        except BenchmarkServerError as exc:
-            if exc.code != "blob_not_found" or not exc.missing_blobs:
-                raise
-            missing: dict[str, bytes] = {}
-            for digest in exc.missing_blobs:
-                if digest not in content:
-                    raise ProtocolError(
-                        "server requested a missing blob not referenced by this execution"
-                    ) from exc
-                missing[digest] = content[digest]
-            response = self._post_execute(job, missing)
-            return _decode_execution_response(response)
+        return self._execute_with_content(job, content)
+
+    def execute_instructions(
+        self,
+        instructions: list[Mapping[str, Any]],
+        blobs: Mapping[str, FileContent],
+        *,
+        timeout_seconds: float | None = None,
+        stdout_limit_bytes: int | None = None,
+        stderr_limit_bytes: int | None = None,
+    ) -> ExecutionResult:
+        job = make_program_payload(
+            instructions,
+            timeout_seconds,
+            stdout_limit_bytes,
+            stderr_limit_bytes,
+        )
+        content = _encode_blobs(blobs)
+        return self._execute_with_content(job, content)
 
     def execute_prepared(
         self,
@@ -120,6 +124,26 @@ class Client:
             stderr_limit_bytes,
         )
         return _decode_execution_response(self._post_execute(job, {}))
+
+    def _execute_with_content(
+        self, job: Mapping[str, Any], content: Mapping[str, bytes]
+    ) -> ExecutionResult:
+        self._prepare(content)
+        try:
+            response = self._post_execute(job, {})
+            return _decode_execution_response(response)
+        except BenchmarkServerError as exc:
+            if exc.code != "blob_not_found" or not exc.missing_blobs:
+                raise
+            missing: dict[str, bytes] = {}
+            for digest in exc.missing_blobs:
+                if digest not in content:
+                    raise ProtocolError(
+                        "server requested a missing blob not referenced by this execution"
+                    ) from exc
+                missing[digest] = content[digest]
+            response = self._post_execute(job, missing)
+            return _decode_execution_response(response)
 
     def health(self) -> Health:
         response = self._request("GET", "/health")
@@ -195,7 +219,7 @@ class Client:
                 "job",
                 (
                     None,
-                    json.dumps(job, separators=(",", ":")).encode(),
+                    json.dumps(job, allow_nan=False, separators=(",", ":")).encode(),
                     "application/json",
                 ),
             )
@@ -227,21 +251,37 @@ def _encode_files(
     for remote_path, value in files.items():
         path = validate_remote_path(remote_path)
         paths.append(path)
-        if isinstance(value, str):
-            data = value.encode("utf-8")
-        elif isinstance(value, bytes):
-            data = value
-        elif isinstance(value, (bytearray, memoryview)):
-            data = bytes(value)
-        elif isinstance(value, Path):
-            data = value.read_bytes()
-        else:
-            raise ValueError(f"unsupported file content for {path!r}")
+        data = _read_content(value, path)
         digest = hashlib.sha256(data).hexdigest()
         manifest[path] = digest
         content.setdefault(digest, data)
     validate_manifest_paths(paths)
     return manifest, content
+
+
+def _encode_blobs(blobs: Mapping[str, FileContent]) -> dict[str, bytes]:
+    if not isinstance(blobs, Mapping):
+        raise ValueError("blobs must be a mapping")
+    content: dict[str, bytes] = {}
+    for declared_digest, value in blobs.items():
+        digest = validate_hash(declared_digest)
+        data = _read_content(value, digest)
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise ValueError(f"blob content does not match declared hash {digest}")
+        content[digest] = data
+    return content
+
+
+def _read_content(value: FileContent, name: str) -> bytes:
+    if isinstance(value, str):
+        return value.encode("utf-8")
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, (bytearray, memoryview)):
+        return bytes(value)
+    if isinstance(value, Path):
+        return value.read_bytes()
+    raise ValueError(f"unsupported content for {name!r}")
 
 
 def _decode_execution_response(response: httpx.Response) -> ExecutionResult:
@@ -434,6 +474,13 @@ def _decode_server_error(
         elif request_id is not None:
             _validate_request_id(request_id)
         missing = tuple(validate_hash(value) for value in raw.get("missing_blobs", []))
+        instruction_index = raw.get("instruction_index")
+        if instruction_index is not None and (
+            isinstance(instruction_index, bool)
+            or not isinstance(instruction_index, int)
+            or instruction_index < 0
+        ):
+            raise ValueError("instruction_index must be a non-negative integer")
         return BenchmarkServerError(
             response.status_code,
             raw["error"],
@@ -443,6 +490,7 @@ def _decode_server_error(
             stderr=str(raw.get("stderr", "")),
             traceback=raw.get("traceback"),
             missing_blobs=missing,
+            instruction_index=instruction_index,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ProtocolError(f"malformed server error response: {exc}") from exc

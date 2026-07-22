@@ -7,10 +7,37 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from .models import Entry, ServerConfig, ValidatedJob
+from .models import (
+    CallInstruction,
+    Entry,
+    RegisterReference,
+    ReturnInstruction,
+    ServerConfig,
+    UploadModuleInstruction,
+    UploadTensorInstruction,
+    ValidatedJob,
+    ValidatedProgram,
+    ValidatedRequest,
+)
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MAX_INSTRUCTIONS = 10_000
+MAX_REGISTER_INDEX = 2**31 - 1
+MAX_NAME_LENGTH = 1_024
+TENSOR_DTYPE_SIZES = {
+    "bool": 1,
+    "bfloat16": 2,
+    "float16": 2,
+    "float32": 4,
+    "float64": 8,
+    "int8": 1,
+    "int16": 2,
+    "int32": 4,
+    "int64": 8,
+    "uint8": 1,
+}
+TENSOR_DEVICES = {"cpu", "cuda:0"}
 
 
 class DuplicateKeyError(ValueError):
@@ -80,9 +107,11 @@ def validate_manifest_paths(paths: list[str]) -> None:
                 raise ValueError(f"file/directory path collision involving {path!r}")
 
 
-def validate_job(raw: Any, config: ServerConfig) -> ValidatedJob:
+def validate_job(raw: Any, config: ServerConfig) -> ValidatedRequest:
     if not isinstance(raw, dict):
         raise ValueError("job must be a JSON object")
+    if "instructions" in raw:
+        return _validate_program(raw, config)
     allowed = {
         "language",
         "entry",
@@ -122,6 +151,213 @@ def validate_job(raw: Any, config: ServerConfig) -> ValidatedJob:
     if entry_file not in manifest:
         raise ValueError("entry.file must be present in files")
 
+    timeout, stdout_limit, stderr_limit = _validate_execution_limits(raw, config)
+    return ValidatedJob(
+        language=language,
+        entry=Entry(entry_file, function),
+        files=manifest,
+        timeout_seconds=timeout,
+        stdout_limit_bytes=stdout_limit,
+        stderr_limit_bytes=stderr_limit,
+    )
+
+
+def _validate_program(raw: dict[str, Any], config: ServerConfig) -> ValidatedProgram:
+    allowed = {
+        "instructions",
+        "timeout_seconds",
+        "stdout_limit_bytes",
+        "stderr_limit_bytes",
+    }
+    unknown = set(raw) - allowed
+    if unknown:
+        raise ValueError(f"unknown instruction job field(s): {', '.join(sorted(unknown))}")
+    raw_instructions = raw.get("instructions")
+    if not isinstance(raw_instructions, list):
+        raise ValueError("instructions is required and must be an array")
+    if len(raw_instructions) > MAX_INSTRUCTIONS:
+        raise ValueError(f"instructions cannot contain more than {MAX_INSTRUCTIONS} items")
+
+    instructions = []
+    blob_digests: set[str] = set()
+    defined_registers: set[int] = set()
+    return_keys: set[str] = set()
+    for instruction_index, raw_instruction in enumerate(raw_instructions):
+        path = f"instructions[{instruction_index}]"
+        if not isinstance(raw_instruction, dict):
+            raise ValueError(f"{path} must be an object")
+        operation = raw_instruction.get("op")
+        if operation == "upload_module":
+            _require_instruction_fields(raw_instruction, {"op", "blob"}, path)
+            blob = validate_hash(raw_instruction["blob"])
+            blob_digests.add(blob)
+            instructions.append(UploadModuleInstruction(blob))
+        elif operation == "upload_tensor":
+            _require_instruction_fields(
+                raw_instruction,
+                {"op", "dst", "blob", "shape", "dtype", "device"},
+                path,
+            )
+            destination = _validate_register(raw_instruction["dst"], f"{path}.dst")
+            blob = validate_hash(raw_instruction["blob"])
+            shape = _validate_tensor_shape(raw_instruction["shape"], path)
+            dtype = raw_instruction["dtype"]
+            if not isinstance(dtype, str) or dtype not in TENSOR_DTYPE_SIZES:
+                raise ValueError(f"{path}.dtype is not supported")
+            device = raw_instruction["device"]
+            if not isinstance(device, str) or device not in TENSOR_DEVICES:
+                raise ValueError(f"{path}.device must be 'cpu' or 'cuda:0'")
+            tensor_size = math.prod(shape) * TENSOR_DTYPE_SIZES[dtype]
+            if tensor_size > config.max_binary_value_bytes:
+                raise ValueError(f"{path} tensor exceeds the configured binary-size limit")
+            blob_digests.add(blob)
+            defined_registers.add(destination)
+            instructions.append(
+                UploadTensorInstruction(destination, blob, shape, dtype, device)
+            )
+        elif operation == "call":
+            _require_instruction_fields(
+                raw_instruction, {"op", "dst", "func", "args"}, path
+            )
+            destination_raw = raw_instruction["dst"]
+            destination = (
+                None
+                if destination_raw is None
+                else _validate_register(destination_raw, f"{path}.dst")
+            )
+            function = raw_instruction["func"]
+            if (
+                not isinstance(function, str)
+                or not function
+                or len(function) > MAX_NAME_LENGTH
+                or "\x00" in function
+            ):
+                raise ValueError(f"{path}.func must be a valid non-empty function name")
+            raw_arguments = raw_instruction["args"]
+            if not isinstance(raw_arguments, list):
+                raise ValueError(f"{path}.args must be an array")
+            arguments = tuple(
+                _validate_operand(
+                    argument,
+                    defined_registers,
+                    f"{path}.args[{argument_index}]",
+                    0,
+                    config.max_nesting_depth,
+                )
+                for argument_index, argument in enumerate(raw_arguments)
+            )
+            if destination is not None:
+                defined_registers.add(destination)
+            instructions.append(CallInstruction(destination, function, arguments))
+        elif operation == "return":
+            _require_instruction_fields(raw_instruction, {"op", "reg", "key"}, path)
+            register = _validate_register(raw_instruction["reg"], f"{path}.reg")
+            if register not in defined_registers:
+                raise ValueError(f"{path}.reg references undefined register r{register}")
+            key = raw_instruction["key"]
+            if (
+                not isinstance(key, str)
+                or not key
+                or len(key) > MAX_NAME_LENGTH
+                or "\x00" in key
+            ):
+                raise ValueError(f"{path}.key must be a valid non-empty string")
+            if key in return_keys:
+                raise ValueError(f"{path}.key duplicates return key {key!r}")
+            return_keys.add(key)
+            instructions.append(ReturnInstruction(register, key))
+        else:
+            raise ValueError(f"{path}.op is unknown")
+
+    timeout, stdout_limit, stderr_limit = _validate_execution_limits(raw, config)
+    return ValidatedProgram(
+        instructions=tuple(instructions),
+        blob_digests=frozenset(blob_digests),
+        timeout_seconds=timeout,
+        stdout_limit_bytes=stdout_limit,
+        stderr_limit_bytes=stderr_limit,
+    )
+
+
+def _require_instruction_fields(
+    instruction: dict[str, Any], expected: set[str], path: str
+) -> None:
+    missing = expected - set(instruction)
+    unknown = set(instruction) - expected
+    if missing:
+        raise ValueError(f"{path} is missing field(s): {', '.join(sorted(missing))}")
+    if unknown:
+        raise ValueError(f"{path} has unknown field(s): {', '.join(sorted(unknown))}")
+
+
+def _validate_register(value: Any, path: str) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        or value > MAX_REGISTER_INDEX
+    ):
+        raise ValueError(
+            f"{path} must be an integer between 0 and {MAX_REGISTER_INDEX}"
+        )
+    return value
+
+
+def _validate_tensor_shape(value: Any, path: str) -> tuple[int, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{path}.shape must be an array")
+    shape = []
+    for dimension_index, dimension in enumerate(value):
+        if (
+            isinstance(dimension, bool)
+            or not isinstance(dimension, int)
+            or dimension < 0
+            or dimension > 2**63 - 1
+        ):
+            raise ValueError(
+                f"{path}.shape[{dimension_index}] must be a non-negative integer"
+            )
+        shape.append(dimension)
+    return tuple(shape)
+
+
+def _validate_operand(
+    value: Any,
+    defined_registers: set[int],
+    path: str,
+    depth: int,
+    maximum_depth: int,
+) -> Any:
+    if depth > maximum_depth:
+        raise ValueError(f"{path} exceeds the maximum nesting depth")
+    if isinstance(value, dict):
+        if set(value) != {"reg"}:
+            raise ValueError(f"{path} object must contain only a reg field")
+        register = _validate_register(value["reg"], f"{path}.reg")
+        if register not in defined_registers:
+            raise ValueError(f"{path} references undefined register r{register}")
+        return RegisterReference(register)
+    if isinstance(value, list):
+        return [
+            _validate_operand(
+                item,
+                defined_registers,
+                f"{path}[{index}]",
+                depth + 1,
+                maximum_depth,
+            )
+            for index, item in enumerate(value)
+        ]
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    raise ValueError(f"{path} is not a supported operand")
+
+
+def _validate_execution_limits(
+    raw: Mapping[str, Any], config: ServerConfig
+) -> tuple[float, int, int]:
     timeout = raw.get("timeout_seconds", config.default_timeout_seconds)
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
         raise ValueError("timeout_seconds must be a positive number")
@@ -143,14 +379,7 @@ def validate_job(raw: Any, config: ServerConfig) -> ValidatedJob:
         "stderr_limit_bytes",
         config.max_stderr_limit_bytes,
     )
-    return ValidatedJob(
-        language=language,
-        entry=Entry(entry_file, function),
-        files=manifest,
-        timeout_seconds=timeout,
-        stdout_limit_bytes=stdout_limit,
-        stderr_limit_bytes=stderr_limit,
-    )
+    return timeout, stdout_limit, stderr_limit
 
 
 def _validate_limit(value: Any, name: str, maximum: int) -> int:
@@ -188,6 +417,39 @@ def make_job_payload(
         "language": language,
         "entry": {"file": entry_file, "function": entry.function},
         "files": {path: {"blob": digest} for path, digest in clean_manifest.items()},
+    }
+    if timeout_seconds is not None:
+        if isinstance(timeout_seconds, bool) or not isinstance(
+            timeout_seconds, (int, float)
+        ):
+            raise ValueError("timeout_seconds must be a positive number")
+        value = float(timeout_seconds)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("timeout_seconds must be a positive finite number")
+        payload["timeout_seconds"] = timeout_seconds
+    for name, value in (
+        ("stdout_limit_bytes", stdout_limit_bytes),
+        ("stderr_limit_bytes", stderr_limit_bytes),
+    ):
+        if value is not None:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+            payload[name] = value
+    return payload
+
+
+def make_program_payload(
+    instructions: list[Mapping[str, Any]],
+    timeout_seconds: float | None,
+    stdout_limit_bytes: int | None,
+    stderr_limit_bytes: int | None,
+) -> dict[str, Any]:
+    if not isinstance(instructions, list) or any(
+        not isinstance(instruction, Mapping) for instruction in instructions
+    ):
+        raise ValueError("instructions must be an array of objects")
+    payload: dict[str, Any] = {
+        "instructions": [dict(instruction) for instruction in instructions]
     }
     if timeout_seconds is not None:
         if isinstance(timeout_seconds, bool) or not isinstance(

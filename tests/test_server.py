@@ -40,6 +40,20 @@ def _execute(client: TestClient, source: bytes, *, extra=None, **settings):
     return client.post("/execute", files=files)
 
 
+def _execute_instructions(client: TestClient, instructions, blobs):
+    files = [
+        (
+            "job",
+            (None, json.dumps({"instructions": instructions}), "application/json"),
+        )
+    ]
+    files.extend(
+        (f"blob:{digest}", (digest, data, "application/octet-stream"))
+        for digest, data in blobs.items()
+    )
+    return client.post("/execute", files=files)
+
+
 def test_execute_json_and_output(client):
     response = _execute(
         client,
@@ -188,6 +202,108 @@ def test_python_sdk_end_to_end(client):
         assert sdk.execute({"main.py": fallback_source}).value == 11
     finally:
         runtime.cache.check = original_check
+
+
+def test_instruction_sdk_module_call_and_request_isolation(client):
+    sdk = SDKClient("http://testserver")
+    sdk._http.close()
+    sdk._http = client
+    source = (
+        "import tvm_ffi\n"
+        "@tvm_ffi.register_global_func('benchmark_server_test.add')\n"
+        "def add(left, right):\n"
+        " return left + right\n"
+    )
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    instructions = [
+        {"op": "upload_module", "blob": digest},
+        {
+            "op": "call",
+            "dst": 0,
+            "func": "benchmark_server_test.add",
+            "args": [4, 5],
+        },
+        {"op": "return", "reg": 0, "key": "sum"},
+    ]
+
+    result = sdk.execute_instructions(instructions, {digest: source})
+    assert result.value == {"sum": 9}
+
+    with pytest.raises(BenchmarkServerError, match="invalid_program") as error:
+        sdk.execute_instructions(instructions[1:], {})
+    assert error.value.instruction_index == 0
+
+
+def test_instruction_tensor_call_round_trip(client):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("torch")
+    source = (
+        "import torch\n"
+        "import tvm_ffi\n"
+        "@tvm_ffi.register_global_func('benchmark_server_test.scale')\n"
+        "def scale(tensor, factor):\n"
+        " return torch.from_dlpack(tensor) * factor\n"
+    ).encode()
+    tensor_data = np.arange(6, dtype=np.float32).reshape(2, 3)
+    tensor_bytes = tensor_data.tobytes()
+    module_digest = hashlib.sha256(source).hexdigest()
+    tensor_digest = hashlib.sha256(tensor_bytes).hexdigest()
+    instructions = [
+        {"op": "upload_module", "blob": module_digest},
+        {
+            "op": "upload_tensor",
+            "dst": 0,
+            "blob": tensor_digest,
+            "shape": [2, 3],
+            "dtype": "float32",
+            "device": "cpu",
+        },
+        {
+            "op": "call",
+            "dst": 1,
+            "func": "benchmark_server_test.scale",
+            "args": [{"reg": 0}, 2.0],
+        },
+        {"op": "return", "reg": 1, "key": "output"},
+    ]
+    sdk = SDKClient("http://testserver")
+    sdk._http.close()
+    sdk._http = client
+    result = sdk.execute_instructions(
+        instructions,
+        {module_digest: source, tensor_digest: tensor_bytes},
+    )
+    np.testing.assert_array_equal(
+        np.from_dlpack(result.value["output"]), tensor_data * 2
+    )
+
+
+def test_instruction_validation_and_runtime_errors(client):
+    undefined = _execute_instructions(
+        client, [{"op": "return", "reg": 0, "key": "output"}], {}
+    )
+    assert undefined.status_code == 400
+    assert undefined.json()["error"] == "invalid_request"
+
+    tensor_bytes = b"\x00\x00\x00\x00"
+    tensor_digest = hashlib.sha256(tensor_bytes).hexdigest()
+    wrong_size = _execute_instructions(
+        client,
+        [
+            {
+                "op": "upload_tensor",
+                "dst": 0,
+                "blob": tensor_digest,
+                "shape": [2],
+                "dtype": "float32",
+                "device": "cpu",
+            }
+        ],
+        {tensor_digest: tensor_bytes},
+    )
+    assert wrong_size.status_code == 400
+    assert wrong_size.json()["error"] == "invalid_program"
+    assert wrong_size.json()["instruction_index"] == 0
 
 
 def test_tensor_round_trip_through_sdk(client):

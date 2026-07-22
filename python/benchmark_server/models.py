@@ -13,6 +13,46 @@ class Entry:
 
 
 @dataclass(frozen=True)
+class RegisterReference:
+    index: int
+
+
+@dataclass(frozen=True)
+class UploadModuleInstruction:
+    blob: str
+
+
+@dataclass(frozen=True)
+class UploadTensorInstruction:
+    destination: int
+    blob: str
+    shape: tuple[int, ...]
+    dtype: str
+    device: str
+
+
+@dataclass(frozen=True)
+class CallInstruction:
+    destination: int | None
+    function: str
+    arguments: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
+class ReturnInstruction:
+    register: int
+    key: str
+
+
+Instruction = (
+    UploadModuleInstruction
+    | UploadTensorInstruction
+    | CallInstruction
+    | ReturnInstruction
+)
+
+
+@dataclass(frozen=True)
 class PreparedFiles:
     manifest: Mapping[str, str]
 
@@ -69,6 +109,7 @@ class BenchmarkServerError(Exception):
         stderr: str = "",
         traceback: str | None = None,
         missing_blobs: tuple[str, ...] = (),
+        instruction_index: int | None = None,
     ) -> None:
         super().__init__(f"{code}: {message}")
         self.status_code = status_code
@@ -79,6 +120,7 @@ class BenchmarkServerError(Exception):
         self.stderr = stderr
         self.traceback = traceback
         self.missing_blobs = missing_blobs
+        self.instruction_index = instruction_index
 
 
 class TransportError(Exception):
@@ -152,6 +194,18 @@ class ValidatedJob:
     timeout_seconds: float
     stdout_limit_bytes: int
     stderr_limit_bytes: int
+
+
+@dataclass(frozen=True)
+class ValidatedProgram:
+    instructions: tuple[Instruction, ...]
+    blob_digests: frozenset[str]
+    timeout_seconds: float
+    stdout_limit_bytes: int
+    stderr_limit_bytes: int
+
+
+ValidatedRequest = ValidatedJob | ValidatedProgram
 
 
 @dataclass
