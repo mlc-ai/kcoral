@@ -1,0 +1,107 @@
+"""The GPU runtime: materialize uploads, resolve builtins.
+
+The one :class:`Runtime` that touches a GPU; it runs inside the worker process
+and has no compiler of its own — compiling and running kernels are builtins (see
+:mod:`benchmark_server.builtin_ops`). torch is imported lazily, so importing this
+module touches no GPU.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import linecache
+from typing import Any, Callable
+
+from . import builtin_ops
+from .errors import ExecutionError
+
+# An uploaded function module defines its entry object under this name.
+ENTRY_POINT = "main"
+
+
+class GPURuntime:
+    """Construct inside the worker after its GPU is pinned. Building it checks
+    that torch imports, so a broken environment fails at startup, not mid-run.
+    (``compile_tirx`` also needs tvm, imported when that builtin first runs.)"""
+
+    def __init__(self) -> None:
+        _require_torch()
+        self._seeded_fnames: list[str] = []  # linecache keys to clear on reset
+
+    def materialize(self, kind: str, data: bytes) -> Any:
+        if kind == "function":
+            return self._materialize_function(data)
+        if kind == "tensor":
+            return _materialize_tensor(data)
+        if kind == "object":
+            return json.loads(data.decode("utf-8"))
+        raise ExecutionError("runtime", f"kind {kind!r} not supported")
+
+    def builtin(self, name: str) -> Callable:
+        fn = builtin_ops.resolve(name)
+        if fn is None:
+            raise ExecutionError("runtime", f"unknown function: {name!r}")
+        return fn
+
+    def reset(self) -> None:
+        import torch
+
+        for fname in self._seeded_fnames:
+            linecache.cache.pop(fname, None)
+        self._seeded_fnames.clear()
+        try:
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+        except Exception:
+            pass  # a poisoned CUDA context is handled at the worker level
+
+    def _materialize_function(self, data: bytes) -> Any:
+        source = data.decode("utf-8")
+        # A kernel is re-read from its source text at compile time, so seed
+        # linecache. Key by content hash so two functions in one program don't
+        # overwrite each other's source.
+        fname = "<uploaded:%s>" % hashlib.sha1(source.encode("utf-8")).hexdigest()[:16]
+        linecache.cache[fname] = (len(source), None, source.splitlines(True), fname)
+        self._seeded_fnames.append(fname)
+        ns: dict = {}
+        try:
+            # Trusted only because the worker is a GPU-pinned, crash-isolated process.
+            exec(compile(source, fname, "exec"), ns)
+        except SyntaxError as exc:
+            raise ExecutionError("parse", f"syntax error: {exc}") from exc
+        except Exception as exc:
+            raise ExecutionError("parse", f"{type(exc).__name__}: {exc}") from exc
+        if ENTRY_POINT not in ns:
+            raise ExecutionError("parse", f"source must define {ENTRY_POINT!r}")
+        return ns[ENTRY_POINT]
+
+
+def _require_torch() -> None:
+    try:
+        import torch  # noqa: F401
+    except Exception as exc:  # pragma: no cover - environment misconfiguration
+        raise RuntimeError(
+            "The GPU runtime needs torch to materialize tensors, but importing it "
+            f"failed. Install a CUDA-enabled torch in the worker. Cause: {exc!r}"
+        ) from exc
+
+
+def _materialize_tensor(data: bytes) -> Any:
+    import torch
+
+    header, _, raw = data.partition(b"\x00")
+    try:
+        meta = json.loads(header.decode("utf-8"))
+        dtype = builtin_ops.torch_dtype(meta["dtype"])
+        shape = [int(d) for d in meta["shape"]]
+        return torch.frombuffer(bytearray(raw), dtype=dtype).reshape(shape).to("cuda")
+    except ExecutionError:
+        raise
+    except Exception as exc:
+        raise ExecutionError("runtime", f"malformed tensor: {exc}") from exc
+
+
+def gpu_runtime_factory() -> GPURuntime:
+    """Picklable factory so a spawned worker can build the runtime."""
+    return GPURuntime()
