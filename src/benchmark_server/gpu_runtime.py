@@ -11,7 +11,8 @@ from __future__ import annotations
 import hashlib
 import json
 import linecache
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from . import builtin_ops
 from .errors import ExecutionError
@@ -62,7 +63,8 @@ class GPURuntime:
         # A kernel is re-read from its source text at compile time, so seed
         # linecache. Key by content hash so two functions in one program don't
         # overwrite each other's source.
-        fname = "<uploaded:%s>" % hashlib.sha1(source.encode("utf-8")).hexdigest()[:16]
+        digest = hashlib.sha1(source.encode("utf-8")).hexdigest()[:16]
+        fname = f"<uploaded:{digest}>"
         linecache.cache[fname] = (len(source), None, source.splitlines(True), fname)
         self._seeded_fnames.append(fname)
         ns: dict = {}

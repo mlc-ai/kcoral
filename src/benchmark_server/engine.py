@@ -8,7 +8,8 @@ only thing that touches the GPU.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol
+from collections.abc import Callable
+from typing import Any, Protocol
 
 from .errors import ExecutionError
 from .schemas import Program, Result, is_ref, to_structural

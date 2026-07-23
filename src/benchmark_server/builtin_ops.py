@@ -10,7 +10,8 @@ tagged with the failing stage (parse / compile / runtime / correctness), or
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from .errors import ExecutionError
 
@@ -27,7 +28,7 @@ def register_builtin(name: str) -> Callable:
     return decorator
 
 
-def resolve(name: str) -> "Callable | None":
+def resolve(name: str) -> Callable | None:
     """The builtin registered under ``name`` (e.g. ``builtin.randn``), or None."""
     return _REGISTRY.get(name)
 
@@ -187,7 +188,7 @@ def torch_dtype(name: str) -> Any:
     return dt
 
 
-def _read_spec(spec: Any) -> "tuple[list[int], Any, Any]":
+def _read_spec(spec: Any) -> tuple[list[int], Any, Any]:
     if not isinstance(spec, dict):
         raise ExecutionError("runtime", "expected a {shape, dtype} spec")
     try:
@@ -197,7 +198,7 @@ def _read_spec(spec: Any) -> "tuple[list[int], Any, Any]":
     return shape, torch_dtype(spec.get("dtype", "float16")), spec.get("seed")
 
 
-def _split_cfg(args: tuple) -> "tuple[tuple, dict]":
+def _split_cfg(args: tuple) -> tuple[tuple, dict]:
     """Split a builtin's trailing config dict from its leading tensor args."""
     if args and isinstance(args[-1], dict):
         return args[:-1], args[-1]

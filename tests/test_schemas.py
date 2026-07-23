@@ -13,8 +13,13 @@ def test_parse_run_and_upload():
     p = parse_program(
         {
             "instructions": [
-                {"id": "k", "op": "upload", "kind": "function", "key": "sha256:a",
-                 "inline": {"source": "x=1"}},
+                {
+                    "id": "k",
+                    "op": "upload",
+                    "kind": "function",
+                    "key": "sha256:a",
+                    "inline": {"source": "x=1"},
+                },
                 {"id": "x", "op": "run", "fn": "builtin.randn", "args": [{"shape": [4]}]},
             ]
         }
@@ -25,10 +30,14 @@ def test_parse_run_and_upload():
 
 def test_duplicate_id_rejected():
     with pytest.raises(ValidationError, match="duplicate"):
-        parse_program({"instructions": [
-            {"id": "a", "op": "upload", "kind": "function", "key": "k"},
-            {"id": "a", "op": "run", "fn": "f", "args": []},
-        ]})
+        parse_program(
+            {
+                "instructions": [
+                    {"id": "a", "op": "upload", "kind": "function", "key": "k"},
+                    {"id": "a", "op": "run", "fn": "f", "args": []},
+                ]
+            }
+        )
 
 
 def test_unknown_op_and_kind():
@@ -40,10 +49,14 @@ def test_unknown_op_and_kind():
 
 def test_forward_reference_rejected():
     with pytest.raises(ValidationError, match="forward handle"):
-        parse_program({"instructions": [
-            {"id": "a", "op": "run", "fn": "f", "args": [{"$ref": "later"}]},
-            {"id": "later", "op": "run", "fn": "g", "args": []},
-        ]})
+        parse_program(
+            {
+                "instructions": [
+                    {"id": "a", "op": "run", "fn": "f", "args": [{"$ref": "later"}]},
+                    {"id": "later", "op": "run", "fn": "g", "args": []},
+                ]
+            }
+        )
 
 
 def test_empty_instructions_rejected():

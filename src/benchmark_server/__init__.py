@@ -7,5 +7,5 @@ from .app import create_app
 from .config import ServerConfig
 from .schemas import Program, parse_program
 
-__all__ = ["create_app", "ServerConfig", "Program", "parse_program"]
+__all__ = ["Program", "ServerConfig", "create_app", "parse_program"]
 __version__ = "0.1.0"

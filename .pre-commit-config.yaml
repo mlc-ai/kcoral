@@ -1,0 +1,37 @@
+# Formatting and hygiene checks.
+#
+# Run on the whole repo:
+#
+#   uvx pre-commit run --all-files
+#
+# Or install as a git hook so it runs on every commit:
+#
+#   uvx pre-commit install
+#
+# Update pinned hook versions with:
+#
+#   uvx pre-commit autoupdate
+
+repos:
+  # Standard hygiene hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+
+  # Python lint + format; configured in pyproject.toml [tool.ruff].
+  # ruff-check with the "I" rules also handles import sorting (isort).
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.22
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format

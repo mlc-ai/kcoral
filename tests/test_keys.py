@@ -21,8 +21,8 @@ def test_tensor_key_depends_on_content_dtype_shape():
     raw = b"\x00\x01\x02\x03"
     k = compute_key("tensor", _tensor("float16", [2], raw))
     assert k != compute_key("tensor", _tensor("float16", [2], b"\x00\x01\x02\x04"))  # content
-    assert k != compute_key("tensor", _tensor("int16", [2], raw))                    # dtype
-    assert k != compute_key("tensor", _tensor("float16", [4], raw))                  # shape
+    assert k != compute_key("tensor", _tensor("int16", [2], raw))  # dtype
+    assert k != compute_key("tensor", _tensor("float16", [4], raw))  # shape
 
 
 def test_verify_key_roundtrip_and_mismatch():

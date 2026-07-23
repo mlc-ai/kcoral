@@ -47,9 +47,7 @@ def _up(id, kind, inline):
 
 def _run(program):
     program.upload_bytes = {
-        i.id: canonical_bytes(i.kind, i.inline)
-        for i in program.instructions
-        if i.op == "upload"
+        i.id: canonical_bytes(i.kind, i.inline) for i in program.instructions if i.op == "upload"
     }
     return execute(program, _runtime())
 
@@ -59,18 +57,25 @@ def _by_id(results, id):
 
 
 def test_compile_run_correctness_and_benchmark():
-    res = _run(Program(instructions=[
-        _up("kernel", "function", {"source": KERNEL}),
-        _up("reffn", "function", {"source": REF}),
-        Run("x", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-        Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-        Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
-        Run("_run", {"$ref": "mod"}, [{"$ref": "x"}, {"$ref": "out"}]),
-        Run("ref", {"$ref": "reffn"}, [{"$ref": "x"}]),
-        Run("chk", "builtin.check_close", [{"$ref": "out"}, {"$ref": "ref"}]),
-        Run("perf", "builtin.benchmark",
-            [{"$ref": "mod"}, {"$ref": "x"}, {"$ref": "out"}, {"warmup": 5, "repeat": 20}]),
-    ]))
+    res = _run(
+        Program(
+            instructions=[
+                _up("kernel", "function", {"source": KERNEL}),
+                _up("reffn", "function", {"source": REF}),
+                Run("x", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+                Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+                Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
+                Run("_run", {"$ref": "mod"}, [{"$ref": "x"}, {"$ref": "out"}]),
+                Run("ref", {"$ref": "reffn"}, [{"$ref": "x"}]),
+                Run("chk", "builtin.check_close", [{"$ref": "out"}, {"$ref": "ref"}]),
+                Run(
+                    "perf",
+                    "builtin.benchmark",
+                    [{"$ref": "mod"}, {"$ref": "x"}, {"$ref": "out"}, {"warmup": 5, "repeat": 20}],
+                ),
+            ]
+        )
+    )
     assert [r.status for r in res] == ["OK"] * 9
     assert _by_id(res, "x").value == {"handle": "x"}  # tensor -> handle, not transmitted
     chk = _by_id(res, "chk").value
@@ -86,19 +91,27 @@ def test_python_syntax_error_is_parse():
 
 def test_tirx_error_is_parse():
     bad = KERNEL.replace("B[i] = A[i] + 1.0", "B[i] = A[i] + undefined_symbol")
-    res = _run(Program(instructions=[
-        _up("k", "function", {"source": bad}),
-        Run("m", "builtin.compile_tirx", [{"$ref": "k"}, {"N": 16}]),
-    ]))
+    res = _run(
+        Program(
+            instructions=[
+                _up("k", "function", {"source": bad}),
+                Run("m", "builtin.compile_tirx", [{"$ref": "k"}, {"N": 16}]),
+            ]
+        )
+    )
     assert res[0].status == "OK"
     assert res[1].status == "FAILED" and res[1].error["kind"] == "parse"
 
 
 def test_compile_on_non_kernel_is_compile_error():
-    res = _run(Program(instructions=[
-        Run("x", "builtin.randn", [{"shape": [4], "dtype": "float32"}]),
-        Run("m", "builtin.compile_tirx", [{"$ref": "x"}]),
-    ]))
+    res = _run(
+        Program(
+            instructions=[
+                Run("x", "builtin.randn", [{"shape": [4], "dtype": "float32"}]),
+                Run("m", "builtin.compile_tirx", [{"$ref": "x"}]),
+            ]
+        )
+    )
     assert res[1].status == "FAILED" and res[1].error["kind"] == "compile"
 
 
@@ -114,44 +127,58 @@ def main(A: T.Buffer((256,), "float32"), B: T.Buffer((256,), "float32")):
 
 
 def test_prim_func_kernel_compiles_directly():
-    res = _run(Program(instructions=[
-        _up("kernel", "function", {"source": PRIM_KERNEL}),
-        Run("x", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-        Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-        Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}]),
-        Run("_run", {"$ref": "mod"}, [{"$ref": "x"}, {"$ref": "out"}]),
-    ]))
+    res = _run(
+        Program(
+            instructions=[
+                _up("kernel", "function", {"source": PRIM_KERNEL}),
+                Run("x", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+                Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+                Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}]),
+                Run("_run", {"$ref": "mod"}, [{"$ref": "x"}, {"$ref": "out"}]),
+            ]
+        )
+    )
     assert [r.status for r in res] == ["OK"] * 5
 
 
 def test_prim_func_with_bindings_is_compile_error():
-    res = _run(Program(instructions=[
-        _up("kernel", "function", {"source": PRIM_KERNEL}),
-        Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
-    ]))
+    res = _run(
+        Program(
+            instructions=[
+                _up("kernel", "function", {"source": PRIM_KERNEL}),
+                Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
+            ]
+        )
+    )
     assert res[1].status == "FAILED" and res[1].error["kind"] == "compile"
 
 
 def test_bad_binding_name_is_compile_error():
-    res = _run(Program(instructions=[
-        _up("kernel", "function", {"source": KERNEL}),
-        Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"WRONG": 1}]),
-    ]))
+    res = _run(
+        Program(
+            instructions=[
+                _up("kernel", "function", {"source": KERNEL}),
+                Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"WRONG": 1}]),
+            ]
+        )
+    )
     assert res[1].status == "FAILED" and res[1].error["kind"] == "compile"
 
 
 def _correctness_program(kernel_src):
-    return Program(instructions=[
-        _up("kernel", "function", {"source": kernel_src}),
-        _up("reffn", "function", {"source": REF}),  # reference is A + 1.0
-        Run("x", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-        Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-        Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
-        Run("_run", {"$ref": "mod"}, [{"$ref": "x"}, {"$ref": "out"}]),
-        Run("ref", {"$ref": "reffn"}, [{"$ref": "x"}]),
-        Run("chk", "builtin.assert_close", [{"$ref": "out"}, {"$ref": "ref"}]),
-        Run("perf", "builtin.benchmark", [{"$ref": "mod"}, {"$ref": "x"}, {"$ref": "out"}]),
-    ])
+    return Program(
+        instructions=[
+            _up("kernel", "function", {"source": kernel_src}),
+            _up("reffn", "function", {"source": REF}),  # reference is A + 1.0
+            Run("x", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+            Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
+            Run("_run", {"$ref": "mod"}, [{"$ref": "x"}, {"$ref": "out"}]),
+            Run("ref", {"$ref": "reffn"}, [{"$ref": "x"}]),
+            Run("chk", "builtin.assert_close", [{"$ref": "out"}, {"$ref": "ref"}]),
+            Run("perf", "builtin.benchmark", [{"$ref": "mod"}, {"$ref": "x"}, {"$ref": "out"}]),
+        ]
+    )
 
 
 def test_assert_close_passes_when_correct():
@@ -173,18 +200,25 @@ def test_upload_tensor_and_run_kernel():
     import numpy as np
 
     a = np.arange(256, dtype=np.float32)
-    tensor = {"dtype": "float32", "shape": [256],
-              "data_b64": base64.b64encode(a.tobytes()).decode()}
-    res = _run(Program(instructions=[
-        _up("kernel", "function", {"source": KERNEL}),
-        _up("reffn", "function", {"source": REF}),
-        _up("a", "tensor", tensor),  # client-provided input tensor
-        Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-        Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
-        Run("_run", {"$ref": "mod"}, [{"$ref": "a"}, {"$ref": "out"}]),
-        Run("ref", {"$ref": "reffn"}, [{"$ref": "a"}]),
-        Run("chk", "builtin.check_close", [{"$ref": "out"}, {"$ref": "ref"}]),
-    ]))
+    tensor = {
+        "dtype": "float32",
+        "shape": [256],
+        "data_b64": base64.b64encode(a.tobytes()).decode(),
+    }
+    res = _run(
+        Program(
+            instructions=[
+                _up("kernel", "function", {"source": KERNEL}),
+                _up("reffn", "function", {"source": REF}),
+                _up("a", "tensor", tensor),  # client-provided input tensor
+                Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+                Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
+                Run("_run", {"$ref": "mod"}, [{"$ref": "a"}, {"$ref": "out"}]),
+                Run("ref", {"$ref": "reffn"}, [{"$ref": "a"}]),
+                Run("chk", "builtin.check_close", [{"$ref": "out"}, {"$ref": "ref"}]),
+            ]
+        )
+    )
     assert [r.status for r in res] == ["OK"] * 8
     chk = _by_id(res, "chk").value
     assert chk["passed"] and chk["max_abs_err"] == 0.0  # kernel ran on the uploaded tensor

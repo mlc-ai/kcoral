@@ -8,7 +8,7 @@ shape); GPU work happens later, in the worker's engine.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from .errors import ValidationError
 
@@ -26,15 +26,15 @@ class Upload:
     id: str
     kind: str
     key: str
-    inline: Optional[dict] = None
+    inline: dict | None = None
     op: str = "upload"
 
 
 @dataclass
 class Run:
     id: str
-    fn: Any            # a function name (str) or {"$ref": "<id>"}
-    args: list         # each element: {"$ref": "<id>"} (handle) or a literal
+    fn: Any  # a function name (str) or {"$ref": "<id>"}
+    args: list  # each element: {"$ref": "<id>"} (handle) or a literal
     op: str = "run"
 
 
@@ -62,7 +62,7 @@ class Result:
     value: Any = None
     stdout: str = ""
     stderr: str = ""
-    error: Optional[dict] = None
+    error: dict | None = None
 
 
 # --- reference / structural helpers ----------------------------------------

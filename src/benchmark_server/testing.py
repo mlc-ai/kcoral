@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from .errors import ExecutionError
 
@@ -39,10 +40,10 @@ def _sleep(seconds: Any = 0.0, *_args: Any) -> dict:
 
 
 _BUILTINS: dict[str, Callable] = {
-    "builtin.opaque": _opaque,          # result is opaque -> comes back as a handle
+    "builtin.opaque": _opaque,  # result is opaque -> comes back as a handle
     "builtin.structural": _structural,  # result is plain JSON -> passes through
-    "builtin.crash": _crash,            # drives worker-crash handling
-    "builtin.sleep": _sleep,            # drives worker-timeout handling
+    "builtin.crash": _crash,  # drives worker-crash handling
+    "builtin.sleep": _sleep,  # drives worker-timeout handling
 }
 
 

@@ -13,7 +13,7 @@ def test_lru_eviction_over_budget():
     c = ByteCache(10, max_object_bytes=10)
     c.put("a", b"aaaaa")  # 5
     c.put("b", b"bbbbb")  # 5 -> total 10 (at budget)
-    c.get("a")            # a becomes most-recently-used
+    c.get("a")  # a becomes most-recently-used
     c.put("c", b"ccccc")  # 15 > 10 -> evict LRU unpinned (b)
     assert "a" in c and "c" in c and "b" not in c
 
@@ -21,7 +21,7 @@ def test_lru_eviction_over_budget():
 def test_pinned_entry_not_evicted():
     c = ByteCache(10, max_object_bytes=10)
     c.put("a", b"aaaaa")
-    c.pin(["a"])          # a is now pinned
+    c.pin(["a"])  # a is now pinned
     c.put("b", b"bbbbb")
     c.put("c", b"ccccc")  # over budget, but a is pinned -> b is evicted instead
     assert "a" in c and "c" in c and "b" not in c

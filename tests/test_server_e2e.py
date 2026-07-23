@@ -54,11 +54,13 @@ def test_full_program_completed():
 
 
 def test_failed_instruction_reports_failed_status():
-    prog = {"instructions": [
-        {"id": "a", "op": "run", "fn": "builtin.opaque", "args": []},
-        {"id": "b", "op": "run", "fn": "builtin.nope", "args": []},  # unknown -> FAILED
-        {"id": "c", "op": "run", "fn": "builtin.opaque", "args": []},  # -> SKIPPED
-    ]}
+    prog = {
+        "instructions": [
+            {"id": "a", "op": "run", "fn": "builtin.opaque", "args": []},
+            {"id": "b", "op": "run", "fn": "builtin.nope", "args": []},  # unknown -> FAILED
+            {"id": "c", "op": "run", "fn": "builtin.opaque", "args": []},  # -> SKIPPED
+        ]
+    }
     with make_client() as c:
         r = c.post("/benchmark", json=prog)
     assert r.status_code == 200  # 200 = "we ran your program"
@@ -85,10 +87,17 @@ def test_cache_hit_lets_key_only_upload_run():
 
 def test_key_mismatch_is_400():
     with make_client() as c:
-        prog = {"instructions": [
-            {"id": "k", "op": "upload", "kind": "function", "key": "sha256:wrong",
-             "inline": {"source": STUB_FN}}
-        ]}
+        prog = {
+            "instructions": [
+                {
+                    "id": "k",
+                    "op": "upload",
+                    "kind": "function",
+                    "key": "sha256:wrong",
+                    "inline": {"source": STUB_FN},
+                }
+            ]
+        }
         assert c.post("/benchmark", json=prog).status_code == 400
 
 
@@ -143,17 +152,30 @@ def _gpu_id() -> int:
 
 
 def _upload(id, source):
-    return {"id": id, "op": "upload", "kind": "function",
-            "key": compute_key("function", {"source": source}), "inline": {"source": source}}
+    return {
+        "id": id,
+        "op": "upload",
+        "kind": "function",
+        "key": compute_key("function", {"source": source}),
+        "inline": {"source": source},
+    }
 
 
 def _tensor_upload(id, arr):
     import base64
 
-    inline = {"dtype": "float32", "shape": list(arr.shape),
-              "data_b64": base64.b64encode(arr.tobytes()).decode()}
-    return {"id": id, "op": "upload", "kind": "tensor",
-            "key": compute_key("tensor", inline), "inline": inline}
+    inline = {
+        "dtype": "float32",
+        "shape": list(arr.shape),
+        "data_b64": base64.b64encode(arr.tobytes()).decode(),
+    }
+    return {
+        "id": id,
+        "op": "upload",
+        "kind": "tensor",
+        "key": compute_key("tensor", inline),
+        "inline": inline,
+    }
 
 
 @pytest.mark.skipif(
@@ -163,22 +185,50 @@ def _tensor_upload(id, arr):
 def test_real_kernel_end_to_end():
     import numpy as np
 
-    body = {"instructions": [
-        _upload("kernel", KERNEL),
-        _upload("reffn", REF),
-        _tensor_upload("x", np.arange(256, dtype=np.float32)),  # client-provided input tensor
-        {"id": "out", "op": "run", "fn": "builtin.empty",
-         "args": [{"shape": [256], "dtype": "float32"}]},
-        {"id": "mod", "op": "run", "fn": "builtin.compile_tirx",
-         "args": [{"$ref": "kernel"}, {"N": 256}]},
-        {"id": "_run", "op": "run", "fn": {"$ref": "mod"},
-         "args": [{"$ref": "x"}, {"$ref": "out"}]},
-        {"id": "ref", "op": "run", "fn": {"$ref": "reffn"}, "args": [{"$ref": "x"}]},
-        {"id": "chk", "op": "run", "fn": "builtin.check_close",
-         "args": [{"$ref": "out"}, {"$ref": "ref"}]},
-        {"id": "perf", "op": "run", "fn": "builtin.benchmark",
-         "args": [{"$ref": "mod"}, {"$ref": "x"}, {"$ref": "out"}, {"warmup": 5, "repeat": 20}]},
-    ], "options": {"timeout_seconds": 120}}
+    body = {
+        "instructions": [
+            _upload("kernel", KERNEL),
+            _upload("reffn", REF),
+            _tensor_upload("x", np.arange(256, dtype=np.float32)),  # client-provided input tensor
+            {
+                "id": "out",
+                "op": "run",
+                "fn": "builtin.empty",
+                "args": [{"shape": [256], "dtype": "float32"}],
+            },
+            {
+                "id": "mod",
+                "op": "run",
+                "fn": "builtin.compile_tirx",
+                "args": [{"$ref": "kernel"}, {"N": 256}],
+            },
+            {
+                "id": "_run",
+                "op": "run",
+                "fn": {"$ref": "mod"},
+                "args": [{"$ref": "x"}, {"$ref": "out"}],
+            },
+            {"id": "ref", "op": "run", "fn": {"$ref": "reffn"}, "args": [{"$ref": "x"}]},
+            {
+                "id": "chk",
+                "op": "run",
+                "fn": "builtin.check_close",
+                "args": [{"$ref": "out"}, {"$ref": "ref"}],
+            },
+            {
+                "id": "perf",
+                "op": "run",
+                "fn": "builtin.benchmark",
+                "args": [
+                    {"$ref": "mod"},
+                    {"$ref": "x"},
+                    {"$ref": "out"},
+                    {"warmup": 5, "repeat": 20},
+                ],
+            },
+        ],
+        "options": {"timeout_seconds": 120},
+    }
 
     app = create_app(ServerConfig(gpus=[_gpu_id()]), runtime_factory=gpu_runtime_factory)
     with TestClient(app) as c:

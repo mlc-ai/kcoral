@@ -25,7 +25,7 @@ class ByteCache:
         # huge blob can't evict the whole working set. It still works, just isn't
         # cached (re-uploaded each time).
         self._max_obj = max_object_bytes if max_object_bytes is not None else capacity_bytes // 4
-        self._entries: "OrderedDict[str, _Entry]" = OrderedDict()
+        self._entries: OrderedDict[str, _Entry] = OrderedDict()
         self._size = 0
         self._lock = threading.Lock()
 

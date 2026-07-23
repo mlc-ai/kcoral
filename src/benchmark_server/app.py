@@ -9,8 +9,8 @@ here before any worker is touched.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import asynccontextmanager
-from typing import Callable, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -30,7 +30,7 @@ class _CacheMiss(Exception):
 
 
 def create_app(
-    config: Optional[ServerConfig] = None,
+    config: ServerConfig | None = None,
     *,
     runtime_factory: Callable,
 ) -> FastAPI:

@@ -16,9 +16,7 @@ def run(program, runtime=None):
     """Run a program, filling upload bytes from each upload's inline (as the
     front-end would from the canonical form)."""
     program.upload_bytes = {
-        i.id: canonical_bytes(i.kind, i.inline)
-        for i in program.instructions
-        if i.op == "upload"
+        i.id: canonical_bytes(i.kind, i.inline) for i in program.instructions if i.op == "upload"
     }
     return execute(program, runtime or FakeRuntime())
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
-from typing import Callable
+from collections.abc import Callable
 
 from .engine import execute
 

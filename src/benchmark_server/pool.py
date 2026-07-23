@@ -9,7 +9,7 @@ or timed out. When no worker becomes free within ``worker_wait_timeout`` it rais
 from __future__ import annotations
 
 import queue
-from typing import Callable
+from collections.abc import Callable
 
 from .worker import Worker, WorkerCrashed, WorkerTimeout  # noqa: F401  (re-exported)
 
@@ -21,7 +21,7 @@ class PoolBusy(Exception):
 class WorkerPool:
     def __init__(self, gpus: list[int], runtime_factory: Callable) -> None:
         self._workers = [Worker(g, runtime_factory) for g in gpus]
-        self._idle: "queue.Queue[Worker]" = queue.Queue()
+        self._idle: queue.Queue[Worker] = queue.Queue()
         for w in self._workers:
             self._idle.put(w)
 
