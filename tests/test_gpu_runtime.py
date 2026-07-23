@@ -81,7 +81,37 @@ def test_compile_run_correctness_and_benchmark():
     chk = _by_id(res, "chk").value
     assert chk["passed"] and chk["max_abs_err"] == 0.0 and chk["max_rel_err"] == 0.0
     perf = _by_id(res, "perf").value
-    assert perf["latency_ms"] > 0 and perf["repeat"] == 20
+    assert perf["latency_ms_median"] > 0 and perf["repeat"] == 20
+    assert perf["flush_l2"] is True
+    assert perf["latency_ms_min"] <= perf["latency_ms_median"] <= perf["latency_ms_max"]
+
+
+def test_benchmark_budget_counts_and_no_flush():
+    res = _run(
+        Program(
+            instructions=[
+                _up("kernel", "function", {"source": KERNEL}),
+                Run("x", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+                Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+                Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
+                Run(
+                    "perf",
+                    "builtin.benchmark",
+                    [
+                        {"$ref": "mod"},
+                        {"$ref": "x"},
+                        {"$ref": "out"},
+                        {"warmup_ms": 5, "repeat_ms": 20, "flush_l2": False},
+                    ],
+                ),
+            ]
+        )
+    )
+    perf = _by_id(res, "perf")
+    assert perf.status == "OK"
+    assert perf.value["latency_ms_median"] > 0 and perf.value["flush_l2"] is False
+    # counts derived from the ms budgets; a microsecond kernel needs many iterations
+    assert perf.value["warmup"] >= 1 and perf.value["repeat"] > 10
 
 
 def test_python_syntax_error_is_parse():

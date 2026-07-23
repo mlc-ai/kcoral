@@ -134,7 +134,7 @@ object is an optional config.
 | `builtin.empty` | `spec = {shape, dtype}` | an uninitialized tensor (→ handle) |
 | `builtin.zeros` | `spec = {shape, dtype}` | a zero tensor (→ handle) |
 | `builtin.compile_tirx` | `(kernel, bindings?)` — `kernel` is a `@T.jit` handle or an already-concrete `@T.prim_func`; `bindings` binds `T.constexpr` dims of a `@T.jit` kernel, e.g. `{"N": 256}` | a compiled module (→ handle) |
-| `builtin.benchmark` | `(mod, *tensors, cfg?)` — `cfg = {warmup?, repeat?}` | `{latency_ms, warmup, repeat}` |
+| `builtin.benchmark` | `(mod, *tensors, cfg?)` — `cfg = {warmup_ms?, repeat_ms?, warmup?, repeat?, flush_l2?}`; each iteration's GPU kernel time comes from CUPTI activity records (launch overhead excluded); iteration counts derive from the `warmup_ms`/`repeat_ms` budgets (defaults 25/100) and a 5-call estimate, or `warmup`/`repeat` set explicit counts; `flush_l2` (default `true`) zeroes a 2×-L2 buffer before every call so each iteration runs cold-cache | `{latency_ms_median, latency_ms_mean, latency_ms_min, latency_ms_max, flush_l2, warmup, repeat}` — `warmup`/`repeat` are the iteration counts actually run |
 | `builtin.check_close` | `(actual, expected, cfg?)` — `cfg = {atol?, rtol?}` | `{passed, max_abs_err, max_rel_err, rtol, atol}` — `max_rel_err` is over elements where `expected != 0` |
 | `builtin.assert_close` | same as `check_close` | same on success; **fails** the instruction (`kind: "correctness"`) on mismatch |
 
@@ -241,7 +241,7 @@ tensor, assert it matches a reference, and benchmark it.
     { "id": "run", "op": "run", "status": "OK" },
     { "id": "ref", "op": "run", "status": "OK", "value": { "handle": "ref" } },
     { "id": "chk", "op": "run", "status": "OK", "value": { "passed": true, "max_abs_err": 0.0, "max_rel_err": 0.0, "rtol": 0.01, "atol": 0.001 } },
-    { "id": "perf","op": "run", "status": "OK", "value": { "latency_ms": 0.0073, "warmup": 10, "repeat": 50 } }
+    { "id": "perf","op": "run", "status": "OK", "value": { "latency_ms_median": 0.0073, "latency_ms_mean": 0.0074, "latency_ms_min": 0.0071, "latency_ms_max": 0.0080, "flush_l2": true, "warmup": 10, "repeat": 50 } }
   ]
 }
 ```

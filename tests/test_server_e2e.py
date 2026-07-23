@@ -238,4 +238,7 @@ def test_real_kernel_end_to_end():
     assert [r["status"] for r in data["results"]] == ["OK"] * 9
     results = {r["id"]: r for r in data["results"]}
     assert results["chk"]["value"]["passed"] and results["chk"]["value"]["max_abs_err"] == 0.0
-    assert results["perf"]["value"]["latency_ms"] > 0 and results["perf"]["value"]["repeat"] == 20
+    assert (
+        results["perf"]["value"]["latency_ms_median"] > 0
+        and results["perf"]["value"]["repeat"] == 20
+    )
