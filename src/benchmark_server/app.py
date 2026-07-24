@@ -9,12 +9,13 @@ here before any worker is touched.
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .cache import ByteCache
 from .config import ServerConfig
@@ -22,7 +23,7 @@ from .errors import ValidationError
 from .events import EventLogger
 from .keys import verify_key
 from .pool import PoolBusy, WorkerPool
-from .schemas import Program, parse_program
+from .schemas import Program, parse_program, strict_json_loads
 from .worker import WorkerCrashed, WorkerTimeout
 
 
@@ -79,11 +80,19 @@ def create_app(
                 **fields,
             )
 
+        declared_length = request.headers.get("content-length", "")
+        if declared_length.isdigit() and int(declared_length) > config.max_request_bytes:
+            finished(413, level="WARNING", error="request_too_large")
+            return _error(413, "request exceeds the configured size limit", request_id)
+        body_bytes = await request.body()
+        if len(body_bytes) > config.max_request_bytes:
+            finished(413, level="WARNING", error="request_too_large")
+            return _error(413, "request exceeds the configured size limit", request_id)
         try:
-            body = await request.json()
-        except Exception:
+            body = strict_json_loads(body_bytes)
+        except ValidationError as exc:
             finished(400, level="WARNING", error="invalid_json")
-            return _error(400, "request body must be valid JSON", request_id)
+            return _error(400, str(exc), request_id)
 
         cache: ByteCache = request.app.state.cache
         try:
@@ -166,6 +175,35 @@ def create_app(
         # HTTP 200 means "we ran your program"; the body status reflects whether
         # every instruction succeeded (a FAILED instruction skips the rest).
         status = "FAILED" if any(r.status == "FAILED" for r in outcome.results) else "COMPLETED"
+        payload = {
+            "status": status,
+            "request_id": request_id,
+            "queue_ms": outcome.queue_ms,
+            "elapsed_ms": outcome.elapsed_ms,
+            "results": [_result_dict(r) for r in outcome.results],
+        }
+        content = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if len(content) > config.max_response_bytes:
+            finished(
+                500,
+                level="ERROR",
+                error="response_too_large",
+                gpu_id=outcome.gpu_id,
+                queue_ms=outcome.queue_ms,
+                elapsed_ms=outcome.elapsed_ms,
+            )
+            return JSONResponse(
+                {
+                    "status": "ERROR",
+                    "error": {
+                        "kind": "response_too_large",
+                        "message": "results exceed the configured response-size limit",
+                    },
+                    "request_id": request_id,
+                },
+                status_code=500,
+                headers=headers,
+            )
         finished(
             200,
             status=status,
@@ -173,16 +211,7 @@ def create_app(
             queue_ms=outcome.queue_ms,
             elapsed_ms=outcome.elapsed_ms,
         )
-        return JSONResponse(
-            {
-                "status": status,
-                "request_id": request_id,
-                "queue_ms": outcome.queue_ms,
-                "elapsed_ms": outcome.elapsed_ms,
-                "results": [_result_dict(r) for r in outcome.results],
-            },
-            headers=headers,
-        )
+        return Response(content, media_type="application/json", headers=headers)
 
     return app
 

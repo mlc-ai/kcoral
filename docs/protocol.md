@@ -200,10 +200,12 @@ e.g. tvm, that isn't installed), or `engine` (an unexpected server fault).
 | `200` | `status: COMPLETED` | Ran; every instruction succeeded. |
 | `200` | `status: FAILED` | Ran; an instruction failed (rest `SKIPPED`). |
 | `200` | `status: CACHE_MISS` | Not run; resend the `missing_keys` uploads with `inline`. |
-| `400` | `{error}` | Malformed request (bad JSON, unknown op/kind, key mismatch, forward `$ref`). |
+| `400` | `{error}` | Malformed request (bad JSON — including duplicate keys and NaN/Infinity —, unknown op/kind, key mismatch, forward `$ref`). |
+| `413` | `{error}` | Request body exceeds the server's size limit. |
 | `503` | `{error}` | All workers busy (has `Retry-After`). |
 | `504` | `status: ERROR, error.kind: timeout` | Execution exceeded the deadline. |
 | `500` | `status: ERROR, error.kind: engine` | Worker crashed. |
+| `500` | `status: ERROR, error.kind: response_too_large` | The program ran, but its results exceed the server's response-size limit. |
 
 `200` means "the server processed your request," **not** "your kernel is correct" —
 a compile error or a failed `assert_close` is a well-formed `200` response whose body
