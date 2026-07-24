@@ -40,7 +40,27 @@ def bench_program(inline_upload: bool = True):
 
 def test_health():
     with make_client() as c:
-        assert c.get("/health").json() == {"status": "ok"}
+        data = c.get("/health").json()
+    assert data["status"] == "ok" and data["gpu_count"] == 1 and data["queue_length"] == 0
+    worker = data["workers"][0]
+    assert worker["gpu_id"] == 0 and worker["status"] == "idle"
+    assert worker["uptime_seconds"] >= 0
+
+
+def test_request_id_in_header_and_body():
+    with make_client() as c:
+        first = c.post("/benchmark", json=bench_program())
+        second = c.post("/benchmark", json=bench_program())
+    assert first.json()["request_id"] == first.headers["x-request-id"]
+    assert first.headers["x-request-id"] != second.headers["x-request-id"]
+
+
+def test_timing_metrics_in_response():
+    prog = {"instructions": [{"id": "s", "op": "run", "fn": "builtin.sleep", "args": [0.2]}]}
+    with make_client() as c:
+        data = c.post("/benchmark", json=prog).json()
+    assert data["elapsed_ms"] >= 200
+    assert data["queue_ms"] >= 0
 
 
 def test_full_program_completed():

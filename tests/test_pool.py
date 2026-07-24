@@ -25,21 +25,39 @@ def pool():
 
 
 def test_pool_runs_a_program(pool):
-    res = pool.submit(prog(op()), timeout=10)
-    assert res[0].status == "OK" and res[0].value == {"handle": "x"}
+    outcome = pool.submit(prog(op()), timeout=10)
+    assert outcome.results[0].status == "OK" and outcome.results[0].value == {"handle": "x"}
+    assert outcome.gpu_id == 0
+    assert outcome.queue_ms >= 0 and outcome.elapsed_ms >= 0
 
 
 def test_crash_replaces_worker_and_recovers(pool):
-    with pytest.raises(WorkerCrashed):
+    with pytest.raises(WorkerCrashed) as exc_info:
         pool.submit(prog(Run("boom", "builtin.crash", [])), timeout=10)
+    assert exc_info.value.gpu_id == 0 and exc_info.value.elapsed_ms >= 0
     # worker was respawned; the next request succeeds on the fresh worker
-    assert pool.submit(prog(op()), timeout=10)[0].status == "OK"
+    assert pool.submit(prog(op()), timeout=10).results[0].status == "OK"
 
 
 def test_timeout_kills_and_replaces_worker(pool):
-    with pytest.raises(WorkerTimeout):
+    with pytest.raises(WorkerTimeout) as exc_info:
         pool.submit(prog(Run("s", "builtin.sleep", [5.0])), timeout=0.5)
-    assert pool.submit(prog(op()), timeout=10)[0].status == "OK"
+    assert exc_info.value.gpu_id == 0 and exc_info.value.elapsed_ms >= 500
+    assert pool.submit(prog(op()), timeout=10).results[0].status == "OK"
+
+
+def test_health_reports_idle_workers(pool):
+    pool.submit(prog(op()), timeout=10)
+    health = pool.health()
+    assert health["queue_length"] == 0
+    assert health["workers"] == [
+        {
+            "gpu_id": 0,
+            "status": "idle",
+            "uptime_seconds": health["workers"][0]["uptime_seconds"],
+        }
+    ]
+    assert health["workers"][0]["uptime_seconds"] >= 0
 
 
 def test_backpressure_when_all_workers_busy(pool):

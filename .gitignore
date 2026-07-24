@@ -19,3 +19,4 @@ venv/
 # Misc
 *.log
 tmp/
+**/logs
