@@ -22,6 +22,9 @@ test = [
   "httpx>=0.27",
 ]
 
+[project.scripts]
+benchmark-server = "benchmark_server.__main__:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["benchmark_server*"]

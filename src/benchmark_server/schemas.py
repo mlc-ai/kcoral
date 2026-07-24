@@ -7,6 +7,7 @@ shape); GPU work happens later, in the worker's engine.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -100,6 +101,34 @@ def to_structural(value: Any, instr_id: str) -> Any:
 # --- parsing ---------------------------------------------------------------
 
 _KINDS = {"function", "tensor", "object"}
+
+
+def strict_json_loads(data: bytes | str) -> Any:
+    """Parse JSON, rejecting duplicate object keys and non-finite numbers.
+
+    Duplicate keys would silently drop instructions; NaN/Infinity are not JSON
+    and would round-trip inconsistently between client and server.
+    """
+
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValidationError(f"duplicate JSON key: {key!r}")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> Any:
+        raise ValidationError(f"non-finite number {value} is not allowed")
+
+    try:
+        if isinstance(data, bytes):
+            data = data.decode("utf-8")
+        return json.loads(data, object_pairs_hook=reject_duplicates, parse_constant=reject_constant)
+    except ValidationError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValidationError(f"malformed JSON: {exc}") from exc
 
 
 def parse_program(body: Any) -> Program:

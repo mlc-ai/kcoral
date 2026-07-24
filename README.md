@@ -45,13 +45,16 @@ Install with `pip install -e .`; `torch`/`tvm_ffi`/`tvm` come from the environme
 
 ```bash
 # tvm pip-installed -> no extra env needed:
-BENCH_GPUS=0 python -m benchmark_server
+benchmark-server --gpus 0
 
 # tvm from source -> point PYTHONPATH / TVM_LIBRARY_PATH at it:
-BENCH_GPUS=0 \
 PYTHONPATH=<tvm>/python TVM_LIBRARY_PATH=<tvm>/build/lib \
-python -m benchmark_server
+benchmark-server --gpus 0
 ```
+
+`python -m benchmark_server` is equivalent. Every server limit (timeouts, cache
+capacity, request/response size caps, output capture caps) has a flag — see
+`benchmark-server --help`.
 
 `BENCH_GPUS` is a comma-separated list of physical GPU ids to pin (one worker
 each). `BENCH_HOST` / `BENCH_PORT` default to `127.0.0.1:8000`. Structured

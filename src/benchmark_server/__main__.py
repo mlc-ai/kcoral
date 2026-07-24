@@ -1,4 +1,4 @@
-"""Run the benchmark server: ``python -m benchmark_server``.
+"""Run the benchmark server: ``benchmark-server`` or ``python -m benchmark_server``.
 
 Launch it where a TIRX-enabled tvm is importable — either pip-installed
 (``pip install apache-tvm``) or a from-source build (put its Python tree on
@@ -6,12 +6,14 @@ Launch it where a TIRX-enabled tvm is importable — either pip-installed
 front-end process itself touches no GPU; each worker process imports torch/tvm
 and owns one GPU.
 
-    BENCH_GPUS=1,2,3 python -m benchmark_server
+    benchmark-server --gpus 1,2,3 --cache-dir /data/cache
 
-Environment:
-  BENCH_GPUS     comma-separated physical GPU ids the workers pin (default "0")
-  BENCH_HOST     bind host (default 127.0.0.1)
-  BENCH_PORT     bind port (default 8000)
+Every ``ServerConfig`` field has a flag (see ``benchmark-server --help``). A few
+flags default from the environment, so env-only deployments keep working:
+
+  BENCH_GPUS       comma-separated physical GPU ids the workers pin (default "0")
+  BENCH_HOST       bind host (default 127.0.0.1)
+  BENCH_PORT       bind port (default 8000)
   BENCH_LOG_DIR    directory for structured event logs (default "logs"; empty disables)
   BENCH_CACHE_DIR  on-disk blob cache, survives restarts (default "cache"; empty for
                    a private temporary directory)
@@ -19,6 +21,7 @@ Environment:
 
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 
@@ -26,32 +29,92 @@ from .app import create_app
 from .config import ServerConfig
 from .gpu_runtime import gpu_runtime_factory
 
-
-def _gpus() -> list[int]:
-    raw = os.environ.get("BENCH_GPUS", "0")
-    return [int(x) for x in raw.split(",") if x.strip()]
+_DEFAULTS = ServerConfig()
 
 
-def _log_dir() -> Path | None:
-    raw = os.environ.get("BENCH_LOG_DIR", "logs")
-    return Path(raw) if raw else None
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="benchmark-server",
+        description="Stateless GPU kernel benchmark server (instruction protocol).",
+    )
+    parser.add_argument("--host", default=os.environ.get("BENCH_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("BENCH_PORT", "8000")))
+    parser.add_argument(
+        "--gpus",
+        default=os.environ.get("BENCH_GPUS", "0"),
+        help="comma-separated physical GPU ids, one worker each (default: 0)",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        default=os.environ.get("BENCH_CACHE_DIR", "cache"),
+        help="on-disk blob cache directory, survives restarts; "
+        "empty for a private temporary directory (default: cache)",
+    )
+    parser.add_argument("--cache-capacity-bytes", type=int, default=_DEFAULTS.cache_capacity_bytes)
+    parser.add_argument(
+        "--log-dir",
+        default=os.environ.get("BENCH_LOG_DIR", "logs"),
+        help="structured event log directory; empty disables logging (default: logs)",
+    )
+    parser.add_argument(
+        "--default-timeout-seconds", type=float, default=_DEFAULTS.default_timeout_seconds
+    )
+    parser.add_argument("--max-timeout-seconds", type=float, default=_DEFAULTS.max_timeout_seconds)
+    parser.add_argument(
+        "--worker-wait-timeout-seconds",
+        type=float,
+        default=_DEFAULTS.worker_wait_timeout_seconds,
+        help="how long a request waits for a free GPU worker before 503",
+    )
+    parser.add_argument(
+        "--worker-termination-grace-seconds",
+        type=float,
+        default=_DEFAULTS.worker_termination_grace_seconds,
+        help="SIGTERM-to-SIGKILL window when killing a hung or crashed worker",
+    )
+    parser.add_argument("--max-request-bytes", type=int, default=_DEFAULTS.max_request_bytes)
+    parser.add_argument("--max-response-bytes", type=int, default=_DEFAULTS.max_response_bytes)
+    parser.add_argument(
+        "--output-limit-bytes",
+        type=int,
+        default=_DEFAULTS.output_limit_bytes,
+        help="default per-instruction stdout/stderr capture cap",
+    )
+    parser.add_argument(
+        "--max-output-limit-bytes", type=int, default=_DEFAULTS.max_output_limit_bytes
+    )
+    return parser
 
 
-def _cache_dir() -> Path | None:
-    raw = os.environ.get("BENCH_CACHE_DIR", "cache")
-    return Path(raw) if raw else None
+def config_from_args(args: argparse.Namespace) -> ServerConfig:
+    gpus = [int(x) for x in args.gpus.split(",") if x.strip()]
+    if not gpus:
+        raise SystemExit("--gpus needs at least one GPU id")
+    if not 1 <= args.port <= 65535:
+        raise SystemExit("--port must be between 1 and 65535")
+    return ServerConfig(
+        gpus=gpus,
+        cache_capacity_bytes=args.cache_capacity_bytes,
+        cache_dir=Path(args.cache_dir) if args.cache_dir else None,
+        log_dir=Path(args.log_dir) if args.log_dir else None,
+        default_timeout_seconds=args.default_timeout_seconds,
+        max_timeout_seconds=args.max_timeout_seconds,
+        worker_wait_timeout_seconds=args.worker_wait_timeout_seconds,
+        worker_termination_grace_seconds=args.worker_termination_grace_seconds,
+        max_request_bytes=args.max_request_bytes,
+        max_response_bytes=args.max_response_bytes,
+        output_limit_bytes=args.output_limit_bytes,
+        max_output_limit_bytes=args.max_output_limit_bytes,
+    )
 
 
 def main() -> None:
     import uvicorn
 
-    config = ServerConfig(gpus=_gpus(), log_dir=_log_dir(), cache_dir=_cache_dir())
+    args = build_parser().parse_args()
+    config = config_from_args(args)
     app = create_app(config, runtime_factory=gpu_runtime_factory)
-    uvicorn.run(
-        app,
-        host=os.environ.get("BENCH_HOST", "127.0.0.1"),
-        port=int(os.environ.get("BENCH_PORT", "8000")),
-    )
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
