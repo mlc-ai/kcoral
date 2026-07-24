@@ -62,11 +62,17 @@ The **key is computed over the canonical bytes**, which are fixed per kind:
 |---|---|---|
 | `function` | `{ "source": "<python source>" }` | the UTF-8 source bytes |
 | `tensor` | `{ "dtype": "<torch dtype>", "shape": [...], "data_b64": "<base64>" }` | `{"dtype":…,"shape":…}` (compact JSON) + `\0` + raw row-major bytes |
+| `package` | `{ "files": { "pkg/main.py": "<source>", … }, "entry": "pkg/main.py:main" }` | compact sorted-keys JSON `{"entry":…,"files":…}` |
 
 - **`function`** — Python source defining `main`. For a TIRx kernel `main` is a
   `@T.jit`; for a reference it is a plain callable invoked through its handle.
 - **`tensor`** — `data_b64` is base64 of the tensor's raw row-major bytes in the
   given `dtype`; `dtype` is a torch dtype name (`float16`, `float32`, `bfloat16`, …).
+- **`package`** — a multi-file function. The files are written to a private
+  directory, the entry module is imported through the normal import machinery
+  (imports between the package's files work), and the named attribute becomes
+  the handle. Paths are relative POSIX paths; absolute paths and `..` are
+  rejected. Non-`.py` data files are allowed and land next to the modules.
 
 > `kind: "object"` is accepted by the parser but has no canonical byte form yet,
 > so object uploads are not usable at the moment.

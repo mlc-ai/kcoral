@@ -10,8 +10,8 @@ is no session state: every request is self-contained.
 A program is a list of two kinds of instruction:
 
 - **`upload`** — hand the server a typed object (a `function` source, a `tensor`,
-  or a JSON `object`). It is content-addressed by `key = sha256(bytes)` and cached,
-  so a repeated upload can be sent by `key` alone.
+  a multi-file `package`, or a JSON `object`). It is content-addressed by
+  `key = sha256(bytes)` and cached, so a repeated upload can be sent by `key` alone.
 - **`run`** — call a function over earlier results. The function is either a
   **builtin** (by name) or an earlier handle. Arguments reference earlier
   instructions by `{"$ref": "<id>"}`.

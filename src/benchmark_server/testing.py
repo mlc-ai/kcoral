@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .errors import ExecutionError
+from .packages import load_package_entry
 
 
 class _Opaque:  # non-JSON object -> the engine returns it to the client as a handle
@@ -48,7 +49,14 @@ _BUILTINS: dict[str, Callable] = {
 
 
 class FakeRuntime:
+    def __init__(self) -> None:
+        self._package_cleanups: list[Callable[[], None]] = []
+
     def materialize(self, kind: str, data: bytes) -> Any:
+        if kind == "package":  # the real (GPU-free) package loader
+            entry, cleanup = load_package_entry(data)
+            self._package_cleanups.append(cleanup)
+            return entry
         if kind != "function":
             raise ExecutionError("runtime", f"kind {kind!r} not supported")
         ns: dict = {}
@@ -68,7 +76,9 @@ class FakeRuntime:
         return fn
 
     def reset(self) -> None:
-        pass
+        for cleanup in self._package_cleanups:
+            cleanup()
+        self._package_cleanups.clear()
 
 
 def fake_runtime_factory() -> FakeRuntime:

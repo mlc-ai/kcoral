@@ -85,6 +85,22 @@ def upload_function(instruction_id: str, source: str) -> dict:
     }
 
 
+def upload_package(instruction_id: str, files: dict[str, str], entry: str) -> dict:
+    """Upload a multi-file function package.
+
+    ``files`` maps relative POSIX paths to source text; ``entry`` is
+    ``"path/to/mod.py:attribute"`` naming the callable to bind to the handle.
+    """
+    inline = {"files": dict(files), "entry": entry}
+    return {
+        "id": instruction_id,
+        "op": "upload",
+        "kind": "package",
+        "key": compute_key("package", inline),
+        "inline": inline,
+    }
+
+
 def upload_tensor(instruction_id: str, array: Any) -> dict:
     """Upload a tensor from a torch tensor or a numpy-like array (anything with
     ``dtype``, ``shape``, and C-order ``tobytes``)."""

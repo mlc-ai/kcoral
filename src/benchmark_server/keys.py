@@ -7,6 +7,7 @@ recomputes and *verifies* so the two sides can never disagree on identity.
 Canonical forms (fixed per kind):
 - ``function``: the UTF-8 source bytes.
 - ``tensor``: a JSON ``{dtype, shape}`` header + ``\\0`` + raw row-major bytes.
+- ``package``: compact sorted-keys JSON ``{"entry": …, "files": {…}}``.
 
 The byte cache stores exactly ``canonical_bytes``; the worker's Runtime knows how
 to materialize each kind back from those bytes.
@@ -39,6 +40,19 @@ def canonical_bytes(kind: str, inline: dict) -> bytes:
             raise ValidationError(f"malformed tensor upload: {exc}") from exc
         header = json.dumps({"dtype": dtype, "shape": shape}, separators=(",", ":")).encode()
         return header + b"\x00" + raw
+    if kind == "package":
+        files = inline.get("files")
+        entry = inline.get("entry")
+        if not isinstance(files, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in files.items()
+        ):
+            raise ValidationError("package upload requires 'files' mapping paths to sources")
+        if not isinstance(entry, str):
+            raise ValidationError("package upload requires a string 'entry'")
+        canonical = {"entry": entry, "files": files}
+        return json.dumps(
+            canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
     raise ValidationError(f"unknown upload kind: {kind!r}")
 
 

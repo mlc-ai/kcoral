@@ -16,6 +16,7 @@ from typing import Any
 
 from . import builtin_ops
 from .errors import ExecutionError
+from .packages import load_package_entry
 
 # An uploaded function module defines its entry object under this name.
 ENTRY_POINT = "main"
@@ -30,12 +31,17 @@ class GPURuntime:
     def __init__(self) -> None:
         _require_torch_and_ffi()
         self._seeded_fnames: list[str] = []  # linecache keys to clear on reset
+        self._package_cleanups: list[Callable[[], None]] = []
 
     def materialize(self, kind: str, data: bytes) -> Any:
         if kind == "function":
             return self._materialize_function(data)
         if kind == "tensor":
             return _materialize_tensor(data)
+        if kind == "package":
+            entry, cleanup = load_package_entry(data)
+            self._package_cleanups.append(cleanup)
+            return entry
         if kind == "object":
             return json.loads(data.decode("utf-8"))
         raise ExecutionError("runtime", f"kind {kind!r} not supported")
@@ -52,6 +58,9 @@ class GPURuntime:
         for fname in self._seeded_fnames:
             linecache.cache.pop(fname, None)
         self._seeded_fnames.clear()
+        for cleanup in self._package_cleanups:
+            cleanup()
+        self._package_cleanups.clear()
         try:
             torch.cuda.synchronize()
             torch.cuda.empty_cache()

@@ -99,7 +99,7 @@ def to_structural(value: Any, instr_id: str) -> Any:
 
 # --- parsing ---------------------------------------------------------------
 
-_KINDS = {"function", "tensor", "object"}
+_KINDS = {"function", "tensor", "object", "package"}
 
 
 def parse_program(body: Any) -> Program:
