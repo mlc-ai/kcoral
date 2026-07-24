@@ -90,7 +90,28 @@ the current queue length.
 
 ### 2. Send a request
 
-`examples/example_client.py` is a standalone client (only needs `httpx`). It
+The package ships a synchronous client that computes content keys, follows the
+`CACHE_MISS` retry flow, and wraps errors:
+
+```python
+from benchmark_server.client import Client, ref, run, upload_function
+
+with Client("http://127.0.0.1:8000") as client:
+    outcome = client.execute(
+        [
+            upload_function("fn", "def main(a):\n    return a + 1\n"),
+            run("y", ref("fn"), [41]),
+        ]
+    )
+    print(outcome.status, outcome["y"].value)  # COMPLETED 42
+```
+
+`upload_tensor` uploads torch tensors or numpy arrays (`upload_tensor_bytes`
+for raw bytes). A failing instruction is data on the result; a non-200
+response raises `BenchmarkServerError`; connection problems raise
+`TransportError`.
+
+`examples/example_client.py` uses the client for a full kernel workflow — it
 uploads an input tensor, a TIRx kernel, and a torch reference, compiles the
 kernel, runs it on the tensor, asserts it matches the reference, and benchmarks it:
 

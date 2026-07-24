@@ -4,8 +4,9 @@ A request is a program (an instruction sequence). See ``design.md``.
 """
 
 from .app import create_app
+from .client import Client
 from .config import ServerConfig
 from .schemas import Program, parse_program
 
-__all__ = ["Program", "ServerConfig", "create_app", "parse_program"]
+__all__ = ["Client", "Program", "ServerConfig", "create_app", "parse_program"]
 __version__ = "0.1.0"
