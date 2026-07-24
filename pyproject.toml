@@ -22,6 +22,26 @@ test = [
   "httpx>=0.27",
 ]
 
+# The `gpu` group pins the worker environment used by the CUDA 13.0 development
+# image. Full tvm remains optional; only `compile_tirx` requires it.
+[dependency-groups]
+gpu = [
+  "torch>=2.9",
+  "apache-tvm-ffi>=0.1",
+  "numpy>=1.24",
+]
+
+[tool.uv]
+environments = ["sys_platform == 'linux'"]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["benchmark_server*"]

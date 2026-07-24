@@ -1,0 +1,37 @@
+# syntax=docker/dockerfile:1
+
+FROM ghcr.io/astral-sh/uv:0.11.30 AS uv
+
+FROM nvidia/cuda:13.0.2-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=0
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y \
+        ca-certificates \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=uv /uv /uvx /bin/
+
+WORKDIR /workspace/benchmark-server
+
+# Install locked third-party dependencies in a layer unaffected by source edits.
+COPY pyproject.toml uv.lock README.md ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-install-project --group gpu --extra test
+
+COPY src ./src
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --group gpu --extra test
+
+ENV BENCH_HOST=0.0.0.0
+
+EXPOSE 8000
+
+CMD ["python", "-m", "benchmark_server"]

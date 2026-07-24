@@ -39,6 +39,34 @@ See [docs/protocol.md](docs/protocol.md) for the full wire format of `upload`,
 
 Install with `pip install -e .`; `torch`/`tvm_ffi`/`tvm` come from the environment.
 
+For a reproducible setup, the repo ships a `uv.lock`: `uv sync --extra test`
+creates the CPU test environment, and `uv sync --group gpu --extra test` adds
+the pinned worker stack (CUDA 13.0 PyTorch + `apache-tvm-ffi`).
+
+### Docker development
+
+Build the CUDA 13.0 development image and start the server:
+
+```bash
+docker compose -f docker/compose.yaml up --build
+```
+
+The source tree is bind-mounted, so host edits are visible in the container.
+Restart the service to load server code changes. The server uses GPU `0` and
+host port `8000` by default; override them when needed:
+
+```bash
+BENCH_GPUS=0,1 BENCH_PORT=8001 \
+  docker compose -f docker/compose.yaml up
+```
+
+Run the CPU test suite in a temporary container:
+
+```bash
+docker compose -f docker/compose.yaml run --rm benchmark-server \
+  python -m pytest
+```
+
 ## Example
 
 ### 1. Launch the server

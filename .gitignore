@@ -19,5 +19,3 @@ venv/
 # Misc
 *.log
 tmp/
-
-uv.lock
