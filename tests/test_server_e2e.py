@@ -128,6 +128,36 @@ def test_bad_json_is_400():
         assert r.status_code == 400
 
 
+def test_duplicate_json_key_is_400():
+    raw = b'{"instructions": [], "instructions": []}'
+    with make_client() as c:
+        r = c.post("/benchmark", content=raw, headers={"content-type": "application/json"})
+    assert r.status_code == 400 and "duplicate" in r.json()["error"]
+
+
+def test_non_finite_number_is_400():
+    raw = b'{"instructions": [{"id": "x", "op": "run", "fn": "builtin.structural", "args": [NaN]}]}'
+    with make_client() as c:
+        r = c.post("/benchmark", content=raw, headers={"content-type": "application/json"})
+    assert r.status_code == 400 and "non-finite" in r.json()["error"]
+
+
+def test_request_too_large_is_413():
+    config = ServerConfig(gpus=[0], max_request_bytes=100)
+    with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as c:
+        r = c.post("/benchmark", json=bench_program())
+    assert r.status_code == 413
+
+
+def test_response_too_large_is_500():
+    config = ServerConfig(gpus=[0], max_response_bytes=50)
+    prog = {"instructions": [{"id": "x", "op": "run", "fn": "builtin.structural", "args": []}]}
+    with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as c:
+        r = c.post("/benchmark", json=prog)
+    assert r.status_code == 500
+    assert r.json()["error"]["kind"] == "response_too_large"
+
+
 def test_unknown_op_is_400():
     with make_client() as c:
         r = c.post("/benchmark", json={"instructions": [{"id": "a", "op": "frob"}]})
