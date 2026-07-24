@@ -9,6 +9,7 @@ here before any worker is touched.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import uuid
 from collections.abc import Callable
@@ -63,6 +64,40 @@ def create_app(
     async def health(request: Request) -> dict:
         pool_health = request.app.state.pool.health()
         return {"status": "ok", "gpu_count": len(pool_health["workers"]), **pool_health}
+
+    @app.post("/blobs/check")
+    async def blobs_check(request: Request):
+        """Which of these content keys the server does not have cached."""
+        try:
+            body = strict_json_loads(await request.body())
+        except ValidationError as exc:
+            return _error(400, str(exc))
+        keys = body.get("keys") if isinstance(body, dict) else None
+        if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
+            return _error(400, 'body must be {"keys": ["sha256:…", …]}')
+        return {"missing": request.app.state.cache.missing(keys)}
+
+    @app.put("/blobs/{key}")
+    async def blob_upload(key: str, request: Request):
+        """Pre-upload one blob's canonical bytes, raw (no base64/JSON overhead).
+
+        The key must be ``"sha256:" + sha256(body)``; a later upload instruction
+        can then reference it by key only.
+        """
+        declared_length = request.headers.get("content-length", "")
+        if declared_length.isdigit() and int(declared_length) > config.max_request_bytes:
+            return _error(413, "blob exceeds the configured size limit")
+        data = await request.body()
+        if len(data) > config.max_request_bytes:
+            return _error(413, "blob exceeds the configured size limit")
+        expected = "sha256:" + hashlib.sha256(data).hexdigest()
+        if key != expected:
+            return _error(400, f"key mismatch: body hashes to {expected}")
+        cache: ByteCache = request.app.state.cache
+        cache.put(key, data)
+        cached = key in cache  # the cache may decline (e.g. per-object cap)
+        request.app.state.events.emit("blob_uploaded", key=key, size=len(data), cached=cached)
+        return {"status": "ok", "cached": cached}
 
     @app.post("/benchmark")
     async def benchmark(request: Request):
