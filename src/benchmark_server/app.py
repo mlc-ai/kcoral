@@ -41,7 +41,9 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.cache = ByteCache(config.cache_capacity_bytes)
-        app.state.pool = WorkerPool(config.gpus, runtime_factory)
+        app.state.pool = WorkerPool(
+            config.gpus, runtime_factory, config.worker_termination_grace_seconds
+        )
         try:
             yield
         finally:

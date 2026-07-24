@@ -1,4 +1,5 @@
 import os
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -177,6 +178,75 @@ def test_timeout_is_504():
         }
         r = c.post("/benchmark", json=prog)
         assert r.status_code == 504 and r.json()["error"]["kind"] == "timeout"
+
+
+# --- process-tree cleanup: submitted code spawns a child, worker gets killed ---
+
+SPAWN_AND_HANG = (
+    "import subprocess, time\n"
+    "def main(pid_file):\n"
+    "    child = subprocess.Popen(['sleep', '60'])\n"
+    "    open(pid_file, 'w').write(str(child.pid))\n"
+    "    time.sleep(60)\n"
+)
+
+SPAWN_AND_CRASH = (
+    "import os, subprocess\n"
+    "def main(pid_file):\n"
+    "    child = subprocess.Popen(['sleep', '60'])\n"
+    "    open(pid_file, 'w').write(str(child.pid))\n"
+    "    os._exit(1)\n"
+)
+
+
+def _spawner_program(source, pid_file):
+    return {
+        "instructions": [
+            {
+                "id": "fn",
+                "op": "upload",
+                "kind": "function",
+                "key": compute_key("function", {"source": source}),
+                "inline": {"source": source},
+            },
+            {"id": "call", "op": "run", "fn": {"$ref": "fn"}, "args": [pid_file]},
+        ],
+        "options": {"timeout_seconds": 1.0},
+    }
+
+
+def _wait_until_pid_gone(pid, deadline_seconds=10.0):
+    end = time.monotonic() + deadline_seconds
+    while time.monotonic() < end:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def _grace_client():
+    config = ServerConfig(gpus=[0], worker_termination_grace_seconds=1.0)
+    return TestClient(create_app(config, runtime_factory=fake_runtime_factory))
+
+
+def test_timeout_kills_spawned_process_tree(tmp_path):
+    pid_file = str(tmp_path / "pid")
+    with _grace_client() as c:
+        r = c.post("/benchmark", json=_spawner_program(SPAWN_AND_HANG, pid_file))
+    assert r.status_code == 504
+    child_pid = int(open(pid_file).read())
+    assert _wait_until_pid_gone(child_pid), "spawned child survived the worker timeout kill"
+
+
+def test_crash_kills_spawned_process_tree(tmp_path):
+    pid_file = str(tmp_path / "pid")
+    with _grace_client() as c:
+        r = c.post("/benchmark", json=_spawner_program(SPAWN_AND_CRASH, pid_file))
+    assert r.status_code == 500
+    child_pid = int(open(pid_file).read())
+    assert _wait_until_pid_gone(child_pid), "spawned child survived the worker crash cleanup"
 
 
 # --- real kernel over the full stack (HTTP -> spawned worker -> GPURuntime) ---

@@ -19,8 +19,16 @@ class PoolBusy(Exception):
 
 
 class WorkerPool:
-    def __init__(self, gpus: list[int], runtime_factory: Callable) -> None:
-        self._workers = [Worker(g, runtime_factory) for g in gpus]
+    def __init__(
+        self,
+        gpus: list[int],
+        runtime_factory: Callable,
+        termination_grace_seconds: float = 5.0,
+    ) -> None:
+        self._workers = [
+            Worker(g, runtime_factory, termination_grace_seconds=termination_grace_seconds)
+            for g in gpus
+        ]
         self._idle: queue.Queue[Worker] = queue.Queue()
         for w in self._workers:
             self._idle.put(w)
