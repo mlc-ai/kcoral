@@ -9,14 +9,16 @@ and owns one GPU.
     BENCH_GPUS=1,2,3 python -m benchmark_server
 
 Environment:
-  BENCH_GPUS   comma-separated physical GPU ids the workers pin (default "0")
-  BENCH_HOST   bind host (default 127.0.0.1)
-  BENCH_PORT   bind port (default 8000)
+  BENCH_GPUS     comma-separated physical GPU ids the workers pin (default "0")
+  BENCH_HOST     bind host (default 127.0.0.1)
+  BENCH_PORT     bind port (default 8000)
+  BENCH_LOG_DIR  directory for structured event logs (default "logs"; empty disables)
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from .app import create_app
 from .config import ServerConfig
@@ -28,10 +30,16 @@ def _gpus() -> list[int]:
     return [int(x) for x in raw.split(",") if x.strip()]
 
 
+def _log_dir() -> Path | None:
+    raw = os.environ.get("BENCH_LOG_DIR", "logs")
+    return Path(raw) if raw else None
+
+
 def main() -> None:
     import uvicorn
 
-    app = create_app(ServerConfig(gpus=_gpus()), runtime_factory=gpu_runtime_factory)
+    config = ServerConfig(gpus=_gpus(), log_dir=_log_dir())
+    app = create_app(config, runtime_factory=gpu_runtime_factory)
     uvicorn.run(
         app,
         host=os.environ.get("BENCH_HOST", "127.0.0.1"),

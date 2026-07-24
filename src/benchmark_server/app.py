@@ -9,6 +9,7 @@ here before any worker is touched.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 
@@ -18,6 +19,7 @@ from fastapi.responses import JSONResponse
 from .cache import ByteCache
 from .config import ServerConfig
 from .errors import ValidationError
+from .events import EventLogger
 from .keys import verify_key
 from .pool import PoolBusy, WorkerPool
 from .schemas import Program, parse_program
@@ -44,66 +46,142 @@ def create_app(
         app.state.pool = WorkerPool(
             config.gpus, runtime_factory, config.worker_termination_grace_seconds
         )
+        app.state.events = EventLogger(config.log_dir)
+        app.state.events.emit("server_started", gpus=list(config.gpus))
         try:
             yield
         finally:
             app.state.pool.shutdown()
+            app.state.events.emit("server_stopped")
+            app.state.events.close()
 
     app = FastAPI(title="Benchmark Server", version="0.1.0", lifespan=lifespan)
 
     @app.get("/health")
-    async def health() -> dict:
-        return {"status": "ok"}
+    async def health(request: Request) -> dict:
+        pool_health = request.app.state.pool.health()
+        return {"status": "ok", "gpu_count": len(pool_health["workers"]), **pool_health}
 
     @app.post("/benchmark")
     async def benchmark(request: Request):
+        request_id = str(uuid.uuid4())
+        headers = {"X-Request-ID": request_id}
+        events: EventLogger = request.app.state.events
+        events.emit("request_started", request_id=request_id)
+
+        def finished(http_status: int, *, level: str = "INFO", **fields) -> None:
+            events.emit(
+                "request_finished",
+                level=level,
+                request_id=request_id,
+                http_status=http_status,
+                **fields,
+            )
+
         try:
             body = await request.json()
         except Exception:
-            return _error(400, "request body must be valid JSON")
+            finished(400, level="WARNING", error="invalid_json")
+            return _error(400, "request body must be valid JSON", request_id)
 
         cache: ByteCache = request.app.state.cache
         try:
             program = parse_program(body)
             keys = _resolve_uploads(program, cache)
         except ValidationError as exc:
-            return _error(400, str(exc))
+            finished(400, level="WARNING", error="invalid_request")
+            return _error(400, str(exc), request_id)
         except _CacheMiss as miss:
-            return JSONResponse({"status": "CACHE_MISS", "missing_keys": miss.keys})
+            finished(200, status="CACHE_MISS")
+            return JSONResponse(
+                {"status": "CACHE_MISS", "missing_keys": miss.keys, "request_id": request_id},
+                headers=headers,
+            )
 
         timeout = _resolve_timeout(program, config)
         program.options["output_limit_bytes"] = _resolve_output_limit(program, config)
         cache.pin(keys)
         loop = asyncio.get_running_loop()
         try:
-            results = await loop.run_in_executor(
+            outcome = await loop.run_in_executor(
                 None,
                 request.app.state.pool.submit,
                 program,
                 timeout,
                 config.worker_wait_timeout_seconds,
             )
-        except PoolBusy:
+        except PoolBusy as exc:
+            finished(503, level="WARNING", error="busy", queue_ms=exc.queue_ms)
             return JSONResponse(
-                {"error": "server saturated"}, status_code=503, headers={"Retry-After": "1"}
+                {"error": "server saturated", "request_id": request_id},
+                status_code=503,
+                headers={"Retry-After": "1", **headers},
             )
-        except WorkerTimeout:
+        except WorkerTimeout as exc:
+            events.emit(
+                "worker_restarted", request_id=request_id, gpu_id=exc.gpu_id, reason="timeout"
+            )
+            finished(
+                504,
+                level="WARNING",
+                error="timeout",
+                gpu_id=exc.gpu_id,
+                queue_ms=exc.queue_ms,
+                elapsed_ms=exc.elapsed_ms,
+            )
             return JSONResponse(
-                {"status": "ERROR", "error": {"kind": "timeout", "message": "execution timed out"}},
+                {
+                    "status": "ERROR",
+                    "error": {"kind": "timeout", "message": "execution timed out"},
+                    "request_id": request_id,
+                },
                 status_code=504,
+                headers=headers,
             )
-        except WorkerCrashed:
+        except WorkerCrashed as exc:
+            events.emit(
+                "worker_restarted", request_id=request_id, gpu_id=exc.gpu_id, reason="crash"
+            )
+            finished(
+                500,
+                level="ERROR",
+                error="worker_crashed",
+                gpu_id=exc.gpu_id,
+                queue_ms=exc.queue_ms,
+                elapsed_ms=exc.elapsed_ms,
+            )
             return JSONResponse(
-                {"status": "ERROR", "error": {"kind": "engine", "message": "worker crashed"}},
+                {
+                    "status": "ERROR",
+                    "error": {"kind": "engine", "message": "worker crashed"},
+                    "request_id": request_id,
+                },
                 status_code=500,
+                headers=headers,
             )
         finally:
             cache.unpin(keys)
 
         # HTTP 200 means "we ran your program"; the body status reflects whether
         # every instruction succeeded (a FAILED instruction skips the rest).
-        status = "FAILED" if any(r.status == "FAILED" for r in results) else "COMPLETED"
-        return {"status": status, "results": [_result_dict(r) for r in results]}
+        status = "FAILED" if any(r.status == "FAILED" for r in outcome.results) else "COMPLETED"
+        finished(
+            200,
+            status=status,
+            gpu_id=outcome.gpu_id,
+            queue_ms=outcome.queue_ms,
+            elapsed_ms=outcome.elapsed_ms,
+        )
+        return JSONResponse(
+            {
+                "status": status,
+                "request_id": request_id,
+                "queue_ms": outcome.queue_ms,
+                "elapsed_ms": outcome.elapsed_ms,
+                "results": [_result_dict(r) for r in outcome.results],
+            },
+            headers=headers,
+        )
 
     return app
 
@@ -157,8 +235,13 @@ def _resolve_output_limit(program: Program, config: ServerConfig) -> int:
         return config.output_limit_bytes
 
 
-def _error(status: int, message: str) -> JSONResponse:
-    return JSONResponse({"error": message}, status_code=status)
+def _error(status: int, message: str, request_id: str | None = None) -> JSONResponse:
+    body: dict = {"error": message}
+    headers = None
+    if request_id is not None:
+        body["request_id"] = request_id
+        headers = {"X-Request-ID": request_id}
+    return JSONResponse(body, status_code=status, headers=headers)
 
 
 def _result_dict(r) -> dict:
