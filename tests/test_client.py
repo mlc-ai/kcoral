@@ -91,6 +91,20 @@ def test_missing_bytes_raise_protocol_error(server_url):
             client.execute([key_only_upload, run("y", ref("fn"), [1])])
 
 
+def test_prepare_then_key_only_execute(server_url):
+    # a source unique to this test, so the module-scoped server's cache is cold
+    source = "def main(a):\n    return a * 3\n"
+    program = [upload_function("fn", source), run("y", ref("fn"), [2])]
+    with Client(server_url) as client:
+        uploaded = client.prepare(program)
+        assert uploaded == [program[0]["key"]]
+        # even a program carrying no inline bytes at all now runs
+        stripped = [{k: v for k, v in ins.items() if k != "inline"} for ins in program]
+        outcome = client.execute(stripped)
+        assert outcome.completed and outcome["y"].value == 6
+        assert client.prepare(program) == []  # nothing missing the second time
+
+
 def test_health(server_url):
     with Client(server_url) as client:
         health = client.health()
@@ -161,6 +175,41 @@ def test_tensor_roundtrip_on_gpu():
         assert outcome.completed
         assert outcome["y"].value == {"handle": "y"}  # GPU tensors stay server-side
         assert outcome["chk"].value["passed"] and outcome["chk"].value["max_abs_err"] == 0.0
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+
+@pytest.mark.skipif(
+    os.environ.get("BENCH_GPU_TEST") != "1",
+    reason="real-tensor download e2e; set BENCH_GPU_TEST=1 with a GPU to run",
+)
+def test_download_tensor_from_gpu():
+    import numpy
+
+    from benchmark_server.client import decode_tensor
+    from benchmark_server.gpu_runtime import gpu_runtime_factory
+
+    gpu_id_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
+    gpu_id = int(gpu_id_raw) if gpu_id_raw.isdigit() else 0
+    app = create_app(ServerConfig(gpus=[gpu_id]), runtime_factory=gpu_runtime_factory)
+    server, thread, url = _start_server(app)
+    try:
+        x = numpy.linspace(-1.0, 1.0, 128, dtype=numpy.float32)
+        with Client(url) as client:
+            client.prepare([upload_tensor("x", x)])  # raw binary pre-upload path
+            outcome = client.execute(
+                [
+                    upload_tensor("x", x),
+                    upload_function("double", "def main(a):\n    return a * 2\n"),
+                    run("y", ref("double"), [ref("x")]),
+                    run("out", "builtin.download", [ref("y")]),
+                ],
+                timeout_seconds=120,
+            )
+        assert outcome.completed
+        downloaded = decode_tensor(outcome["out"].value)  # torch tensor (torch importable)
+        numpy.testing.assert_array_equal(downloaded.numpy(), x * 2)
     finally:
         server.should_exit = True
         thread.join(timeout=10)

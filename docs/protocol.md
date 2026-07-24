@@ -88,6 +88,21 @@ The **key is computed over the canonical bytes**, which are fixed per kind:
 
 This keeps the fast path (warm cache) payload-free while never assuming the cache.
 
+### Binary pre-upload
+
+Inline payloads ride inside JSON (base64 for tensors: +33% and a parse cost).
+For large blobs, pre-upload the **canonical bytes** raw instead:
+
+```
+POST /blobs/check    {"keys": ["sha256:…", …]}          ->  {"missing": ["sha256:…"]}
+PUT  /blobs/<key>    Content-Type: application/octet-stream, body = canonical bytes
+```
+
+The key must equal `"sha256:" + sha256(body)`; a mismatch is a `400`, and a body
+over the request-size limit is a `413`. After the PUT, upload instructions
+referencing those keys run key-only — no `CACHE_MISS`, no base64. The bundled
+client wraps the whole flow in `Client.prepare(instructions)`.
+
 ---
 
 ## `run`
@@ -136,6 +151,7 @@ object is an optional config.
 | `builtin.compile_tirx` | `(kernel, bindings?)` — `kernel` is a `@T.jit` handle or an already-concrete `@T.prim_func`; `bindings` binds `T.constexpr` dims of a `@T.jit` kernel, e.g. `{"N": 256}` | a compiled module (→ handle) |
 | `builtin.benchmark` | `(mod, *tensors, cfg?)` — `cfg = {warmup?, repeat?}` | `{latency_ms, warmup, repeat}` |
 | `builtin.check_close` | `(actual, expected, cfg?)` — `cfg = {atol?, rtol?}` | `{passed, max_abs_err, max_rel_err, rtol, atol}` — `max_rel_err` is over elements where `expected != 0` |
+| `builtin.download` | `(tensor)` | the tensor's contents as `{dtype, shape, data_b64}` — ships the data back to the client (subject to the server's response-size limit); decode with the client's `decode_tensor` |
 | `builtin.assert_close` | same as `check_close` | same on success; **fails** the instruction (`kind: "correctness"`) on mismatch |
 
 `check_close` is a measurement (a mismatch is data, the instruction stays `OK`);

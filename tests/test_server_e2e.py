@@ -247,6 +247,46 @@ def test_timeout_is_504():
         assert r.status_code == 504 and r.json()["error"]["kind"] == "timeout"
 
 
+# --- blob pre-upload ---------------------------------------------------------
+
+
+def test_blob_preupload_then_key_only_execute():
+    payload = STUB_FN.encode()
+    key = compute_key("function", {"source": STUB_FN})
+    with make_client() as c:
+        assert c.post("/blobs/check", json={"keys": [key]}).json()["missing"] == [key]
+        r = c.put(
+            f"/blobs/{key}",
+            content=payload,
+            headers={"content-type": "application/octet-stream"},
+        )
+        assert r.status_code == 200 and r.json()["cached"] is True
+        assert c.post("/blobs/check", json={"keys": [key]}).json()["missing"] == []
+        # the key-only program now runs without a CACHE_MISS round trip
+        assert (
+            c.post("/benchmark", json=bench_program(inline_upload=False)).json()["status"]
+            == "COMPLETED"
+        )
+
+
+def test_blob_upload_key_mismatch_is_400():
+    with make_client() as c:
+        r = c.put("/blobs/sha256:" + "0" * 64, content=b"data")
+    assert r.status_code == 400 and "mismatch" in r.json()["error"]
+
+
+def test_blob_upload_too_large_is_413():
+    config = ServerConfig(gpus=[0], max_request_bytes=10)
+    with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as c:
+        r = c.put("/blobs/sha256:" + "0" * 64, content=b"x" * 100)
+    assert r.status_code == 413
+
+
+def test_blob_check_rejects_malformed_body():
+    with make_client() as c:
+        assert c.post("/blobs/check", json={"keys": "nope"}).status_code == 400
+
+
 # --- process-tree cleanup: submitted code spawns a child, worker gets killed ---
 
 SPAWN_AND_HANG = (

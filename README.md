@@ -87,7 +87,9 @@ with Client("http://127.0.0.1:8000") as client:
 `upload_tensor` uploads torch tensors or numpy arrays (`upload_tensor_bytes`
 for raw bytes). A failing instruction is data on the result; a non-200
 response raises `BenchmarkServerError`; connection problems raise
-`TransportError`.
+`TransportError`. For large tensors, `client.prepare(instructions)` pushes the
+payloads as raw binary blobs first (no base64 overhead), and
+`builtin.download` + `decode_tensor` bring a result tensor back.
 
 `examples/example_client.py` uses the client for a full kernel workflow — it
 uploads an input tensor, a TIRx kernel, and a torch reference, compiles the

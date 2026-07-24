@@ -160,6 +160,31 @@ def check_close(actual: Any, expected: Any, *rest: Any) -> dict:
     }
 
 
+@register_builtin("download")
+def download(tensor: Any) -> dict:
+    """Ship a tensor's contents back to the client as structural JSON
+    (``{dtype, shape, data_b64}`` — the tensor upload's inline form, so the
+    client decodes it with the same helper)."""
+    import base64
+
+    import torch
+
+    if not isinstance(tensor, torch.Tensor):
+        raise ExecutionError("runtime", "download expects a tensor handle")
+    try:
+        if tensor.is_cuda:
+            torch.cuda.synchronize()
+        host = tensor.detach().contiguous().cpu()
+        raw = host.reshape(-1).view(torch.uint8).numpy().tobytes()
+    except RuntimeError as exc:
+        raise ExecutionError("runtime", _short(exc)) from exc
+    return {
+        "dtype": str(host.dtype).removeprefix("torch."),
+        "shape": [int(d) for d in tensor.shape],
+        "data_b64": base64.b64encode(raw).decode("ascii"),
+    }
+
+
 @register_builtin("assert_close")
 def assert_close(actual: Any, expected: Any, *rest: Any) -> dict:
     """Like ``check_close``, but a mismatch is a failure: it raises ``correctness``

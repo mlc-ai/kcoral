@@ -31,7 +31,7 @@ from typing import Any
 
 import httpx
 
-from .keys import compute_key
+from .keys import canonical_bytes, compute_key
 
 
 class BenchmarkServerError(Exception):
@@ -120,6 +120,27 @@ def _tensor_fields(array: Any) -> tuple[str, list[int], bytes]:
         # numpy (and compatibles); tobytes() copies in C order.
         return str(array.dtype), [int(d) for d in array.shape], array.tobytes()
     raise TypeError(f"cannot upload {type(array).__name__!r} as a tensor")
+
+
+def decode_tensor(value: dict) -> Any:
+    """Decode a ``builtin.download`` result (``{dtype, shape, data_b64}``) into
+    a torch tensor when torch is importable, else a numpy array."""
+    raw = base64.b64decode(value["data_b64"])
+    shape = [int(d) for d in value["shape"]]
+    dtype = str(value["dtype"])
+    try:
+        import torch
+
+        torch_dtype = getattr(torch, dtype, None)
+        if not isinstance(torch_dtype, torch.dtype):
+            raise ProtocolError(f"unknown tensor dtype: {dtype!r}")
+        # copy so the tensor doesn't alias the writable staging buffer
+        return torch.frombuffer(bytearray(raw), dtype=torch_dtype).reshape(shape).clone()
+    except ImportError:
+        pass
+    import numpy
+
+    return numpy.frombuffer(raw, dtype=numpy.dtype(dtype)).reshape(shape).copy()
 
 
 # --- results -----------------------------------------------------------------
@@ -211,6 +232,48 @@ class Client:
             if body.get("status") == "CACHE_MISS":
                 raise ProtocolError("server still reports CACHE_MISS after an inline resend")
         return _parse_program_result(body)
+
+    def prepare(self, instructions: list[dict]) -> list[str]:
+        """Pre-upload the program's payloads as raw binary blobs.
+
+        Asks the server which content keys it misses and PUTs exactly those,
+        raw (no base64/JSON overhead — the efficient path for large tensors).
+        Afterwards ``execute``'s key-only fast path hits without a resend.
+        Returns the keys that were uploaded.
+        """
+        payloads = {
+            ins["key"]: canonical_bytes(ins["kind"], ins["inline"])
+            for ins in instructions
+            if ins.get("op") == "upload" and ins.get("inline") is not None
+        }
+        missing = self.check_blobs(list(payloads))
+        unknown = [key for key in missing if key not in payloads]
+        if unknown:
+            raise ProtocolError(f"server reported keys this program does not carry: {unknown}")
+        for key in missing:
+            self.upload_blob(key, payloads[key])
+        return missing
+
+    def check_blobs(self, keys: list[str]) -> list[str]:
+        """The subset of ``keys`` the server does not have cached."""
+        response = self._request("POST", "/blobs/check", json={"keys": list(keys)})
+        if response.status_code != 200:
+            raise _server_error(response)
+        missing = _json_body(response).get("missing")
+        if not isinstance(missing, list):
+            raise ProtocolError("blob check response has no 'missing' list")
+        return missing
+
+    def upload_blob(self, key: str, data: bytes) -> None:
+        """PUT one blob's canonical bytes under its content key."""
+        response = self._request(
+            "PUT",
+            f"/blobs/{key}",
+            content=data,
+            headers={"content-type": "application/octet-stream"},
+        )
+        if response.status_code != 200:
+            raise _server_error(response)
 
     def health(self) -> dict:
         response = self._request("GET", "/health")
