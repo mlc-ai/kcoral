@@ -120,6 +120,55 @@ def test_worker_crash_is_500():
         assert r.status_code == 500 and r.json()["error"]["kind"] == "engine"
 
 
+def test_stdout_stderr_come_back_in_results():
+    src = (
+        "import sys\n"
+        "def main():\n"
+        "    print('worker stdout')\n"
+        "    print('worker stderr', file=sys.stderr)\n"
+    )
+    prog = {
+        "instructions": [
+            {
+                "id": "fn",
+                "op": "upload",
+                "kind": "function",
+                "key": compute_key("function", {"source": src}),
+                "inline": {"source": src},
+            },
+            {"id": "call", "op": "run", "fn": {"$ref": "fn"}, "args": []},
+        ]
+    }
+    with make_client() as c:
+        data = c.post("/benchmark", json=prog).json()
+    assert data["status"] == "COMPLETED"
+    call = data["results"][1]
+    assert call["stdout"] == "worker stdout\n"
+    assert call["stderr"] == "worker stderr\n"
+    assert "stdout" not in data["results"][0]  # silent instruction carries no output
+
+
+def test_output_limit_option_is_applied():
+    src = "def main():\n    print('a' * 100)\n"
+    prog = {
+        "instructions": [
+            {
+                "id": "fn",
+                "op": "upload",
+                "kind": "function",
+                "key": compute_key("function", {"source": src}),
+                "inline": {"source": src},
+            },
+            {"id": "call", "op": "run", "fn": {"$ref": "fn"}, "args": []},
+        ],
+        "options": {"output_limit_bytes": 5},
+    }
+    with make_client() as c:
+        data = c.post("/benchmark", json=prog).json()
+    call = data["results"][1]
+    assert call["stdout"] == "aaaaa" and call["stdout_truncated"] is True
+
+
 def test_timeout_is_504():
     with make_client() as c:
         prog = {

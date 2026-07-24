@@ -68,3 +68,54 @@ def test_ref_to_non_callable_fn_is_failed():
         )
     )
     assert res[1].status == "FAILED" and res[1].error["kind"] == "runtime"
+
+
+# --- per-instruction stdout/stderr capture ----------------------------------
+
+
+def test_stdout_stderr_captured_per_instruction():
+    src = (
+        "import sys\n"
+        "def f(x):\n"
+        "    print('to stdout')\n"
+        "    print('to stderr', file=sys.stderr)\n"
+        "    return x\n"
+    )
+    res = run(prog(fn("f", src), Run("y", {"$ref": "f"}, [1]), Run("z", "builtin.structural", [])))
+    assert res[1].stdout == "to stdout\n" and res[1].stderr == "to stderr\n"
+    assert res[2].stdout == "" and res[2].stderr == ""  # capture is per instruction
+
+
+def test_fd_level_output_is_captured():
+    # os.write bypasses sys.stdout, like output from a C extension would.
+    src = "import os\ndef f(x):\n    os.write(1, b'raw bytes out')\n    return x\n"
+    res = run(prog(fn("f", src), Run("y", {"$ref": "f"}, [0])))
+    assert res[1].stdout == "raw bytes out"
+
+
+def test_failed_instruction_keeps_captured_output():
+    src = "def f():\n    print('before failure')\n    raise ValueError('boom')\n"
+    res = run(prog(fn("f", src), Run("y", {"$ref": "f"}, [])))
+    assert res[1].status == "FAILED"
+    assert res[1].stdout == "before failure\n"
+
+
+def test_output_truncated_to_limit():
+    program = prog(
+        fn("f", "def f(x):\n    print('x' * 100)\n    return x\n"),
+        Run("y", {"$ref": "f"}, [0]),
+    )
+    program.options = {"output_limit_bytes": 10}
+    res = run(program)
+    assert res[1].stdout == "x" * 10 and res[1].stdout_truncated
+    assert res[1].stderr == "" and not res[1].stderr_truncated
+
+
+def test_capture_disabled_with_non_positive_limit():
+    program = prog(
+        fn("f", "def f(x):\n    print('hello')\n    return x\n"),
+        Run("y", {"$ref": "f"}, [0]),
+    )
+    program.options = {"output_limit_bytes": 0}
+    res = run(program)
+    assert res[1].stdout == "" and not res[1].stdout_truncated

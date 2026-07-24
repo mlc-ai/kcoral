@@ -13,3 +13,5 @@ class ServerConfig:
     max_timeout_seconds: float = 3600.0
     worker_wait_timeout_seconds: float = 30.0  # wait for a free worker before 503
     max_request_bytes: int = 256 * 1024**2  # 256 MB request cap
+    output_limit_bytes: int = 1024**2  # per-instruction stdout/stderr capture cap
+    max_output_limit_bytes: int = 16 * 1024**2  # cap on a client-requested limit

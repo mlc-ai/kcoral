@@ -62,6 +62,8 @@ class Result:
     value: Any = None
     stdout: str = ""
     stderr: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
     error: dict | None = None
 
 

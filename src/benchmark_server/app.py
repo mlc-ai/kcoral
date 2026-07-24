@@ -70,6 +70,7 @@ def create_app(
             return JSONResponse({"status": "CACHE_MISS", "missing_keys": miss.keys})
 
         timeout = _resolve_timeout(program, config)
+        program.options["output_limit_bytes"] = _resolve_output_limit(program, config)
         cache.pin(keys)
         loop = asyncio.get_running_loop()
         try:
@@ -142,6 +143,18 @@ def _resolve_timeout(program: Program, config: ServerConfig) -> float:
         return config.default_timeout_seconds
 
 
+def _resolve_output_limit(program: Program, config: ServerConfig) -> int:
+    """Per-instruction stdout/stderr capture cap; a client may lower or disable
+    (<= 0) it but cannot exceed the server maximum."""
+    requested = program.options.get("output_limit_bytes")
+    if requested is None:
+        return config.output_limit_bytes
+    try:
+        return min(int(requested), config.max_output_limit_bytes)
+    except (TypeError, ValueError):
+        return config.output_limit_bytes
+
+
 def _error(status: int, message: str) -> JSONResponse:
     return JSONResponse({"error": message}, status_code=status)
 
@@ -156,4 +169,8 @@ def _result_dict(r) -> dict:
         d["stdout"] = r.stdout
     if r.stderr:
         d["stderr"] = r.stderr
+    if r.stdout_truncated:
+        d["stdout_truncated"] = True
+    if r.stderr_truncated:
+        d["stderr_truncated"] = True
     return d

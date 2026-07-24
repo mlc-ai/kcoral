@@ -149,6 +149,7 @@ program. Pick by intent: benchmark-a-wrong-kernel-anyway vs. abort-on-mismatch.
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `timeout_seconds` | number | `300` | Per-request GPU execution deadline. Clamped to the server max (`3600`). Exceeding it kills + respawns the worker and returns `504`. |
+| `output_limit_bytes` | integer | `1048576` | Per-instruction stdout/stderr capture cap. Clamped to the server max (`16777216`); `0` (or negative) disables capture. |
 
 ---
 
@@ -175,6 +176,8 @@ For any program the server actually ran, the HTTP status is **`200`** and the bo
 | `status` | always | `"OK"`, `"FAILED"`, or `"SKIPPED"`. |
 | `value` | `OK` runs | The structural result, or `{ "handle": "<id>" }`. Uploads and in-place runs (return `None`) have no `value`. |
 | `error` | `FAILED` / `SKIPPED` | On `FAILED`: `{ "kind": …, "message": … }`. On `SKIPPED`: `{ "reason": "predecessor_failed" }`. |
+| `stdout`, `stderr` | non-empty | What the instruction wrote to stdout/stderr (captured at the file-descriptor level, so C-extension and CUDA printf output is included), truncated to `options.output_limit_bytes`. |
+| `stdout_truncated`, `stderr_truncated` | `true` | Present only when the corresponding stream hit the capture cap. |
 
 `error.kind` names the failing stage — `parse`, `compile`, `runtime`,
 `correctness`, `unavailable` (the instruction needs an optional server dependency,
