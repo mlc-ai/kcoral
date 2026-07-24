@@ -39,6 +39,21 @@ See [docs/protocol.md](docs/protocol.md) for the full wire format of `upload`,
 
 Install with `pip install -e .`; `torch`/`tvm_ffi`/`tvm` come from the environment.
 
+For a reproducible setup, the repo ships a `uv.lock`: `uv sync --extra test`
+creates the CPU test environment, and `uv sync --group gpu --extra test` adds
+the pinned worker stack (CUDA 13.0 torch + `apache-tvm-ffi`).
+
+### Docker
+
+```bash
+docker compose -f docker/compose.yaml up --build
+```
+
+builds the CUDA 13.0 dev image (`docker/Dockerfile.cu130.dev`, everything
+installed from `uv.lock`) and starts the server on port 8000 with all GPUs
+exposed; pick workers with `BENCH_GPUS=0,1 docker compose ...`. Cache and logs
+persist in named volumes, and the source tree is bind-mounted for live edits.
+
 ## Example
 
 ### 1. Launch the server

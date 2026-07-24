@@ -25,6 +25,27 @@ test = [
 [project.scripts]
 benchmark-server = "benchmark_server.__main__:main"
 
+# The `gpu` group pins the worker environment for the Docker dev image (CUDA 13.0
+# torch wheels from the PyTorch index). `uv sync --group gpu --extra test` gives a
+# full dev setup; plain `uv sync --extra test` is enough for the CPU protocol tests.
+[dependency-groups]
+gpu = [
+  "torch>=2.9",
+  "apache-tvm-ffi>=0.1",
+  "numpy>=1.24",  # tensor <-> bytes conversion (builtin.download, client upload)
+]
+
+[tool.uv]
+environments = ["sys_platform == 'linux'"]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["benchmark_server*"]

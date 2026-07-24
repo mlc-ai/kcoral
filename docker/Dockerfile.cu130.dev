@@ -1,0 +1,31 @@
+# Dev image for the benchmark server on CUDA 13.0 GPUs.
+#
+#   docker build -f docker/Dockerfile.cu130.dev -t benchmark-server:cu130-dev .
+#   docker compose -f docker/compose.yaml up
+#
+# The environment comes entirely from uv.lock (project deps + the `gpu` group:
+# torch cu130 + apache-tvm-ffi), so builds are reproducible. Full tvm is not
+# installed; `builtin.compile_tirx` reports `unavailable` unless you add it.
+FROM nvidia/cuda:13.0.1-devel-ubuntu24.04
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-dev git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# No BuildKit features are used, so the classic builder works too; UV_NO_CACHE
+# keeps uv's download cache out of the layers.
+ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never UV_NO_CACHE=1
+
+WORKDIR /app
+
+# Dependency layer first so source edits don't re-download torch.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-install-project --group gpu --extra test
+
+COPY . .
+RUN uv sync --locked --group gpu --extra test
+
+ENV PATH="/app/.venv/bin:$PATH"
+EXPOSE 8000
+CMD ["benchmark-server", "--host", "0.0.0.0"]

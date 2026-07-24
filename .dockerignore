@@ -1,0 +1,9 @@
+.git
+.venv
+.venv-gpu
+cache
+logs
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache

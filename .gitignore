@@ -20,4 +20,3 @@ venv/
 *.log
 tmp/
 
-uv.lock

@@ -1,0 +1,35 @@
+# Dev environment: build the CUDA 13.0 image and run the server on all GPUs.
+#
+#   docker compose -f docker/compose.yaml up --build
+#
+# BENCH_GPUS picks the GPUs (one worker each); cache and logs persist in named
+# volumes; the source bind mount makes server-code edits live (editable install).
+services:
+  benchmark-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.cu130.dev
+    image: benchmark-server:cu130-dev
+    gpus: all
+    environment:
+      BENCH_GPUS: ${BENCH_GPUS:-0}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../src:/app/src
+      - benchmark-cache:/app/cache
+      - benchmark-logs:/app/logs
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  benchmark-cache:
+  benchmark-logs:
