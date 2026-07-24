@@ -1,21 +1,38 @@
 """Worker pool: one worker per GPU, idle-worker assignment, backpressure.
 
 `submit` blocks (call it from a thread), acquires an idle worker, runs the
-program, and returns the worker to the idle set — respawned already if it crashed
-or timed out. When no worker becomes free within ``worker_wait_timeout`` it raises
-:class:`PoolBusy` (the front-end maps that to HTTP 503).
+program, and returns a :class:`SubmitOutcome` — the results plus which GPU ran
+the program and the queue/execution timings. The worker returns to the idle set
+respawned already if it crashed or timed out; the raised
+:class:`WorkerTimeout` / :class:`WorkerCrashed` carries the same attribution
+(``gpu_id``, ``queue_ms``, ``elapsed_ms``). When no worker becomes free within
+``worker_wait_timeout`` it raises :class:`PoolBusy` (the front-end maps that to
+HTTP 503).
 """
 
 from __future__ import annotations
 
 import queue
+import threading
+import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
-from .worker import Worker, WorkerCrashed, WorkerTimeout  # noqa: F401  (re-exported)
+from .worker import Worker, WorkerCrashed, WorkerTimeout
 
 
 class PoolBusy(Exception):
-    pass
+    def __init__(self, message: str, queue_ms: float = 0.0):
+        super().__init__(message)
+        self.queue_ms = queue_ms
+
+
+@dataclass
+class SubmitOutcome:
+    results: list
+    gpu_id: int
+    queue_ms: float
+    elapsed_ms: float
 
 
 class WorkerPool:
@@ -32,19 +49,59 @@ class WorkerPool:
         self._idle: queue.Queue[Worker] = queue.Queue()
         for w in self._workers:
             self._idle.put(w)
+        self._busy_gpu_ids: set[int] = set()
+        self._waiting = 0
+        self._state_lock = threading.Lock()
 
-    def submit(self, program, timeout: float, worker_wait_timeout: float = 0.0):
+    def submit(self, program, timeout: float, worker_wait_timeout: float = 0.0) -> SubmitOutcome:
+        queue_started = time.monotonic()
+        with self._state_lock:
+            self._waiting += 1
         try:
             if worker_wait_timeout > 0:
                 worker = self._idle.get(timeout=worker_wait_timeout)
             else:
                 worker = self._idle.get_nowait()
         except queue.Empty:
-            raise PoolBusy("all workers busy")
-        try:
-            return worker.run(program, timeout)
+            queue_ms = (time.monotonic() - queue_started) * 1000
+            raise PoolBusy("all workers busy", queue_ms=queue_ms) from None
         finally:
+            with self._state_lock:
+                self._waiting -= 1
+        queue_ms = (time.monotonic() - queue_started) * 1000
+        with self._state_lock:
+            self._busy_gpu_ids.add(worker.gpu_id)
+        run_started = time.monotonic()
+        try:
+            results = worker.run(program, timeout)
+            elapsed_ms = (time.monotonic() - run_started) * 1000
+            return SubmitOutcome(results, worker.gpu_id, queue_ms, elapsed_ms)
+        except (WorkerTimeout, WorkerCrashed) as exc:
+            exc.gpu_id = worker.gpu_id
+            exc.queue_ms = queue_ms
+            exc.elapsed_ms = (time.monotonic() - run_started) * 1000
+            raise
+        finally:
+            with self._state_lock:
+                self._busy_gpu_ids.discard(worker.gpu_id)
             self._idle.put(worker)  # worker was respawned in-place on crash/timeout
+
+    def health(self) -> dict:
+        with self._state_lock:
+            busy_gpu_ids = set(self._busy_gpu_ids)
+            waiting = self._waiting
+        now = time.monotonic()
+        return {
+            "queue_length": waiting,
+            "workers": [
+                {
+                    "gpu_id": w.gpu_id,
+                    "status": "busy" if w.gpu_id in busy_gpu_ids else "idle",
+                    "uptime_seconds": max(0.0, now - w.started_at),
+                }
+                for w in self._workers
+            ],
+        }
 
     def shutdown(self) -> None:
         for w in self._workers:

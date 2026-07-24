@@ -160,12 +160,20 @@ For any program the server actually ran, the HTTP status is **`200`** and the bo
 ```json
 {
   "status": "COMPLETED",
+  "request_id": "5f0f…",
+  "queue_ms": 0.4,
+  "elapsed_ms": 812.6,
   "results": [ { "id": "…", "op": "…", "status": "…", "value": … }, … ]
 }
 ```
 
 - **`status`** (body) — `"COMPLETED"` if every instruction is `OK`; `"FAILED"` if any
   instruction failed (its successors are then `SKIPPED`).
+- **`request_id`** — a server-assigned UUID, also sent as the `X-Request-ID`
+  response header on every response; use it to correlate with the server's
+  event log.
+- **`queue_ms`** / **`elapsed_ms`** — time spent waiting for a free GPU worker,
+  and the program's wall-clock execution time on that worker.
 - **`results`** — one object per instruction, in program order.
 
 ### Result object

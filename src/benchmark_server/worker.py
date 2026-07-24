@@ -12,6 +12,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import os
 import signal
+import time
 from collections.abc import Callable
 
 from .engine import execute
@@ -45,11 +46,16 @@ def worker_main(gpu_id: int, conn, runtime_factory: Callable) -> None:
 
 
 class WorkerCrashed(Exception):
-    pass
+    # Attribution filled in by the pool when the failure happened under submit.
+    gpu_id: int | None = None
+    queue_ms: float | None = None
+    elapsed_ms: float | None = None
 
 
 class WorkerTimeout(Exception):
-    pass
+    gpu_id: int | None = None
+    queue_ms: float | None = None
+    elapsed_ms: float | None = None
 
 
 class Worker:
@@ -70,6 +76,7 @@ class Worker:
         self._spawn()
 
     def _spawn(self) -> None:
+        self.started_at = time.monotonic()
         parent, child = self._ctx.Pipe()
         self._conn = parent
         self._proc = self._ctx.Process(

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass(frozen=True)
 class ServerConfig:
     gpus: list[int] = field(default_factory=lambda: [0])
+    log_dir: Path | None = None  # structured event logs; None disables logging
     cache_capacity_bytes: int = 16 * 1024**3  # 16 GB byte cache
     default_timeout_seconds: float = 300.0  # per-request execution timeout
     max_timeout_seconds: float = 3600.0
