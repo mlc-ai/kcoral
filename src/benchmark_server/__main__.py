@@ -12,7 +12,9 @@ Environment:
   BENCH_GPUS     comma-separated physical GPU ids the workers pin (default "0")
   BENCH_HOST     bind host (default 127.0.0.1)
   BENCH_PORT     bind port (default 8000)
-  BENCH_LOG_DIR  directory for structured event logs (default "logs"; empty disables)
+  BENCH_LOG_DIR    directory for structured event logs (default "logs"; empty disables)
+  BENCH_CACHE_DIR  on-disk blob cache, survives restarts (default "cache"; empty for
+                   a private temporary directory)
 """
 
 from __future__ import annotations
@@ -35,10 +37,15 @@ def _log_dir() -> Path | None:
     return Path(raw) if raw else None
 
 
+def _cache_dir() -> Path | None:
+    raw = os.environ.get("BENCH_CACHE_DIR", "cache")
+    return Path(raw) if raw else None
+
+
 def main() -> None:
     import uvicorn
 
-    config = ServerConfig(gpus=_gpus(), log_dir=_log_dir())
+    config = ServerConfig(gpus=_gpus(), log_dir=_log_dir(), cache_dir=_cache_dir())
     app = create_app(config, runtime_factory=gpu_runtime_factory)
     uvicorn.run(
         app,

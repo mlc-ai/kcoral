@@ -86,7 +86,10 @@ each). `BENCH_HOST` / `BENCH_PORT` default to `127.0.0.1:8000`. Structured
 event logs (one JSONL file per server run: request lifecycle, per-request GPU
 assignment and timings, worker restarts) go to `BENCH_LOG_DIR` (default
 `logs`; set it empty to disable). `GET /health` reports per-worker status and
-the current queue length.
+the current queue length. Uploaded blobs are cached on disk in
+`BENCH_CACHE_DIR` (default `cache`) and survive restarts, so clients can keep
+sending key-only uploads across server runs; set it empty for a private
+temporary directory instead.
 
 ### 2. Send a request
 
