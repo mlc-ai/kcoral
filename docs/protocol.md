@@ -13,10 +13,10 @@ POST /execute          Content-Type: multipart/form-data
 
 The request contains:
 
-| Part | Content type | Notes |
-|---|---|---|
-| `program` | `application/json` | Required; instructions and options |
-| `blob:<sha256>` | `application/octet-stream` | Optional raw tensor bytes |
+| Part | Content type | Required | Notes |
+|---|---|---:|---|
+| `program` | `application/json` | yes | Instructions and options |
+| `blob:<sha256>` | `application/octet-stream` | no | Raw tensor bytes |
 
 `<sha256>` is the lowercase 64-character SHA-256 of the part bytes.
 
@@ -29,10 +29,10 @@ The `program` part is:
 }
 ```
 
-| Field | Type | Notes |
-|---|---|---|
-| `instructions` | array | Non-empty, executed top to bottom |
-| `options` | object | Optional; see [Options](#options) |
+| Field | Type | Required | Notes |
+|---|---|---:|---|
+| `instructions` | array | yes | Non-empty, executed top to bottom |
+| `options` | object | no | See [Options](#options) |
 
 Each `upload` and `run` has a unique string `id`. A reference has the exact form
 `{"$ref": "<id>"}` and must point to an earlier instruction.
@@ -80,16 +80,16 @@ defaults to `"main.py:main"`, and must name a callable in `files`.
 
 ### Fields
 
-| Field | Kinds | Notes |
-|---|---|---|
-| `op` | all | `"upload"` |
-| `id` | all | Unique handle name |
-| `kind` | all | `"module"` or `"tensor"` |
-| `files` | module | Source path to text mapping |
-| `entry` | module | Optional entry callable |
-| `blob` | tensor | SHA-256 of raw tensor bytes |
-| `dtype` | tensor | Tensor data type |
-| `shape` | tensor | Tensor shape |
+| Field | Kinds | Required | Notes |
+|---|---|---:|---|
+| `op` | all | yes | `"upload"` |
+| `id` | all | yes | Unique handle name |
+| `kind` | all | yes | `"module"` or `"tensor"` |
+| `files` | module | yes | Source path to text mapping |
+| `entry` | module | no | Entry callable |
+| `blob` | tensor | yes | SHA-256 of raw tensor bytes |
+| `dtype` | tensor | yes | Tensor data type |
+| `shape` | tensor | yes | Tensor shape |
 
 ### Tensor blob cache
 
@@ -123,12 +123,12 @@ Calls a function over earlier values and binds its result to a handle.
 }
 ```
 
-| Field | Type | Notes |
-|---|---|---|
-| `op` | string | `"run"` |
-| `id` | string | Handle for the result |
-| `fn` | string \| `{"$ref": id}` | Builtin name or callable handle |
-| `args` | array | Optional; defaults to `[]` |
+| Field | Type | Required | Notes |
+|---|---|---:|---|
+| `op` | string | yes | `"run"` |
+| `id` | string | yes | Handle for the result |
+| `fn` | string \| `{"$ref": id}` | yes | Builtin name or callable handle |
+| `args` | array | no | Defaults to `[]` |
 
 Each argument equal to `{"$ref": "<id>"}` resolves to that handle. Other JSON
 values are passed as literals.
@@ -165,11 +165,11 @@ Selects a handle for the response:
 }
 ```
 
-| Field | Type | Notes |
-|---|---|---|
-| `op` | string | `"return"` |
-| `key` | string | Unique key in the response `results` object |
-| `value` | `{"$ref": id}` | Earlier handle to return |
+| Field | Type | Required | Notes |
+|---|---|---:|---|
+| `op` | string | yes | `"return"` |
+| `key` | string | yes | Unique key in the response `results` object |
+| `value` | `{"$ref": id}` | yes | Earlier handle to return |
 
 `return` has no `id` and creates no handle. All `return` instructions follow the
 `upload` and `run` instructions.
@@ -178,10 +178,10 @@ Selects a handle for the response:
 
 ## Options
 
-| Field | Type | Default | Notes |
-|---|---|---|---|
-| `timeout_seconds` | number | `300` | Worker execution deadline; maximum `3600` |
-| `output_limit_bytes` | integer | `1048576` | Maximum bytes returned for each of stdout and stderr; `0` disables capture |
+| Field | Type | Required | Default | Notes |
+|---|---|---:|---|---|
+| `timeout_seconds` | number | no | `300` | Worker execution deadline; maximum `3600` |
+| `output_limit_bytes` | integer | no | `1048576` | Maximum bytes returned for each of stdout and stderr; `0` disables capture |
 
 ---
 
@@ -235,10 +235,10 @@ tuples both encode as `array`.
 If no `bytes` or `tensor` appears, the response is `application/json`. Otherwise
 it is `multipart/form-data`:
 
-| Part | Content type | Notes |
-|---|---|---|
-| `result` | `application/json` | Response metadata and value tree |
-| `return:<index>` | `application/octet-stream` | Raw bytes for a bytes or tensor node |
+| Part | Content type | Required | Notes |
+|---|---|---:|---|
+| `result` | `application/json` | yes | Response metadata and value tree |
+| `return:<index>` | `application/octet-stream` | conditional | Raw bytes for a bytes or tensor node |
 
 Binary parts use depth-first numbering. Clients use `part` to locate data and
 verify `sha256`. Tensor data is C-contiguous, row-major, and little-endian; its
