@@ -1,68 +1,49 @@
 # Instruction protocol
 
-The server exposes two synchronous endpoints:
+The server exposes one synchronous endpoint, `POST /execute` (plus `GET /health`).
+A request body is a **program**: an ordered list of instructions the server runs
+on a GPU worker. There is no session state; every request is self-contained, and
+its handles live only for that request.
 
 ```text
-POST /execute
-GET  /health
+POST /execute          Content-Type: multipart/form-data
 ```
 
-An execution request contains one self-contained, ordered program. Handles and
-uploaded values exist only for that request.
+## Request envelope
 
-## Request
+The request contains:
 
-`POST /execute` uses `multipart/form-data`.
+| Part | Content type | Notes |
+|---|---|---|
+| `program` | `application/json` | Required; instructions and options |
+| `blob:<sha256>` | `application/octet-stream` | Optional raw tensor bytes |
 
-| Part | Content type | Required | Contents |
-|---|---|---:|---|
-| `program` | `application/json` | yes | Instructions and options |
-| `blob:<sha256>` | `application/octet-stream` | no | Raw bytes for a tensor upload |
+`<sha256>` is the lowercase 64-character SHA-256 of the part bytes.
 
-`<sha256>` is the lowercase 64-character SHA-256 hash of the part bytes. A
-request contains exactly one `program` part and at most one part for each hash.
-
-The `program` part has this shape:
+The `program` part is:
 
 ```json
 {
-  "instructions": [
-    {
-      "op": "upload",
-      "id": "add",
-      "kind": "module",
-      "files": {
-        "main.py": "def main(a, b):\n    return a + b\n"
-      }
-    },
-    {
-      "op": "run",
-      "id": "answer",
-      "fn": {"$ref": "add"},
-      "args": [20, 22]
-    },
-    {
-      "op": "return",
-      "key": "answer",
-      "value": {"$ref": "answer"}
-    }
-  ],
-  "options": {
-    "timeout_seconds": 120,
-    "output_limit_bytes": 1048576
-  }
+  "instructions": [ /* one or more upload / run / return instructions */ ],
+  "options": { "timeout_seconds": 120 }
 }
 ```
 
-Instructions execute from top to bottom. Each `upload` and `run` has a unique
-string `id`. A reference has the exact form `{"$ref": "<id>"}` and must name an
-earlier instruction.
+| Field | Type | Notes |
+|---|---|---|
+| `instructions` | array | Non-empty, executed top to bottom |
+| `options` | object | Optional; see [Options](#options) |
 
-## Instructions
+Each `upload` and `run` has a unique string `id`. A reference has the exact form
+`{"$ref": "<id>"}` and must point to an earlier instruction.
 
-### `upload`
+---
 
-#### Module
+## `upload`
+
+Uploads a module or tensor and binds it to a handle.
+
+### Module
 
 ```json
 {
@@ -77,137 +58,104 @@ earlier instruction.
 }
 ```
 
-| Field | Required | Description |
-|---|---:|---|
-| `op` | yes | `"upload"` |
-| `id` | yes | Handle bound to the entry callable |
-| `kind` | yes | `"module"` |
-| `files` | yes | Map from relative paths to UTF-8 text |
-| `entry` | no | `"<path>:<attribute>"`; defaults to `"main.py:main"` |
+`files` maps relative POSIX paths to UTF-8 text. Paths contain no empty, `.`, or
+`..` segments and no NUL or `:`. `entry` has the form `"<path>:<attribute>"`,
+defaults to `"main.py:main"`, and must name a callable in `files`.
 
-Files are materialized in a private directory and loaded through Python's normal
-import machinery. Paths use `/`, are relative, contain no empty, `.`, or `..`
-segments, and contain no NUL or `:`. `entry` must name a file in `files` and a
-callable attribute in that module.
-
-#### Tensor
+### Tensor
 
 ```json
 {
   "op": "upload",
   "id": "input",
   "kind": "tensor",
-  "blob": "81d4...<64 lowercase hexadecimal characters>",
+  "blob": "<sha256>",
   "dtype": "float16",
   "shape": [32, 128]
 }
 ```
 
-| Field | Required | Description |
-|---|---:|---|
-| `op` | yes | `"upload"` |
-| `id` | yes | Handle bound to the GPU tensor |
-| `kind` | yes | `"tensor"` |
-| `blob` | yes | SHA-256 of the raw tensor bytes |
-| `dtype` | yes | Tensor data type |
-| `shape` | yes | Row-major tensor shape |
+`blob` names raw contiguous row-major bytes. Their length must equal
+`product(shape) * dtype.itemsize`. The tensor is copied to the assigned GPU.
 
-The blob contains contiguous row-major bytes and is copied to the worker's
-assigned GPU. Its byte length must equal `product(shape) * dtype.itemsize`.
+### Fields
 
-#### Tensor blob cache
+| Field | Kinds | Notes |
+|---|---|---|
+| `op` | all | `"upload"` |
+| `id` | all | Unique handle name |
+| `kind` | all | `"module"` or `"tensor"` |
+| `files` | module | Source path to text mapping |
+| `entry` | module | Optional entry callable |
+| `blob` | tensor | SHA-256 of raw tensor bytes |
+| `dtype` | tensor | Tensor data type |
+| `shape` | tensor | Tensor shape |
 
-The server verifies every supplied blob against its part name and caches it by
-hash. A tensor may reference a cached blob without including its multipart part.
+### Tensor blob cache
 
-If any referenced tensor blob is absent, the program does not run:
+The server verifies supplied blobs against their part names and caches them by
+hash. A tensor may reference a cached blob without supplying its multipart part.
+If any blob is missing, the program does not run:
 
 ```json
 {
   "status": "CACHE_MISS",
   "request_id": "7f61b94e-034a-4e80-b67d-eca52bb952cc",
-  "missing_blobs": [
-    "81d4...<64 lowercase hexadecimal characters>"
-  ]
+  "missing_blobs": ["<sha256>"]
 }
 ```
 
-The client may resend the same program with parts for the missing hashes.
-Malformed names, duplicate parts, hash mismatches, and unreferenced parts are
-invalid requests.
+The client resends the program with the missing parts. Malformed names,
+duplicates, hash mismatches, and unreferenced parts are invalid requests.
 
-### `run`
+---
+
+## `run`
+
+Calls a function over earlier values and binds its result to a handle.
 
 ```json
 {
   "op": "run",
   "id": "compiled",
   "fn": "builtin.compile_tirx",
-  "args": [
-    {"$ref": "kernel"},
-    {"N": 256}
-  ]
+  "args": [{"$ref": "kernel"}, {"N": 256}]
 }
 ```
 
-```json
-{
-  "op": "run",
-  "id": "output",
-  "fn": {"$ref": "compiled"},
-  "args": [
-    {"$ref": "input"},
-    {"$ref": "output_buffer"}
-  ]
-}
-```
-
-| Field | Required | Description |
-|---|---:|---|
-| `op` | yes | `"run"` |
-| `id` | yes | Handle bound to the call result |
-| `fn` | yes | Builtin name or reference to a callable handle |
-| `args` | no | Positional arguments; defaults to `[]` |
-
-An argument equal to `{"$ref": "<id>"}` resolves to that handle. Other JSON
-values are passed as literals. Call results remain server-side until selected by
-a `return` instruction.
-
-#### Builtins
-
-| `fn` | Arguments | Result |
+| Field | Type | Notes |
 |---|---|---|
-| `builtin.randn` | `{shape, dtype, seed?}` | Random tensor |
-| `builtin.empty` | `{shape, dtype}` | Uninitialized tensor |
-| `builtin.zeros` | `{shape, dtype}` | Zero tensor |
-| `builtin.compile_tirx` | `(kernel, bindings?)` | Compiled callable module |
-| `builtin.benchmark` | `(module, *tensors, config?)` | Timing statistics |
-| `builtin.check_close` | `(actual, expected, config?)` | Comparison statistics |
-| `builtin.assert_close` | `(actual, expected, config?)` | Comparison statistics; fails the program on mismatch |
+| `op` | string | `"run"` |
+| `id` | string | Handle for the result |
+| `fn` | string \| `{"$ref": id}` | Builtin name or callable handle |
+| `args` | array | Optional; defaults to `[]` |
 
-`compile_tirx` accepts an uploaded `@T.jit` or `@T.prim_func`. Its optional
-bindings map `T.constexpr` names to values.
+Each argument equal to `{"$ref": "<id>"}` resolves to that handle. Other JSON
+values are passed as literals.
 
-`benchmark` accepts:
+### Builtins
 
-```json
-{
-  "warmup_ms": 25,
-  "repeat_ms": 100,
-  "warmup": 10,
-  "repeat": 50,
-  "flush_l2": true
-}
-```
+| `fn` | Arguments | Returns |
+|---|---|---|
+| `builtin.randn` | `spec = {shape, dtype, seed?}` | a random tensor |
+| `builtin.empty` | `spec = {shape, dtype}` | an uninitialized tensor |
+| `builtin.zeros` | `spec = {shape, dtype}` | a zero tensor |
+| `builtin.compile_tirx` | `(kernel, bindings?)` — `bindings` binds `T.constexpr` dimensions | a compiled module |
+| `builtin.benchmark` | `(mod, *tensors, cfg?)` — `cfg = {warmup_ms?, repeat_ms?, warmup?, repeat?, flush_l2?}` | timing statistics |
+| `builtin.check_close` | `(actual, expected, cfg?)` — `cfg = {atol?, rtol?}` | comparison statistics |
+| `builtin.assert_close` | same as `check_close` | comparison statistics; fails on mismatch |
 
-Explicit `warmup` and `repeat` counts take precedence over time budgets. The
-result contains `latency_ms_median`, `latency_ms_mean`, `latency_ms_min`,
+`benchmark` returns `latency_ms_median`, `latency_ms_mean`, `latency_ms_min`,
 `latency_ms_max`, `flush_l2`, `warmup`, and `repeat`.
 
-`check_close` and `assert_close` accept `rtol` and `atol`. Their result contains
-`passed`, `max_abs_err`, `max_rel_err`, `rtol`, and `atol`.
+`check_close` and `assert_close` return `passed`, `max_abs_err`, `max_rel_err`,
+`rtol`, and `atol`.
 
-### `return`
+---
+
+## `return`
+
+Selects a handle for the response:
 
 ```json
 {
@@ -217,26 +165,29 @@ result contains `latency_ms_median`, `latency_ms_mean`, `latency_ms_min`,
 }
 ```
 
-| Field | Required | Description |
-|---|---:|---|
-| `op` | yes | `"return"` |
-| `key` | yes | Unique key in the response `results` object |
-| `value` | yes | Reference to an earlier handle |
+| Field | Type | Notes |
+|---|---|---|
+| `op` | string | `"return"` |
+| `key` | string | Unique key in the response `results` object |
+| `value` | `{"$ref": id}` | Earlier handle to return |
 
 `return` has no `id` and creates no handle. All `return` instructions follow the
-`upload` and `run` instructions. Values not selected by `return` are released at
-the end of the request.
+`upload` and `run` instructions.
+
+---
 
 ## Options
 
-| Field | Default | Description |
-|---|---:|---|
-| `timeout_seconds` | `300` | Worker execution deadline; maximum `3600` |
-| `output_limit_bytes` | `1048576` | Maximum bytes returned for each of stdout and stderr; `0` disables capture |
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `timeout_seconds` | number | `300` | Worker execution deadline; maximum `3600` |
+| `output_limit_bytes` | integer | `1048576` | Maximum bytes returned for each of stdout and stderr; `0` disables capture |
+
+---
 
 ## Response
 
-### Success
+For a successful program, HTTP status is `200`:
 
 ```json
 {
@@ -245,17 +196,10 @@ the end of the request.
   "queue_ms": 0.4,
   "elapsed_ms": 812.6,
   "results": {
-    "correctness": {
-      "type": "boolean",
-      "value": true
-    },
     "timing": {
       "type": "object",
       "value": {
-        "latency_ms_median": {
-          "type": "number",
-          "value": 0.0073
-        }
+        "latency_ms_median": {"type": "number", "value": 0.0073}
       }
     }
   },
@@ -266,14 +210,11 @@ the end of the request.
 }
 ```
 
-`results` contains only values selected by `return`. `queue_ms` measures the wait
-for a GPU worker. `elapsed_ms` measures execution and result serialization on the
-worker. Every response includes the same `request_id` in the `X-Request-ID`
-header.
+`results` contains only values selected by `return`. `request_id` is also sent
+in the `X-Request-ID` header. `queue_ms` is worker wait time; `elapsed_ms` is
+worker execution and result serialization time.
 
 ### Value encoding
-
-Every returned value is a recursively tagged node:
 
 | Type | Encoding |
 |---|---|
@@ -287,25 +228,23 @@ Every returned value is a recursively tagged node:
 | bytes | `{"type": "bytes", "part": "return:0", "sha256": "<sha256>"}` |
 | tensor | `{"type": "tensor", "dtype": "float16", "shape": [32, 128], "part": "return:0", "sha256": "<sha256>"}` |
 
-`array.value` and `object.value` recursively contain tagged values. Object keys
-are unique strings and have no ordering semantics. Integers and finite
-floating-point numbers are supported; non-finite numbers are rejected. Python
-lists and tuples both encode as `array`.
+Arrays and objects recursively contain encoded values. Object keys are unique
+strings with no ordering semantics. Numbers must be finite. Python lists and
+tuples both encode as `array`.
 
-If the value tree contains no `bytes` or `tensor`, the response uses
-`application/json`. Otherwise it uses `multipart/form-data`:
+If no `bytes` or `tensor` appears, the response is `application/json`. Otherwise
+it is `multipart/form-data`:
 
-| Part | Content type | Contents |
+| Part | Content type | Notes |
 |---|---|---|
-| `result` | `application/json` | Complete response metadata and value tree |
-| `return:<index>` | `application/octet-stream` | Raw bytes for one bytes or tensor node |
+| `result` | `application/json` | Response metadata and value tree |
+| `return:<index>` | `application/octet-stream` | Raw bytes for a bytes or tensor node |
 
-Binary parts are numbered in depth-first traversal order. Clients locate parts
-through the node's `part` field and verify their SHA-256. Tensor data is
-C-contiguous, row-major, and little-endian; its byte length must match `dtype`
-and `shape`.
+Binary parts use depth-first numbering. Clients use `part` to locate data and
+verify `sha256`. Tensor data is C-contiguous, row-major, and little-endian; its
+length must match `dtype` and `shape`.
 
-### Failure
+### Errors
 
 An instruction failure stops the program and returns no `results`:
 
@@ -321,9 +260,7 @@ An instruction failure stops the program and returns no `results`:
     "instruction_index": 6
   },
   "stdout": "",
-  "stderr": "",
-  "stdout_truncated": false,
-  "stderr_truncated": false
+  "stderr": ""
 }
 ```
 
@@ -335,7 +272,7 @@ Instruction error kinds are `parse`, `compile`, `runtime`, `correctness`,
 | 200 | `status: COMPLETED` | Program completed |
 | 200 | `status: FAILED` | An instruction failed |
 | 200 | `status: CACHE_MISS` | Tensor blobs are missing; program did not run |
-| 400 | `status: ERROR` | Malformed request or invalid program |
+| 400 | `status: ERROR` | Malformed request or program |
 | 503 | `status: ERROR` | No worker is available; includes `Retry-After` |
 | 504 | `status: ERROR`, `error.kind: timeout` | Execution timed out |
 | 500 | `status: ERROR`, `error.kind: engine` | Worker or server failure |
@@ -346,17 +283,12 @@ Instruction error kinds are `parse`, `compile`, `runtime`, `correctness`,
 from benchmark_server import Client, Program
 
 program = Program()
-
 kernel = program.upload(
     id="kernel",
     kind="module",
     files={"main.py": kernel_source},
 )
-input_tensor = program.upload(
-    id="input",
-    kind="tensor",
-    value=input_array,
-)
+input_tensor = program.upload(id="input", kind="tensor", value=input_array)
 output = program.run(
     id="output",
     fn="builtin.empty",
@@ -367,18 +299,13 @@ compiled = program.run(
     fn="builtin.compile_tirx",
     args=[kernel, {"N": 256}],
 )
-program.run(
-    id="invoke",
-    fn=compiled,
-    args=[input_tensor, output],
-)
+program.run(id="invoke", fn=compiled, args=[input_tensor, output])
 timing = program.run(
     id="timing",
     fn="builtin.benchmark",
     args=[compiled, input_tensor, output, {"warmup": 10, "repeat": 50}],
 )
 program.return_(key="timing", value=timing)
-program.return_(key="output", value=output)
 
 with Client("http://server:8000") as client:
     result = client.execute(program, timeout_seconds=120)
@@ -386,8 +313,6 @@ with Client("http://server:8000") as client:
 print(result.results["timing"])
 print(result.stdout, result.stderr)
 ```
-
-The public interface is:
 
 ```python
 Program.upload(id=..., kind="module", files=..., entry="main.py:main") -> Register
@@ -397,35 +322,11 @@ Program.return_(key=..., value=...) -> None
 
 Client(base_url, *, headers=None, connect_timeout_seconds=10)
 Client.execute(program, *, timeout_seconds=None, output_limit_bytes=None) -> ProgramResult
-Client.health() -> Health
+Client.health()
 Client.close() -> None
 ```
 
-For tensor uploads, the client derives `blob`, `dtype`, and `shape` from `value`;
-raw bytes require explicit `dtype` and `shape`. The client sends the program
-without tensor parts first, then retries once with only `missing_blobs` after a
-`CACHE_MISS`.
-
-`ProgramResult` exposes `status`, `request_id`, `queue_ms`, `elapsed_ms`,
-`results`, `stdout`, `stderr`, `stdout_truncated`, `stderr_truncated`, and
-`error`. Values decode to `None`, `bool`, `int`, `float`, `str`, `list`, `dict`,
-`bytes`, or a CPU `tvm_ffi.Tensor`.
-
-Non-200 server responses raise `BenchmarkServerError`. Transport failures raise
-`TransportError`. Malformed responses raise `ProtocolError`.
-
-## Health
-
-`GET /health` returns:
-
-```json
-{
-  "status": "ok",
-  "gpu_count": 2,
-  "queue_length": 0,
-  "workers": [
-    {"gpu_id": 0, "status": "idle", "uptime_seconds": 3600.0},
-    {"gpu_id": 1, "status": "busy", "uptime_seconds": 3592.4}
-  ]
-}
-```
+For tensors, the client derives `blob`, `dtype`, and `shape` from `value`, retries
+one `CACHE_MISS` with the missing parts, and decodes returned tensors to CPU
+`tvm_ffi.Tensor`. Server errors, transport failures, and malformed responses use
+`BenchmarkServerError`, `TransportError`, and `ProtocolError`.
