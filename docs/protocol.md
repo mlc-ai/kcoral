@@ -300,6 +300,65 @@ Instruction error kinds are `parse`, `compile`, `runtime`, `correctness`,
 | 504 | `status: ERROR`, `error.kind: timeout` | Execution timed out |
 | 500 | `status: ERROR`, `error.kind: engine` | Worker or server failure |
 
+---
+
+## Example
+
+```json
+{
+  "instructions": [
+    {
+      "op": "upload",
+      "id": "kernel",
+      "kind": "module",
+      "files": {"main.py": "<TIRx source defining main>"}
+    },
+    {
+      "op": "upload",
+      "id": "input",
+      "kind": "tensor",
+      "blob": "<input_sha256>",
+      "dtype": "float32",
+      "shape": [256]
+    },
+    {
+      "op": "run",
+      "id": "output",
+      "fn": "builtin.empty",
+      "args": [{"shape": [256], "dtype": "float32"}]
+    },
+    {
+      "op": "run",
+      "id": "compiled",
+      "fn": "builtin.compile_tirx",
+      "args": [{"$ref": "kernel"}, {"N": 256}]
+    },
+    {
+      "op": "run",
+      "id": "invoke",
+      "fn": {"$ref": "compiled"},
+      "args": [{"$ref": "input"}, {"$ref": "output"}]
+    },
+    {
+      "op": "run",
+      "id": "timing",
+      "fn": "builtin.benchmark",
+      "args": [
+        {"$ref": "compiled"},
+        {"$ref": "input"},
+        {"$ref": "output"},
+        {"warmup": 10, "repeat": 50}
+      ]
+    },
+    {"op": "return", "key": "timing", "value": {"$ref": "timing"}},
+    {"op": "return", "key": "output", "value": {"$ref": "output"}}
+  ],
+  "options": {"timeout_seconds": 120}
+}
+```
+
+The multipart request includes `blob:<input_sha256>` with the raw input tensor.
+
 ## Python client
 
 ```python
