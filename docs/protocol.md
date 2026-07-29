@@ -34,6 +34,29 @@ The `program` part is:
 | `instructions` | array | yes | Non-empty, executed top to bottom |
 | `options` | object | no | See [Options](#options) |
 
+Example multipart request:
+
+```http
+POST /execute HTTP/1.1
+Host: server:8000
+Content-Type: multipart/form-data; boundary=benchmark-boundary
+
+--benchmark-boundary
+Content-Disposition: form-data; name="program"
+Content-Type: application/json
+
+{"instructions":[{"op":"upload","id":"input","kind":"tensor","blob":"<input_sha256>","dtype":"float32","shape":[256]},{"op":"return","key":"input","value":{"$ref":"input"}}]}
+--benchmark-boundary
+Content-Disposition: form-data; name="blob:<input_sha256>"
+Content-Type: application/octet-stream
+
+<raw tensor bytes>
+--benchmark-boundary--
+```
+
+The boundary is client-generated. `<input_sha256>` is the full SHA-256 of the
+raw tensor bytes.
+
 Each `upload` and `run` has a unique string `id`. A reference has the exact form
 `{"$ref": "<id>"}` and must point to an earlier instruction.
 
