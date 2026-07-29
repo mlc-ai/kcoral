@@ -343,10 +343,12 @@ Instruction error kinds are `parse`, `compile`, `runtime`, `correctness`,
 | 200 | `status: COMPLETED` | Program completed |
 | 200 | `status: FAILED` | An instruction failed |
 | 200 | `status: CACHE_MISS` | Tensor blobs are missing; program did not run |
-| 400 | `status: ERROR` | Malformed request or program |
+| 400 | `status: ERROR` | Malformed request or program, including duplicate JSON keys and NaN/Infinity |
+| 413 | `status: ERROR` | Request body exceeds the server's size limit |
 | 503 | `status: ERROR` | No worker is available; includes `Retry-After` |
 | 504 | `status: ERROR`, `error.kind: timeout` | Execution timed out |
 | 500 | `status: ERROR`, `error.kind: engine` | Worker or server failure |
+| 500 | `status: ERROR`, `error.kind: response_too_large` | Results exceed the server's response-size limit |
 
 ---
 
