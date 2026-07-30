@@ -43,7 +43,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.cache = ByteCache(config.cache_capacity_bytes, config.cache_dir)
+        app.state.cache = ByteCache(config.cache_capacity_bytes)
         app.state.pool = WorkerPool(
             config.gpus, runtime_factory, config.worker_termination_grace_seconds
         )
@@ -53,7 +53,6 @@ def create_app(
             yield
         finally:
             app.state.pool.shutdown()
-            app.state.cache.close()
             app.state.events.emit("server_stopped")
             app.state.events.close()
 
@@ -226,13 +225,8 @@ def _resolve_uploads(program: Program, cache: ByteCache) -> list[str]:
     keys: list[str] = []
     for up in program.uploads():
         if up.inline is not None:
-            # Use the verified inline bytes directly; caching them is a
-            # best-effort optimization (the cache may decline, e.g. a blob
-            # bigger than its per-object cap).
-            data = verify_key(up.key, up.kind, up.inline)
-            cache.put(up.key, data)
-        else:
-            data = cache.get(up.key)
+            cache.put(up.key, verify_key(up.key, up.kind, up.inline))
+        data = cache.get(up.key)
         if data is None:
             missing.append(up.key)
         else:

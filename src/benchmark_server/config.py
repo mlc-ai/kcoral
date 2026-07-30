@@ -11,7 +11,6 @@ class ServerConfig:
     gpus: list[int] = field(default_factory=lambda: [0])
     log_dir: Path | None = None  # structured event logs; None disables logging
     cache_capacity_bytes: int = 16 * 1024**3  # 16 GB byte cache
-    cache_dir: Path | None = None  # on-disk cache location; None = private temp dir
     default_timeout_seconds: float = 300.0  # per-request execution timeout
     max_timeout_seconds: float = 3600.0
     worker_wait_timeout_seconds: float = 30.0  # wait for a free worker before 503

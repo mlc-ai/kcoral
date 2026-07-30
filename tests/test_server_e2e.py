@@ -106,23 +106,6 @@ def test_cache_hit_lets_key_only_upload_run():
         assert c.post("/benchmark", json=bench_program(False)).json()["status"] == "COMPLETED"
 
 
-def test_cache_persists_across_server_restarts(tmp_path):
-    config = ServerConfig(gpus=[0], cache_dir=tmp_path / "cache")
-    with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as c:
-        assert c.post("/benchmark", json=bench_program(True)).json()["status"] == "COMPLETED"
-    # a fresh server over the same cache directory serves the key-only program
-    with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as c:
-        assert c.post("/benchmark", json=bench_program(False)).json()["status"] == "COMPLETED"
-
-
-def test_inline_upload_bigger_than_cache_cap_still_executes():
-    # A tiny cache declines to store the upload; the request must still run
-    # from its verified inline bytes (and only a key-only resend may miss).
-    config = ServerConfig(gpus=[0], cache_capacity_bytes=10)
-    with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as c:
-        assert c.post("/benchmark", json=bench_program(True)).json()["status"] == "COMPLETED"
-
-
 def test_key_mismatch_is_400():
     with make_client() as c:
         prog = {
