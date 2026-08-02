@@ -1,89 +1,178 @@
-"""The instruction engine: run a Program over a runtime, produce results.
-
-Straight-line dataflow: instructions execute in order, threading handles through
-an environment. A failed instruction stops execution; the rest are recorded as
-SKIPPED (never omitted). This runs inside the worker process; the runtime is the
-only thing that touches the GPU.
-
-Each instruction's stdout/stderr is captured at the file-descriptor level (so
-output from C extensions and CUDA kernel printf is included) and attached to its
-result, truncated to ``options.output_limit_bytes``.
-"""
+"""Execute a validated program inside one GPU worker."""
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import IO, Any, Protocol
 
 from .errors import ExecutionError
-from .schemas import Program, Result, is_ref, to_structural
+from .keys import compute_blob_hash
+from .schemas import DTYPE_ITEM_SIZES, Program, Return, Run, Upload, expected_tensor_nbytes, is_ref
 
-# Used when the front-end did not resolve an explicit limit into the options.
 DEFAULT_OUTPUT_LIMIT_BYTES = 1024**2
 
 
 class Runtime(Protocol):
-    """What the engine needs of a runtime (structural — no inheritance required)."""
-
-    def materialize(self, kind: str, data: bytes) -> Any: ...
+    def load_module(self, source: str) -> Any: ...
+    def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any: ...
+    def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None: ...
     def builtin(self, name: str) -> Callable: ...
     def reset(self) -> None: ...
 
 
-def execute(program: Program, runtime: Runtime) -> list[Result]:
-    """Run ``program`` over ``runtime``. ``program.upload_bytes`` must already hold
-    each upload's resolved canonical bytes (the front-end fills it before dispatch)."""
+@dataclass
+class ExecutionOutcome:
+    status: str
+    results: dict[str, dict[str, Any]] = field(default_factory=dict)
+    error: dict[str, Any] | None = None
+    binary_parts: dict[str, bytes] = field(default_factory=dict)
+    stdout: str = ""
+    stderr: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+
+
+def execute(program: Program, runtime: Runtime) -> ExecutionOutcome:
+    """Run a program and serialize only values selected by return instructions."""
     env: dict[str, Any] = {}
-    results: list[Result] = []
-    failed = False
-    output_limit_bytes = _output_limit(program)
+    results: dict[str, dict[str, Any]] = {}
+    encoder = _ValueEncoder(runtime)
+    error: dict[str, Any] | None = None
+    current_index: int | None = None
+    captured = CapturedOutput()
     try:
-        for ins in program.instructions:
-            if failed:
-                results.append(
-                    Result(ins.id, ins.op, "SKIPPED", error={"reason": "predecessor_failed"})
-                )
-                continue
-            with _capture_output(output_limit_bytes) as captured:
-                try:
-                    if ins.op == "upload":
-                        env[ins.id] = runtime.materialize(ins.kind, program.upload_bytes[ins.id])
-                        result = Result(ins.id, "upload", "OK")
-                    else:  # run
-                        fn = _resolve_fn(ins.fn, env, runtime)
-                        args = [env[a["$ref"]] if is_ref(a) else a for a in ins.args]
-                        value = fn(*args)
-                        env[ins.id] = value
-                        result = Result(ins.id, "run", "OK", value=to_structural(value, ins.id))
-                except ExecutionError as exc:
-                    err = {"kind": exc.kind, "message": exc.message}
-                    result = Result(ins.id, ins.op, "FAILED", error=err)
-                    failed = True
-                except Exception as exc:  # engine fault — reported, doesn't crash the worker
-                    err = {"kind": "engine", "message": f"{type(exc).__name__}: {exc}"}
-                    result = Result(ins.id, ins.op, "FAILED", error=err)
-                    failed = True
-            result.stdout = captured.stdout
-            result.stderr = captured.stderr
-            result.stdout_truncated = captured.stdout_truncated
-            result.stderr_truncated = captured.stderr_truncated
-            results.append(result)
+        with _capture_output(_output_limit(program)) as captured:
+            try:
+                for current_index, instruction in enumerate(program.instructions):
+                    if isinstance(instruction, Upload):
+                        if instruction.kind == "module":
+                            assert instruction.source is not None
+                            env[instruction.id] = runtime.load_module(instruction.source)
+                        else:
+                            assert (
+                                instruction.blob is not None
+                                and instruction.dtype is not None
+                                and instruction.shape is not None
+                            )
+                            env[instruction.id] = runtime.load_tensor(
+                                program.blob_bytes[instruction.blob],
+                                instruction.dtype,
+                                instruction.shape,
+                            )
+                    elif isinstance(instruction, Run):
+                        fn = _resolve_fn(instruction.fn, env, runtime)
+                        args = [
+                            env[arg["$ref"]] if is_ref(arg) else arg for arg in instruction.args
+                        ]
+                        env[instruction.id] = fn(*args)
+                    elif isinstance(instruction, Return):
+                        results[instruction.key] = encoder.encode(env[instruction.value["$ref"]])
+            except ExecutionError as exc:
+                error = {
+                    "kind": exc.kind,
+                    "message": exc.message,
+                    "instruction_index": current_index,
+                }
+            except Exception as exc:
+                error = {
+                    "kind": "engine",
+                    "message": f"{type(exc).__name__}: {exc}",
+                    "instruction_index": current_index,
+                }
     finally:
         runtime.reset()
-    return results
+
+    if error is not None:
+        results = {}
+        encoder.binary_parts.clear()
+    return ExecutionOutcome(
+        status="FAILED" if error is not None else "COMPLETED",
+        results=results,
+        error=error,
+        binary_parts=encoder.binary_parts,
+        stdout=captured.stdout,
+        stderr=captured.stderr,
+        stdout_truncated=captured.stdout_truncated,
+        stderr_truncated=captured.stderr_truncated,
+    )
+
+
+class _ValueEncoder:
+    def __init__(self, runtime: Runtime) -> None:
+        self._runtime = runtime
+        self.binary_parts: dict[str, bytes] = {}
+
+    def encode(self, value: Any) -> dict[str, Any]:
+        if value is None:
+            return {"type": "null"}
+        if isinstance(value, bool):
+            return {"type": "boolean", "value": value}
+        if isinstance(value, int):
+            return {"type": "integer", "value": value}
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ExecutionError("serialization", "cannot return a non-finite number")
+            return {"type": "number", "value": value}
+        if isinstance(value, str):
+            return {"type": "string", "value": value}
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return self._binary_value("bytes", bytes(value))
+        if isinstance(value, (list, tuple)):
+            return {"type": "array", "value": [self.encode(child) for child in value]}
+        if isinstance(value, dict):
+            if not all(isinstance(key, str) for key in value):
+                raise ExecutionError("serialization", "returned objects must have string keys")
+            return {
+                "type": "object",
+                "value": {key: self.encode(child) for key, child in value.items()},
+            }
+
+        try:
+            tensor = self._runtime.export_tensor(value)
+        except Exception as exc:
+            raise ExecutionError(
+                "serialization", f"failed to export tensor: {type(exc).__name__}: {exc}"
+            ) from exc
+        if tensor is not None:
+            dtype, shape, data = tensor
+            if not isinstance(dtype, str) or dtype not in DTYPE_ITEM_SIZES:
+                raise ExecutionError("serialization", f"cannot return tensor dtype {dtype!r}")
+            if not isinstance(shape, list) or any(
+                isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 0
+                for dimension in shape
+            ):
+                raise ExecutionError("serialization", "returned tensor has an invalid shape")
+            if not isinstance(data, bytes):
+                raise ExecutionError("serialization", "returned tensor data must be bytes")
+            expected_size = expected_tensor_nbytes(dtype, shape)
+            if len(data) != expected_size:
+                raise ExecutionError(
+                    "serialization",
+                    f"returned tensor metadata expects {expected_size} bytes, got {len(data)}",
+                )
+            encoded = self._binary_value("tensor", data)
+            encoded.update({"dtype": dtype, "shape": shape})
+            return encoded
+        raise ExecutionError("serialization", f"cannot return value of type {type(value).__name__}")
+
+    def _binary_value(self, value_type: str, data: bytes) -> dict[str, Any]:
+        part_name = f"return:{len(self.binary_parts)}"
+        self.binary_parts[part_name] = data
+        return {
+            "type": value_type,
+            "part": part_name,
+            "sha256": compute_blob_hash(data),
+        }
 
 
 def _output_limit(program: Program) -> int:
-    limit = program.options.get("output_limit_bytes", DEFAULT_OUTPUT_LIMIT_BYTES)
-    try:
-        return int(limit)
-    except (TypeError, ValueError):
-        return DEFAULT_OUTPUT_LIMIT_BYTES
+    return int(program.options.get("output_limit_bytes", DEFAULT_OUTPUT_LIMIT_BYTES))
 
 
 @dataclass
@@ -96,13 +185,7 @@ class CapturedOutput:
 
 @contextmanager
 def _capture_output(limit_bytes: int) -> Iterator[CapturedOutput]:
-    """Capture what the block writes to stdout/stderr, truncated to ``limit_bytes``.
-
-    The capture swaps the process-level file descriptors (1 and 2), so output from
-    C extensions and CUDA kernel printf is included, not just Python-level prints.
-    A non-positive limit disables capture. This runs inside the worker process,
-    which serves one program at a time, so swapping process-wide state is safe.
-    """
+    """Capture process-level stdout and stderr for the complete request."""
     captured = CapturedOutput()
     if limit_bytes <= 0:
         yield captured
@@ -115,8 +198,6 @@ def _capture_output(limit_bytes: int) -> Iterator[CapturedOutput]:
         saved_sys_stdout, saved_sys_stderr = sys.stdout, sys.stderr
         os.dup2(stdout_file.fileno(), 1)
         os.dup2(stderr_file.fileno(), 2)
-        # Rebind the Python-level streams too, in case the hosting process (e.g.
-        # a test runner) replaced sys.stdout with an object not backed by fd 1.
         sys.stdout = _stream_over(stdout_file)
         sys.stderr = _stream_over(stderr_file)
         try:
@@ -143,14 +224,13 @@ def _stream_over(file: IO[bytes]) -> IO[str]:
 def _read_captured(file: IO[bytes], limit_bytes: int) -> tuple[str, bool]:
     file.seek(0)
     data = file.read(limit_bytes + 1)
-    truncated = len(data) > limit_bytes
-    return data[:limit_bytes].decode("utf-8", errors="replace"), truncated
+    return data[:limit_bytes].decode("utf-8", errors="replace"), len(data) > limit_bytes
 
 
-def _resolve_fn(fn: Any, env: dict, runtime: Runtime) -> Callable:
+def _resolve_fn(fn: Any, env: dict[str, Any], runtime: Runtime) -> Callable:
     if is_ref(fn):
         obj = env[fn["$ref"]]
         if not callable(obj):
             raise ExecutionError("runtime", f"handle {fn['$ref']!r} is not callable")
         return obj
-    return runtime.builtin(fn)  # a builtin name
+    return runtime.builtin(fn)

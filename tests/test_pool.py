@@ -4,7 +4,7 @@ import time
 import pytest
 
 from benchmark_server.pool import PoolBusy, WorkerPool
-from benchmark_server.schemas import Program, Run
+from benchmark_server.schemas import Program, Return, Run
 from benchmark_server.testing import fake_runtime_factory
 from benchmark_server.worker import WorkerCrashed, WorkerTimeout
 
@@ -14,7 +14,11 @@ def prog(*instrs):
 
 
 def op(id="x"):
-    return Run(id, "builtin.opaque", [])
+    return Run(id, "builtin.structural", [])
+
+
+def successful_program():
+    return prog(op(), Return("value", {"$ref": "x"}))
 
 
 @pytest.fixture
@@ -25,8 +29,9 @@ def pool():
 
 
 def test_pool_runs_a_program(pool):
-    outcome = pool.submit(prog(op()), timeout=10)
-    assert outcome.results[0].status == "OK" and outcome.results[0].value == {"handle": "x"}
+    outcome = pool.submit(successful_program(), timeout=10)
+    assert outcome.execution.status == "COMPLETED"
+    assert outcome.execution.results["value"]["type"] == "object"
     assert outcome.gpu_id == 0
     assert outcome.queue_ms >= 0 and outcome.elapsed_ms >= 0
 
@@ -36,18 +41,18 @@ def test_crash_replaces_worker_and_recovers(pool):
         pool.submit(prog(Run("boom", "builtin.crash", [])), timeout=10)
     assert exc_info.value.gpu_id == 0 and exc_info.value.elapsed_ms >= 0
     # worker was respawned; the next request succeeds on the fresh worker
-    assert pool.submit(prog(op()), timeout=10).results[0].status == "OK"
+    assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
 
 
 def test_timeout_kills_and_replaces_worker(pool):
     with pytest.raises(WorkerTimeout) as exc_info:
         pool.submit(prog(Run("s", "builtin.sleep", [5.0])), timeout=0.5)
     assert exc_info.value.gpu_id == 0 and exc_info.value.elapsed_ms >= 500
-    assert pool.submit(prog(op()), timeout=10).results[0].status == "OK"
+    assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
 
 
 def test_health_reports_idle_workers(pool):
-    pool.submit(prog(op()), timeout=10)
+    pool.submit(successful_program(), timeout=10)
     health = pool.health()
     assert health["queue_length"] == 0
     assert health["workers"] == [

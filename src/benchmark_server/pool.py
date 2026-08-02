@@ -1,9 +1,9 @@
 """Worker pool: one worker per GPU, idle-worker assignment, backpressure.
 
 `submit` blocks (call it from a thread), acquires an idle worker, runs the
-program, and returns a :class:`SubmitOutcome` — the results plus which GPU ran
-the program and the queue/execution timings. The worker returns to the idle set
-respawned already if it crashed or timed out; the raised
+program, and returns a :class:`SubmitOutcome` - the execution outcome, the GPU
+that ran the program, and the queue/execution timings. The worker returns to the
+idle set respawned already if it crashed or timed out; the raised
 :class:`WorkerTimeout` / :class:`WorkerCrashed` carries the same attribution
 (``gpu_id``, ``queue_ms``, ``elapsed_ms``). When no worker becomes free within
 ``worker_wait_timeout`` it raises :class:`PoolBusy` (the front-end maps that to
@@ -29,7 +29,7 @@ class PoolBusy(Exception):
 
 @dataclass
 class SubmitOutcome:
-    results: list
+    execution: object
     gpu_id: int
     queue_ms: float
     elapsed_ms: float
@@ -73,9 +73,9 @@ class WorkerPool:
             self._busy_gpu_ids.add(worker.gpu_id)
         run_started = time.monotonic()
         try:
-            results = worker.run(program, timeout)
+            execution = worker.run(program, timeout)
             elapsed_ms = (time.monotonic() - run_started) * 1000
-            return SubmitOutcome(results, worker.gpu_id, queue_ms, elapsed_ms)
+            return SubmitOutcome(execution, worker.gpu_id, queue_ms, elapsed_ms)
         except (WorkerTimeout, WorkerCrashed) as exc:
             exc.gpu_id = worker.gpu_id
             exc.queue_ms = queue_ms

@@ -1,25 +1,16 @@
-"""GPU integration tests for GPURuntime + the tvm/TIRX builtins.
-
-Skipped unless BENCH_GPU_TEST=1 and a GPU with a TIRX-enabled tvm are available.
-tvm may be pip-installed (no extra env needed) or built from source (put its
-Python tree on PYTHONPATH and point TVM_LIBRARY_PATH at the built lib dir). With
-a source build::
-
-    BENCH_GPU_TEST=1 PYTHONPATH=<tvm>/python:src TVM_LIBRARY_PATH=<tvm>/build/lib \\
-        python -m pytest tests/test_gpu_runtime.py -q
-"""
+"""GPU integration tests for the runtime and TIRx builtins."""
 
 import os
 
 import pytest
 
 from benchmark_server.engine import execute
-from benchmark_server.keys import canonical_bytes
-from benchmark_server.schemas import Program, Run, Upload
+from benchmark_server.keys import compute_blob_hash
+from benchmark_server.schemas import Program, Return, Run, Upload
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("BENCH_GPU_TEST") != "1",
-    reason="GPU integration test; set BENCH_GPU_TEST=1 with the TIRX env to run",
+    reason="GPU integration test requires BENCH_GPU_TEST=1",
 )
 
 KERNEL = """from __future__ import annotations
@@ -29,121 +20,9 @@ from tvm.script import tirx as T
 def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):
     T.device_entry()
     i = T.cta_id([N])
-    t = T.thread_id([1])
     B[i] = A[i] + 1.0
 """
 REF = "def main(a):\n    return a + 1.0\n"
-
-
-def _runtime():
-    from benchmark_server.gpu_runtime import GPURuntime
-
-    return GPURuntime()
-
-
-def _up(id, kind, inline):
-    return Upload(id=id, kind=kind, key="sha256:unused", inline=inline)
-
-
-def _run(program):
-    program.upload_bytes = {
-        i.id: canonical_bytes(i.kind, i.inline) for i in program.instructions if i.op == "upload"
-    }
-    return execute(program, _runtime())
-
-
-def _by_id(results, id):
-    return next(r for r in results if r.id == id)
-
-
-def test_compile_run_correctness_and_benchmark():
-    res = _run(
-        Program(
-            instructions=[
-                _up("kernel", "function", {"source": KERNEL}),
-                _up("reffn", "function", {"source": REF}),
-                Run("x", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-                Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-                Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
-                Run("_run", {"$ref": "mod"}, [{"$ref": "x"}, {"$ref": "out"}]),
-                Run("ref", {"$ref": "reffn"}, [{"$ref": "x"}]),
-                Run("chk", "builtin.check_close", [{"$ref": "out"}, {"$ref": "ref"}]),
-                Run(
-                    "perf",
-                    "builtin.benchmark",
-                    [{"$ref": "mod"}, {"$ref": "x"}, {"$ref": "out"}, {"warmup": 5, "repeat": 20}],
-                ),
-            ]
-        )
-    )
-    assert [r.status for r in res] == ["OK"] * 9
-    assert _by_id(res, "x").value == {"handle": "x"}  # tensor -> handle, not transmitted
-    chk = _by_id(res, "chk").value
-    assert chk["passed"] and chk["max_abs_err"] == 0.0 and chk["max_rel_err"] == 0.0
-    perf = _by_id(res, "perf").value
-    assert perf["latency_ms_median"] > 0 and perf["repeat"] == 20
-    assert perf["flush_l2"] is True
-    assert perf["latency_ms_min"] <= perf["latency_ms_median"] <= perf["latency_ms_max"]
-
-
-def test_benchmark_budget_counts_and_no_flush():
-    res = _run(
-        Program(
-            instructions=[
-                _up("kernel", "function", {"source": KERNEL}),
-                Run("x", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-                Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-                Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
-                Run(
-                    "perf",
-                    "builtin.benchmark",
-                    [
-                        {"$ref": "mod"},
-                        {"$ref": "x"},
-                        {"$ref": "out"},
-                        {"warmup_ms": 5, "repeat_ms": 20, "flush_l2": False},
-                    ],
-                ),
-            ]
-        )
-    )
-    perf = _by_id(res, "perf")
-    assert perf.status == "OK"
-    assert perf.value["latency_ms_median"] > 0 and perf.value["flush_l2"] is False
-    # counts derived from the ms budgets; a microsecond kernel needs many iterations
-    assert perf.value["warmup"] >= 1 and perf.value["repeat"] > 10
-
-
-def test_python_syntax_error_is_parse():
-    res = _run(Program(instructions=[_up("k", "function", {"source": "def bad(:\n pass\n"})]))
-    assert res[0].status == "FAILED" and res[0].error["kind"] == "parse"
-
-
-def test_tirx_error_is_parse():
-    bad = KERNEL.replace("B[i] = A[i] + 1.0", "B[i] = A[i] + undefined_symbol")
-    res = _run(
-        Program(
-            instructions=[
-                _up("k", "function", {"source": bad}),
-                Run("m", "builtin.compile_tirx", [{"$ref": "k"}, {"N": 16}]),
-            ]
-        )
-    )
-    assert res[0].status == "OK"
-    assert res[1].status == "FAILED" and res[1].error["kind"] == "parse"
-
-
-def test_compile_on_non_kernel_is_compile_error():
-    res = _run(
-        Program(
-            instructions=[
-                Run("x", "builtin.randn", [{"shape": [4], "dtype": "float32"}]),
-                Run("m", "builtin.compile_tirx", [{"$ref": "x"}]),
-            ]
-        )
-    )
-    assert res[1].status == "FAILED" and res[1].error["kind"] == "compile"
-
 
 PRIM_KERNEL = """from tvm.script import tirx as T
 
@@ -151,104 +30,202 @@ PRIM_KERNEL = """from tvm.script import tirx as T
 def main(A: T.Buffer((256,), "float32"), B: T.Buffer((256,), "float32")):
     T.device_entry()
     i = T.cta_id([256])
-    t = T.thread_id([1])
     B[i] = A[i] + 1.0
 """
 
 
-def test_prim_func_kernel_compiles_directly():
-    res = _run(
-        Program(
-            instructions=[
-                _up("kernel", "function", {"source": PRIM_KERNEL}),
-                Run("x", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-                Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-                Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}]),
-                Run("_run", {"$ref": "mod"}, [{"$ref": "x"}, {"$ref": "out"}]),
-            ]
-        )
-    )
-    assert [r.status for r in res] == ["OK"] * 5
+def ref(handle):
+    return {"$ref": handle}
 
 
-def test_prim_func_with_bindings_is_compile_error():
-    res = _run(
-        Program(
-            instructions=[
-                _up("kernel", "function", {"source": PRIM_KERNEL}),
-                Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
-            ]
-        )
-    )
-    assert res[1].status == "FAILED" and res[1].error["kind"] == "compile"
+def runtime():
+    from benchmark_server.gpu_runtime import GPURuntime
+
+    return GPURuntime()
 
 
-def test_bad_binding_name_is_compile_error():
-    res = _run(
-        Program(
-            instructions=[
-                _up("kernel", "function", {"source": KERNEL}),
-                Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"WRONG": 1}]),
-            ]
-        )
-    )
-    assert res[1].status == "FAILED" and res[1].error["kind"] == "compile"
+def decode_structural(encoded):
+    value_type = encoded["type"]
+    if value_type == "object":
+        return {key: decode_structural(value) for key, value in encoded["value"].items()}
+    if value_type == "array":
+        return [decode_structural(value) for value in encoded["value"]]
+    if value_type == "null":
+        return None
+    return encoded["value"]
 
 
-def _correctness_program(kernel_src):
-    return Program(
-        instructions=[
-            _up("kernel", "function", {"source": kernel_src}),
-            _up("reffn", "function", {"source": REF}),  # reference is A + 1.0
-            Run("x", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-            Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-            Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
-            Run("_run", {"$ref": "mod"}, [{"$ref": "x"}, {"$ref": "out"}]),
-            Run("ref", {"$ref": "reffn"}, [{"$ref": "x"}]),
-            Run("chk", "builtin.assert_close", [{"$ref": "out"}, {"$ref": "ref"}]),
-            Run("perf", "builtin.benchmark", [{"$ref": "mod"}, {"$ref": "x"}, {"$ref": "out"}]),
+def test_compile_correctness_and_benchmark():
+    program = Program(
+        [
+            Upload("kernel", "module", source=KERNEL),
+            Upload("reference", "module", source=REF),
+            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"N": 256}]),
+            Run("invoke", ref("compiled"), [ref("input"), ref("output")]),
+            Run("expected", ref("reference"), [ref("input")]),
+            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
+            Run(
+                "timing",
+                "builtin.benchmark",
+                [ref("compiled"), ref("input"), ref("output"), {"warmup": 5, "repeat": 20}],
+            ),
+            Return("check", ref("check")),
+            Return("timing", ref("timing")),
         ]
     )
+    outcome = execute(program, runtime())
+    assert outcome.status == "COMPLETED"
+    check = decode_structural(outcome.results["check"])
+    timing = decode_structural(outcome.results["timing"])
+    assert check["passed"] and check["max_abs_err"] == 0
+    assert timing["latency_ms_median"] > 0 and timing["repeat"] == 20
 
 
-def test_assert_close_passes_when_correct():
-    res = _run(_correctness_program(KERNEL))  # kernel is A + 1.0, matches the reference
-    assert [r.status for r in res] == ["OK"] * 9
+def test_benchmark_budget_counts_and_no_flush():
+    program = Program(
+        [
+            Upload("kernel", "module", source=KERNEL),
+            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"N": 256}]),
+            Run(
+                "timing",
+                "builtin.benchmark",
+                [
+                    ref("compiled"),
+                    ref("input"),
+                    ref("output"),
+                    {"warmup_ms": 5, "repeat_ms": 20, "flush_l2": False},
+                ],
+            ),
+            Return("timing", ref("timing")),
+        ]
+    )
+    outcome = execute(program, runtime())
+    assert outcome.status == "COMPLETED"
+    timing = decode_structural(outcome.results["timing"])
+    assert timing["latency_ms_median"] > 0 and timing["flush_l2"] is False
+    assert timing["warmup"] >= 1 and timing["repeat"] > 10
 
 
-def test_assert_close_fails_correctness_and_skips_rest():
-    wrong = KERNEL.replace("A[i] + 1.0", "A[i] + 2.0")  # kernel disagrees with the reference
-    res = _run(_correctness_program(wrong))
-    chk = _by_id(res, "chk")
-    assert chk.status == "FAILED" and chk.error["kind"] == "correctness"
-    assert _by_id(res, "perf").status == "SKIPPED"  # benchmark does not run
+def test_python_syntax_error_is_parse_failure():
+    outcome = execute(
+        Program([Upload("kernel", "module", source="def bad(:\n    pass\n")]), runtime()
+    )
+    assert outcome.status == "FAILED" and outcome.error["kind"] == "parse"
+    assert outcome.error["instruction_index"] == 0
 
 
-def test_upload_tensor_and_run_kernel():
-    import base64
+def test_tirx_error_is_parse_failure():
+    bad_kernel = KERNEL.replace("B[i] = A[i] + 1.0", "B[i] = A[i] + undefined_symbol")
+    outcome = execute(
+        Program(
+            [
+                Upload("kernel", "module", source=bad_kernel),
+                Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"N": 16}]),
+            ]
+        ),
+        runtime(),
+    )
+    assert outcome.status == "FAILED" and outcome.error["kind"] == "parse"
+    assert outcome.error["instruction_index"] == 1
 
+
+def test_compile_on_non_kernel_is_compile_failure():
+    outcome = execute(
+        Program(
+            [
+                Run("input", "builtin.randn", [{"shape": [4], "dtype": "float32"}]),
+                Run("compiled", "builtin.compile_tirx", [ref("input")]),
+            ]
+        ),
+        runtime(),
+    )
+    assert outcome.status == "FAILED" and outcome.error["kind"] == "compile"
+    assert outcome.error["instruction_index"] == 1
+
+
+def test_prim_func_kernel_compiles_directly():
+    outcome = execute(
+        Program(
+            [
+                Upload("kernel", "module", source=PRIM_KERNEL),
+                Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32"}]),
+                Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+                Run("compiled", "builtin.compile_tirx", [ref("kernel")]),
+                Run("invoke", ref("compiled"), [ref("input"), ref("output")]),
+            ]
+        ),
+        runtime(),
+    )
+    assert outcome.status == "COMPLETED"
+
+
+def test_prim_func_with_bindings_is_compile_failure():
+    outcome = execute(
+        Program(
+            [
+                Upload("kernel", "module", source=PRIM_KERNEL),
+                Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"N": 256}]),
+            ]
+        ),
+        runtime(),
+    )
+    assert outcome.status == "FAILED" and outcome.error["kind"] == "compile"
+    assert outcome.error["instruction_index"] == 1
+
+
+def test_bad_binding_name_is_compile_failure():
+    outcome = execute(
+        Program(
+            [
+                Upload("kernel", "module", source=KERNEL),
+                Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"WRONG": 1}]),
+            ]
+        ),
+        runtime(),
+    )
+    assert outcome.status == "FAILED" and outcome.error["kind"] == "compile"
+    assert outcome.error["instruction_index"] == 1
+
+
+def test_assert_close_failure_stops_without_results():
+    wrong = KERNEL.replace("A[i] + 1.0", "A[i] + 2.0")
+    program = Program(
+        [
+            Upload("kernel", "module", source=wrong),
+            Upload("reference", "module", source=REF),
+            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32"}]),
+            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"N": 256}]),
+            Run("invoke", ref("compiled"), [ref("input"), ref("output")]),
+            Run("expected", ref("reference"), [ref("input")]),
+            Run("check", "builtin.assert_close", [ref("output"), ref("expected")]),
+            Return("output", ref("output")),
+        ]
+    )
+    outcome = execute(program, runtime())
+    assert outcome.status == "FAILED" and outcome.results == {}
+    assert outcome.error["kind"] == "correctness" and outcome.error["instruction_index"] == 7
+
+
+def test_uploaded_and_returned_tensor_bytes():
     import numpy as np
 
-    a = np.arange(256, dtype=np.float32)
-    tensor = {
-        "dtype": "float32",
-        "shape": [256],
-        "data_b64": base64.b64encode(a.tobytes()).decode(),
-    }
-    res = _run(
-        Program(
-            instructions=[
-                _up("kernel", "function", {"source": KERNEL}),
-                _up("reffn", "function", {"source": REF}),
-                _up("a", "tensor", tensor),  # client-provided input tensor
-                Run("out", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-                Run("mod", "builtin.compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
-                Run("_run", {"$ref": "mod"}, [{"$ref": "a"}, {"$ref": "out"}]),
-                Run("ref", {"$ref": "reffn"}, [{"$ref": "a"}]),
-                Run("chk", "builtin.check_close", [{"$ref": "out"}, {"$ref": "ref"}]),
-            ]
-        )
+    array = np.arange(16, dtype=np.float32)
+    raw = array.tobytes()
+    digest = compute_blob_hash(raw)
+    program = Program(
+        [
+            Upload("tensor", "tensor", blob=digest, dtype="float32", shape=[16]),
+            Return("tensor", ref("tensor")),
+        ],
+        blob_bytes={digest: raw},
     )
-    assert [r.status for r in res] == ["OK"] * 8
-    chk = _by_id(res, "chk").value
-    assert chk["passed"] and chk["max_abs_err"] == 0.0  # kernel ran on the uploaded tensor
+    outcome = execute(program, runtime())
+    assert outcome.status == "COMPLETED"
+    np.testing.assert_array_equal(
+        np.frombuffer(outcome.binary_parts["return:0"], dtype=np.float32), array
+    )

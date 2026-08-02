@@ -1,114 +1,88 @@
-"""Wire types for the instruction protocol: Program, Instruction, Result.
-
-A request is a `Program` — an ordered list of instructions (`upload` / `run`).
-Parsing validates structure up front (unique ids, known ops/kinds, `$ref`
-shape); GPU work happens later, in the worker's engine.
-"""
+"""Validated wire types for the execution protocol."""
 
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from .errors import ValidationError
+from .keys import is_blob_hash
 
-# Per-instruction result status.
-Status = Literal["OK", "FAILED", "SKIPPED"]
+DTYPE_ITEM_SIZES: dict[str, int] = {
+    "bool": 1,
+    "uint8": 1,
+    "int8": 1,
+    "float4_e2m1": 1,
+    "float8_e4m3fn": 1,
+    "float8_e5m2": 1,
+    "int16": 2,
+    "float16": 2,
+    "bfloat16": 2,
+    "int32": 4,
+    "float32": 4,
+    "int64": 8,
+    "float64": 8,
+}
 
 
 @dataclass
 class Upload:
-    """An upload instruction. ``inline`` is the wire payload — sent only when the
-    object may not already be cached under ``key``. The resolved bytes are not
-    stored here but in ``Program.upload_bytes`` (keyed by instruction id), so this
-    stays the pure wire form."""
-
     id: str
-    kind: str
-    key: str
-    inline: dict | None = None
-    op: str = "upload"
+    kind: Literal["module", "tensor"]
+    source: str | None = None
+    blob: str | None = None
+    dtype: str | None = None
+    shape: list[int] | None = None
+    op: Literal["upload"] = "upload"
 
 
 @dataclass
 class Run:
     id: str
-    fn: Any  # a function name (str) or {"$ref": "<id>"}
-    args: list  # each element: {"$ref": "<id>"} (handle) or a literal
-    op: str = "run"
+    fn: str | dict[str, str]
+    args: list[Any] = field(default_factory=list)
+    op: Literal["run"] = "run"
 
 
-Instruction = Any  # Upload | Run
+@dataclass
+class Return:
+    key: str
+    value: dict[str, str]
+    op: Literal["return"] = "return"
+
+
+Instruction = Upload | Run | Return
 
 
 @dataclass
 class Program:
-    instructions: list
-    options: dict = field(default_factory=dict)
-    # Resolved canonical bytes for each upload (id -> bytes). Empty on a freshly
-    # parsed (wire) program; the front-end fills it from the cache/inline before
-    # the program is dispatched to a worker.
-    upload_bytes: dict = field(default_factory=dict)
+    instructions: list[Instruction]
+    options: dict[str, Any] = field(default_factory=dict)
+    # Filled by the HTTP front-end after multipart validation and cache lookup.
+    blob_bytes: dict[str, bytes] = field(default_factory=dict)
 
-    def uploads(self) -> list:
-        return [i for i in self.instructions if i.op == "upload"]
-
-
-@dataclass
-class Result:
-    id: str
-    op: str
-    status: Status
-    value: Any = None
-    stdout: str = ""
-    stderr: str = ""
-    stdout_truncated: bool = False
-    stderr_truncated: bool = False
-    error: dict | None = None
+    def tensor_uploads(self) -> list[Upload]:
+        return [
+            instruction
+            for instruction in self.instructions
+            if isinstance(instruction, Upload) and instruction.kind == "tensor"
+        ]
 
 
-# --- reference / structural helpers ----------------------------------------
-
-
-def is_ref(x: Any) -> bool:
-    """True if ``x`` is a handle reference ``{"$ref": "<id>"}``."""
-    return isinstance(x, dict) and set(x.keys()) == {"$ref"} and isinstance(x["$ref"], str)
-
-
-def is_json_structural(value: Any) -> bool:
-    """True if ``value`` is entirely JSON-structural (no opaque objects)."""
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return True
-    if isinstance(value, (list, tuple)):
-        return all(is_json_structural(v) for v in value)
-    if isinstance(value, dict):
-        return all(isinstance(k, str) and is_json_structural(v) for k, v in value.items())
-    return False
-
-
-def to_structural(value: Any, instr_id: str) -> Any:
-    """Return the JSON-structural form of a result value.
-
-    Structural values pass through; an opaque object (a tensor, a module) is not
-    transmitted back — it stays server-side and is referenced by a handle.
-    """
-    if is_json_structural(value):
-        return value
-    return {"handle": instr_id}
-
-
-# --- parsing ---------------------------------------------------------------
-
-_KINDS = {"function", "tensor", "object", "package"}
+def is_ref(value: Any) -> bool:
+    """Return whether ``value`` is exactly a handle reference."""
+    return (
+        isinstance(value, dict)
+        and set(value) == {"$ref"}
+        and isinstance(value["$ref"], str)
+        and bool(value["$ref"])
+    )
 
 
 def strict_json_loads(data: bytes | str) -> Any:
-    """Parse JSON, rejecting duplicate object keys and non-finite numbers.
-
-    Duplicate keys would silently drop instructions; NaN/Infinity are not JSON
-    and would round-trip inconsistently between client and server.
-    """
+    """Parse JSON while rejecting duplicate keys and non-finite numbers."""
 
     def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -133,69 +107,184 @@ def strict_json_loads(data: bytes | str) -> Any:
 
 def parse_program(body: Any) -> Program:
     if not isinstance(body, dict):
-        raise ValidationError("request body must be a JSON object")
-    raw = body.get("instructions")
-    if not isinstance(raw, list) or not raw:
-        raise ValidationError("'instructions' must be a non-empty list")
-    options = body.get("options") or {}
-    if not isinstance(options, dict):
-        raise ValidationError("'options' must be an object")
+        raise ValidationError("program must be a JSON object")
+    _check_fields(body, {"instructions", "options"}, {"instructions"}, "program")
 
-    seen: set[str] = set()
-    instructions: list = []
-    for i, item in enumerate(raw):
+    raw_instructions = body["instructions"]
+    if not isinstance(raw_instructions, list) or not raw_instructions:
+        raise ValidationError("'instructions' must be a non-empty array")
+    options = _parse_options(body.get("options", {}))
+
+    handles: set[str] = set()
+    return_keys: set[str] = set()
+    instructions: list[Instruction] = []
+    return_phase = False
+
+    for index, item in enumerate(raw_instructions):
         if not isinstance(item, dict):
-            raise ValidationError(f"instruction {i} must be an object")
-        iid = item.get("id")
-        if not isinstance(iid, str) or not iid:
-            raise ValidationError(f"instruction {i} needs a string 'id'")
-        if iid in seen:
-            raise ValidationError(f"duplicate instruction id: {iid!r}")
-        seen.add(iid)
+            raise ValidationError(f"instruction {index} must be an object")
         op = item.get("op")
-        if op == "upload":
-            instructions.append(_parse_upload(item, seen_before=seen))
-        elif op == "run":
-            instructions.append(_parse_run(item))
+        if op == "return":
+            return_phase = True
+            instruction = _parse_return(item, index, handles, return_keys)
+            return_keys.add(instruction.key)
+        elif op in ("upload", "run"):
+            if return_phase:
+                raise ValidationError("all return instructions must follow uploads and runs")
+            instruction_id = item.get("id")
+            if not isinstance(instruction_id, str) or not instruction_id:
+                raise ValidationError(f"instruction {index} needs a non-empty string 'id'")
+            if instruction_id in handles:
+                raise ValidationError(f"duplicate instruction id: {instruction_id!r}")
+            if op == "upload":
+                instruction = _parse_upload(item, index)
+            else:
+                instruction = _parse_run(item, index, handles)
+            handles.add(instruction_id)
         else:
-            raise ValidationError(f"instruction {iid!r}: unknown op {op!r}")
-    _check_refs(instructions)
+            raise ValidationError(f"instruction {index}: unknown op {op!r}")
+        instructions.append(instruction)
+
     return Program(instructions=instructions, options=options)
 
 
-def _parse_upload(item: dict, seen_before: set[str]) -> Upload:
+def expected_tensor_nbytes(dtype: str, shape: list[int]) -> int:
+    try:
+        item_size = DTYPE_ITEM_SIZES[dtype]
+    except KeyError as exc:
+        raise ValidationError(f"unsupported tensor dtype: {dtype!r}") from exc
+    elements = math.prod(shape)
+    return elements * item_size
+
+
+def _parse_options(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValidationError("'options' must be an object")
+    _check_fields(value, {"timeout_seconds", "output_limit_bytes"}, set(), "options")
+
+    options: dict[str, Any] = {}
+    if "timeout_seconds" in value:
+        timeout = value["timeout_seconds"]
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
+            raise ValidationError("'timeout_seconds' must be a finite positive number")
+        options["timeout_seconds"] = float(timeout)
+    if "output_limit_bytes" in value:
+        output_limit = value["output_limit_bytes"]
+        if isinstance(output_limit, bool) or not isinstance(output_limit, int) or output_limit < 0:
+            raise ValidationError("'output_limit_bytes' must be a non-negative integer")
+        options["output_limit_bytes"] = output_limit
+    return options
+
+
+def _parse_upload(item: dict[str, Any], index: int) -> Upload:
     kind = item.get("kind")
-    if kind not in _KINDS:
-        raise ValidationError(f"upload {item['id']!r}: unknown kind {kind!r}")
-    key = item.get("key")
-    if not isinstance(key, str) or not key:
-        raise ValidationError(f"upload {item['id']!r}: needs a string 'key'")
-    inline = item.get("inline")
-    if inline is not None and not isinstance(inline, dict):
-        raise ValidationError(f"upload {item['id']!r}: 'inline' must be an object")
-    return Upload(id=item["id"], kind=kind, key=key, inline=inline)
+    if kind == "module":
+        module_fields = {"op", "id", "kind", "source"}
+        _check_fields(item, module_fields, module_fields, f"instruction {index}")
+        source = item["source"]
+        if not isinstance(source, str):
+            raise ValidationError(f"module upload {item['id']!r}: 'source' must be a string")
+        return Upload(id=item["id"], kind="module", source=source)
+    if kind == "tensor":
+        _check_fields(
+            item,
+            {"op", "id", "kind", "blob", "dtype", "shape"},
+            {"op", "id", "kind", "blob", "dtype", "shape"},
+            f"instruction {index}",
+        )
+        blob = item["blob"]
+        dtype = item["dtype"]
+        shape = item["shape"]
+        if not is_blob_hash(blob):
+            raise ValidationError(
+                f"tensor upload {item['id']!r}: 'blob' must be a lowercase SHA-256 digest"
+            )
+        if not isinstance(dtype, str) or dtype not in DTYPE_ITEM_SIZES:
+            raise ValidationError(f"tensor upload {item['id']!r}: unsupported dtype {dtype!r}")
+        if not isinstance(shape, list) or any(
+            isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 0
+            for dimension in shape
+        ):
+            raise ValidationError(
+                f"tensor upload {item['id']!r}: 'shape' must be an array of non-negative integers"
+            )
+        return Upload(id=item["id"], kind="tensor", blob=blob, dtype=dtype, shape=shape)
+    raise ValidationError(f"upload {item.get('id')!r}: unknown kind {kind!r}")
 
 
-def _parse_run(item: dict) -> Run:
-    fn = item.get("fn")
-    if not (isinstance(fn, str) or is_ref(fn)):
+def _parse_run(item: dict[str, Any], index: int, handles: set[str]) -> Run:
+    _check_fields(item, {"op", "id", "fn", "args"}, {"op", "id", "fn"}, f"instruction {index}")
+    fn = item["fn"]
+    if isinstance(fn, str):
+        if not fn:
+            raise ValidationError(f"run {item['id']!r}: 'fn' must not be empty")
+    elif is_ref(fn):
+        _check_known_ref(fn, handles, item["id"])
+    else:
         raise ValidationError(f"run {item['id']!r}: 'fn' must be a name or {{'$ref': id}}")
+
     args = item.get("args", [])
     if not isinstance(args, list):
-        raise ValidationError(f"run {item['id']!r}: 'args' must be a list")
+        raise ValidationError(f"run {item['id']!r}: 'args' must be an array")
+    for argument in args:
+        if is_ref(argument):
+            _check_known_ref(argument, handles, item["id"])
+        else:
+            _validate_json_value(argument, f"run {item['id']!r} argument")
     return Run(id=item["id"], fn=fn, args=args)
 
 
-def _check_refs(instructions: list) -> None:
-    """Every ``$ref`` must point to an earlier instruction (straight-line DAG)."""
-    produced: set[str] = set()
-    for ins in instructions:
-        refs: list = []
-        if ins.op == "run":
-            if is_ref(ins.fn):
-                refs.append(ins.fn["$ref"])
-            refs += [a["$ref"] for a in ins.args if is_ref(a)]
-        for r in refs:
-            if r not in produced:
-                raise ValidationError(f"{ins.id!r} references unknown/forward handle {r!r}")
-        produced.add(ins.id)
+def _parse_return(
+    item: dict[str, Any], index: int, handles: set[str], return_keys: set[str]
+) -> Return:
+    _check_fields(item, {"op", "key", "value"}, {"op", "key", "value"}, f"instruction {index}")
+    key = item["key"]
+    if not isinstance(key, str) or not key:
+        raise ValidationError(f"return instruction {index} needs a non-empty string 'key'")
+    if key in return_keys:
+        raise ValidationError(f"duplicate return key: {key!r}")
+    value = item["value"]
+    if not is_ref(value):
+        raise ValidationError(f"return {key!r}: 'value' must be {{'$ref': id}}")
+    _check_known_ref(value, handles, f"return {key!r}")
+    return Return(key=key, value=value)
+
+
+def _check_known_ref(reference: dict[str, str], handles: set[str], owner: str) -> None:
+    target = reference["$ref"]
+    if target not in handles:
+        raise ValidationError(f"{owner!r} references unknown/forward handle {target!r}")
+
+
+def _validate_json_value(value: Any, label: str) -> None:
+    if value is None or isinstance(value, (bool, str, int)):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValidationError(f"{label} contains a non-finite number")
+        return
+    if isinstance(value, list):
+        for child in value:
+            _validate_json_value(child, label)
+        return
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise ValidationError(f"{label} contains a non-string object key")
+        for child in value.values():
+            _validate_json_value(child, label)
+        return
+    raise ValidationError(f"{label} contains a non-JSON value")
+
+
+def _check_fields(value: dict[str, Any], allowed: set[str], required: set[str], label: str) -> None:
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValidationError(f"{label} has unknown field(s): {', '.join(sorted(unknown))}")
+    missing = required - set(value)
+    if missing:
+        raise ValidationError(f"{label} is missing field(s): {', '.join(sorted(missing))}")

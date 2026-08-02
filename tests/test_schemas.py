@@ -1,72 +1,133 @@
 import pytest
 
 from benchmark_server.errors import ValidationError
-from benchmark_server.schemas import (
-    is_json_structural,
-    is_ref,
-    parse_program,
-    to_structural,
-)
+from benchmark_server.schemas import Return, Run, Upload, parse_program, strict_json_loads
+
+TENSOR_HASH = "0" * 64
 
 
-def test_parse_run_and_upload():
-    p = parse_program(
+def test_parse_complete_program():
+    program = parse_program(
         {
             "instructions": [
                 {
-                    "id": "k",
                     "op": "upload",
-                    "kind": "function",
-                    "key": "sha256:a",
-                    "inline": {"source": "x=1"},
+                    "id": "module",
+                    "kind": "module",
+                    "source": "def main(x):\n    return x\n",
                 },
-                {"id": "x", "op": "run", "fn": "builtin.randn", "args": [{"shape": [4]}]},
-            ]
+                {
+                    "op": "upload",
+                    "id": "tensor",
+                    "kind": "tensor",
+                    "blob": TENSOR_HASH,
+                    "dtype": "float32",
+                    "shape": [2, 3],
+                },
+                {"op": "run", "id": "result", "fn": {"$ref": "module"}, "args": [1]},
+                {"op": "return", "key": "answer", "value": {"$ref": "result"}},
+            ],
+            "options": {"timeout_seconds": 12, "output_limit_bytes": 0},
         }
     )
-    assert p.uploads()[0].id == "k"
-    assert p.instructions[1].op == "run" and p.instructions[1].fn == "builtin.randn"
+    assert isinstance(program.instructions[0], Upload)
+    assert isinstance(program.instructions[2], Run)
+    assert isinstance(program.instructions[3], Return)
+    assert program.options == {"timeout_seconds": 12.0, "output_limit_bytes": 0}
+    assert program.tensor_uploads()[0].blob == TENSOR_HASH
 
 
-def test_duplicate_id_rejected():
-    with pytest.raises(ValidationError, match="duplicate"):
+@pytest.mark.parametrize(
+    "instruction,match",
+    [
+        ({"op": "upload", "id": "x", "kind": "function", "key": "old"}, "unknown kind"),
+        ({"op": "upload", "id": "x", "kind": "module"}, "missing field"),
+        (
+            {
+                "op": "upload",
+                "id": "x",
+                "kind": "tensor",
+                "blob": "sha256:old",
+                "dtype": "float32",
+                "shape": [1],
+            },
+            "lowercase SHA-256",
+        ),
+        ({"op": "run", "id": "x", "fn": "builtin.zeros", "extra": 1}, "unknown field"),
+        ({"op": "unknown", "id": "x"}, "unknown op"),
+    ],
+)
+def test_invalid_instruction_shapes_rejected(instruction, match):
+    with pytest.raises(ValidationError, match=match):
+        parse_program({"instructions": [instruction]})
+
+
+def test_duplicate_handles_and_return_keys_rejected():
+    with pytest.raises(ValidationError, match="duplicate instruction id"):
         parse_program(
             {
                 "instructions": [
-                    {"id": "a", "op": "upload", "kind": "function", "key": "k"},
-                    {"id": "a", "op": "run", "fn": "f", "args": []},
+                    {"op": "run", "id": "x", "fn": "builtin.zeros"},
+                    {"op": "run", "id": "x", "fn": "builtin.empty"},
+                ]
+            }
+        )
+    with pytest.raises(ValidationError, match="duplicate return key"):
+        parse_program(
+            {
+                "instructions": [
+                    {"op": "run", "id": "x", "fn": "builtin.zeros"},
+                    {"op": "return", "key": "x", "value": {"$ref": "x"}},
+                    {"op": "return", "key": "x", "value": {"$ref": "x"}},
                 ]
             }
         )
 
 
-def test_unknown_op_and_kind():
-    with pytest.raises(ValidationError, match="unknown op"):
-        parse_program({"instructions": [{"id": "a", "op": "frob"}]})
-    with pytest.raises(ValidationError, match="unknown kind"):
-        parse_program({"instructions": [{"id": "a", "op": "upload", "kind": "weird", "key": "k"}]})
-
-
-def test_forward_reference_rejected():
-    with pytest.raises(ValidationError, match="forward handle"):
+def test_forward_references_and_instructions_after_return_rejected():
+    with pytest.raises(ValidationError, match="unknown/forward"):
         parse_program(
             {
                 "instructions": [
-                    {"id": "a", "op": "run", "fn": "f", "args": [{"$ref": "later"}]},
-                    {"id": "later", "op": "run", "fn": "g", "args": []},
+                    {"op": "run", "id": "x", "fn": "builtin.zeros", "args": [{"$ref": "y"}]}
+                ]
+            }
+        )
+    with pytest.raises(ValidationError, match="must follow"):
+        parse_program(
+            {
+                "instructions": [
+                    {"op": "run", "id": "x", "fn": "builtin.zeros"},
+                    {"op": "return", "key": "x", "value": {"$ref": "x"}},
+                    {"op": "run", "id": "y", "fn": "builtin.zeros"},
                 ]
             }
         )
 
 
-def test_empty_instructions_rejected():
+@pytest.mark.parametrize(
+    "options",
+    [
+        None,
+        {"timeout_seconds": 0},
+        {"timeout_seconds": float("inf")},
+        {"output_limit_bytes": -1},
+        {"output_limit_bytes": True},
+        {"unknown": 1},
+    ],
+)
+def test_invalid_options_rejected(options):
     with pytest.raises(ValidationError):
-        parse_program({"instructions": []})
+        parse_program(
+            {
+                "instructions": [{"op": "run", "id": "x", "fn": "builtin.zeros"}],
+                "options": options,
+            }
+        )
 
 
-def test_helpers():
-    assert is_ref({"$ref": "x"}) and not is_ref({"$ref": "x", "y": 1})
-    assert is_json_structural({"a": [1, 2, "s"], "b": None})
-    assert not is_json_structural(object())
-    assert to_structural({"latency_ms": 1.0}, "p") == {"latency_ms": 1.0}
-    assert to_structural(object(), "p") == {"handle": "p"}
+def test_strict_json_rejects_duplicate_keys_and_non_finite_numbers():
+    with pytest.raises(ValidationError, match="duplicate"):
+        strict_json_loads('{"instructions": [], "instructions": []}')
+    with pytest.raises(ValidationError, match="non-finite"):
+        strict_json_loads('{"value": NaN}')

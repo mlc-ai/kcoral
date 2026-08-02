@@ -9,14 +9,12 @@ module touches no GPU.
 from __future__ import annotations
 
 import hashlib
-import json
 import linecache
 from collections.abc import Callable
 from typing import Any
 
 from . import builtin_ops
 from .errors import ExecutionError
-from .packages import load_package_entry
 
 # An uploaded function module defines its entry object under this name.
 ENTRY_POINT = "main"
@@ -31,20 +29,23 @@ class GPURuntime:
     def __init__(self) -> None:
         _require_torch_and_ffi()
         self._seeded_fnames: list[str] = []  # linecache keys to clear on reset
-        self._package_cleanups: list[Callable[[], None]] = []
 
-    def materialize(self, kind: str, data: bytes) -> Any:
-        if kind == "function":
-            return self._materialize_function(data)
-        if kind == "tensor":
-            return _materialize_tensor(data)
-        if kind == "package":
-            entry, cleanup = load_package_entry(data)
-            self._package_cleanups.append(cleanup)
-            return entry
-        if kind == "object":
-            return json.loads(data.decode("utf-8"))
-        raise ExecutionError("runtime", f"kind {kind!r} not supported")
+    def load_module(self, source: str) -> Any:
+        return self._materialize_module(source)
+
+    def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any:
+        return _materialize_tensor(data, dtype, shape)
+
+    def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None:
+        import torch
+
+        if not isinstance(value, torch.Tensor):
+            return None
+        tensor = value.detach().cpu().contiguous()
+        dtype = str(tensor.dtype).removeprefix("torch.")
+        shape = [int(dimension) for dimension in tensor.shape]
+        data = tensor.reshape(-1).view(torch.uint8).numpy().tobytes()
+        return dtype, shape, data
 
     def builtin(self, name: str) -> Callable:
         fn = builtin_ops.resolve(name)
@@ -58,17 +59,13 @@ class GPURuntime:
         for fname in self._seeded_fnames:
             linecache.cache.pop(fname, None)
         self._seeded_fnames.clear()
-        for cleanup in self._package_cleanups:
-            cleanup()
-        self._package_cleanups.clear()
         try:
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
         except Exception:
             pass  # a poisoned CUDA context is handled at the worker level
 
-    def _materialize_function(self, data: bytes) -> Any:
-        source = data.decode("utf-8")
+    def _materialize_module(self, source: str) -> Any:
         # A kernel is re-read from its source text at compile time, so seed
         # linecache. Key by content hash so two functions in one program don't
         # overwrite each other's source.
@@ -84,7 +81,7 @@ class GPURuntime:
             raise ExecutionError("parse", f"syntax error: {exc}") from exc
         except Exception as exc:
             raise ExecutionError("parse", f"{type(exc).__name__}: {exc}") from exc
-        if ENTRY_POINT not in ns:
+        if ENTRY_POINT not in ns or not callable(ns[ENTRY_POINT]):
             raise ExecutionError("parse", f"source must define {ENTRY_POINT!r}")
         return ns[ENTRY_POINT]
 
@@ -100,15 +97,14 @@ def _require_torch_and_ffi() -> None:
         ) from exc
 
 
-def _materialize_tensor(data: bytes) -> Any:
+def _materialize_tensor(data: bytes, dtype_name: str, shape: list[int]) -> Any:
     import torch
 
-    header, _, raw = data.partition(b"\x00")
     try:
-        meta = json.loads(header.decode("utf-8"))
-        dtype = builtin_ops.torch_dtype(meta["dtype"])
-        shape = [int(d) for d in meta["shape"]]
-        return torch.frombuffer(bytearray(raw), dtype=dtype).reshape(shape).to("cuda")
+        dtype = builtin_ops.torch_dtype(dtype_name)
+        if not data:
+            return torch.empty(shape, dtype=dtype, device="cuda")
+        return torch.frombuffer(bytearray(data), dtype=dtype).reshape(shape).to("cuda")
     except ExecutionError:
         raise
     except Exception as exc:

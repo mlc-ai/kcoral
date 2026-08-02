@@ -6,7 +6,7 @@ Launch it where a TIRX-enabled tvm is importable — either pip-installed
 front-end process itself touches no GPU; each worker process imports torch/tvm
 and owns one GPU.
 
-    benchmark-server --gpus 1,2,3 --cache-dir /data/cache
+    benchmark-server --gpus 1,2,3
 
 Every ``ServerConfig`` field has a flag (see ``benchmark-server --help``). A few
 flags default from the environment, so env-only deployments keep working:
@@ -15,8 +15,6 @@ flags default from the environment, so env-only deployments keep working:
   BENCH_HOST       bind host (default 127.0.0.1)
   BENCH_PORT       bind port (default 8000)
   BENCH_LOG_DIR    directory for structured event logs (default "logs"; empty disables)
-  BENCH_CACHE_DIR  on-disk blob cache, survives restarts (default "cache"; empty for
-                   a private temporary directory)
 """
 
 from __future__ import annotations
@@ -43,12 +41,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--gpus",
         default=os.environ.get("BENCH_GPUS", "0"),
         help="comma-separated physical GPU ids, one worker each (default: 0)",
-    )
-    parser.add_argument(
-        "--cache-dir",
-        default=os.environ.get("BENCH_CACHE_DIR", "cache"),
-        help="on-disk blob cache directory, survives restarts; "
-        "empty for a private temporary directory (default: cache)",
     )
     parser.add_argument("--cache-capacity-bytes", type=int, default=_DEFAULTS.cache_capacity_bytes)
     parser.add_argument(
@@ -78,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-limit-bytes",
         type=int,
         default=_DEFAULTS.output_limit_bytes,
-        help="default per-instruction stdout/stderr capture cap",
+        help="default request-level stdout/stderr capture cap",
     )
     parser.add_argument(
         "--max-output-limit-bytes", type=int, default=_DEFAULTS.max_output_limit_bytes
@@ -95,7 +87,6 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
     return ServerConfig(
         gpus=gpus,
         cache_capacity_bytes=args.cache_capacity_bytes,
-        cache_dir=Path(args.cache_dir) if args.cache_dir else None,
         log_dir=Path(args.log_dir) if args.log_dir else None,
         default_timeout_seconds=args.default_timeout_seconds,
         max_timeout_seconds=args.max_timeout_seconds,

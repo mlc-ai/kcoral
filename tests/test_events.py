@@ -7,13 +7,23 @@ from benchmark_server.config import ServerConfig
 from benchmark_server.testing import fake_runtime_factory
 
 STRUCTURAL_PROGRAM = {
-    "instructions": [{"id": "x", "op": "run", "fn": "builtin.structural", "args": []}]
+    "instructions": [
+        {"op": "run", "id": "value", "fn": "builtin.structural"},
+        {"op": "return", "key": "value", "value": {"$ref": "value"}},
+    ]
 }
 
 
 def _make_client(tmp_path):
     config = ServerConfig(gpus=[0], log_dir=tmp_path / "logs")
     return TestClient(create_app(config, runtime_factory=fake_runtime_factory))
+
+
+def _post(client, program):
+    return client.post(
+        "/execute",
+        files={"program": (None, json.dumps(program), "application/json")},
+    )
 
 
 def _read_events(tmp_path):
@@ -24,11 +34,11 @@ def _read_events(tmp_path):
 
 
 def test_request_lifecycle_events(tmp_path):
-    with _make_client(tmp_path) as c:
-        response = c.post("/benchmark", json=STRUCTURAL_PROGRAM)
+    with _make_client(tmp_path) as client:
+        response = _post(client, STRUCTURAL_PROGRAM)
         request_id = response.headers["x-request-id"]
     events = _read_events(tmp_path)
-    assert [e["event"] for e in events] == [
+    assert [event["event"] for event in events] == [
         "server_started",
         "request_started",
         "request_finished",
@@ -44,28 +54,31 @@ def test_request_lifecycle_events(tmp_path):
 
 def test_worker_restart_event_on_timeout(tmp_path):
     program = {
-        "instructions": [{"id": "s", "op": "run", "fn": "builtin.sleep", "args": [5.0]}],
+        "instructions": [{"op": "run", "id": "sleep", "fn": "builtin.sleep", "args": [5]}],
         "options": {"timeout_seconds": 0.5},
     }
-    with _make_client(tmp_path) as c:
-        assert c.post("/benchmark", json=program).status_code == 504
+    with _make_client(tmp_path) as client:
+        assert _post(client, program).status_code == 504
     events = _read_events(tmp_path)
-    restarts = [e for e in events if e["event"] == "worker_restarted"]
+    restarts = [event for event in events if event["event"] == "worker_restarted"]
     assert len(restarts) == 1
     assert restarts[0]["reason"] == "timeout" and restarts[0]["gpu_id"] == 0
-    finished = next(e for e in events if e["event"] == "request_finished")
+    finished = next(event for event in events if event["event"] == "request_finished")
     assert finished["http_status"] == 504 and finished["error"] == "timeout"
 
 
 def test_invalid_request_is_logged(tmp_path):
-    with _make_client(tmp_path) as c:
-        assert c.post("/benchmark", json={"instructions": []}).status_code == 400
-    finished = next(e for e in _read_events(tmp_path) if e["event"] == "request_finished")
+    with _make_client(tmp_path) as client:
+        assert _post(client, {"instructions": []}).status_code == 400
+    finished = next(
+        event for event in _read_events(tmp_path) if event["event"] == "request_finished"
+    )
     assert finished["http_status"] == 400 and finished["level"] == "WARNING"
 
 
 def test_logging_disabled_without_log_dir(tmp_path):
-    config = ServerConfig(gpus=[0])  # log_dir=None
-    with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as c:
-        assert c.post("/benchmark", json=STRUCTURAL_PROGRAM).status_code == 200
+    with TestClient(
+        create_app(ServerConfig(gpus=[0]), runtime_factory=fake_runtime_factory)
+    ) as client:
+        assert _post(client, STRUCTURAL_PROGRAM).status_code == 200
     assert not (tmp_path / "logs").exists()

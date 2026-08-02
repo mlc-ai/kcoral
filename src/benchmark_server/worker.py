@@ -1,10 +1,10 @@
 """The GPU worker: a child process that owns one GPU's CUDA context.
 
-The front-end never touches the GPU — it dispatches a Program to a worker over a
-pipe and reads back results. A worker runs one program at a time and clears its
-per-request state after each (via the Runtime). The worker's `main` is the child
-entry point; :class:`Worker` is the parent-side handle with crash/timeout kill +
-respawn.
+The front-end never touches the GPU - it dispatches a Program to a worker over a
+pipe and reads back one execution outcome. A worker runs one program at a time
+and clears its per-request state after each (via the Runtime). The worker's
+`main` is the child entry point; :class:`Worker` is the parent-side handle with
+crash/timeout kill + respawn.
 """
 
 from __future__ import annotations

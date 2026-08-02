@@ -12,7 +12,6 @@ def parse(argv):
 def test_defaults():
     config = parse([])
     assert config.gpus == [0]
-    assert config.cache_dir == Path("cache")
     assert config.log_dir == Path("logs")
 
 
@@ -21,8 +20,6 @@ def test_all_flags_reach_config():
         [
             "--gpus",
             "1,3",
-            "--cache-dir",
-            "/data/cache",
             "--cache-capacity-bytes",
             "1234",
             "--log-dir",
@@ -46,7 +43,6 @@ def test_all_flags_reach_config():
         ]
     )
     assert config.gpus == [1, 3]
-    assert config.cache_dir == Path("/data/cache")
     assert config.log_dir is None  # empty string disables logging
     assert config.cache_capacity_bytes == 1234
     assert config.default_timeout_seconds == 12

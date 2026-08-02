@@ -1,73 +1,78 @@
-"""A GPU-free runtime used only by the tests.
-
-It stands in for a real runtime so the engine, worker-pool, and HTTP-server tests
-exercise the real IPC / crash / timeout / caching machinery with no GPU. Its
-builtins are named for the engine behaviour they drive, not for any real
-operation: ``opaque`` yields a value that returns to the client as a handle,
-``structural`` yields a plain-JSON result that passes through, and ``crash`` /
-``sleep`` drive the worker's crash and timeout handling.
-"""
+"""GPU-free runtime used by the protocol and worker tests."""
 
 from __future__ import annotations
 
 import os
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from .errors import ExecutionError
-from .packages import load_package_entry
 
 
-class _Opaque:  # non-JSON object -> the engine returns it to the client as a handle
+class _Opaque:
     pass
+
+
+@dataclass
+class _FakeTensor:
+    data: bytes
+    dtype: str
+    shape: list[int]
 
 
 def _opaque(*_args: Any) -> _Opaque:
     return _Opaque()
 
 
-def _structural(*_args: Any) -> dict:
-    return {"ok": True}
+def _structural(*_args: Any) -> dict[str, Any]:
+    return {"ok": True, "values": [None, False, 7, 1.5, "text"]}
+
+
+def _binary(*_args: Any) -> bytes:
+    return b"binary-result"
 
 
 def _crash(*_args: Any):
     os._exit(1)
 
 
-def _sleep(seconds: Any = 0.0, *_args: Any) -> dict:
+def _sleep(seconds: Any = 0.0, *_args: Any) -> dict[str, float]:
     time.sleep(float(seconds))
     return {"slept": float(seconds)}
 
 
 _BUILTINS: dict[str, Callable] = {
-    "builtin.opaque": _opaque,  # result is opaque -> comes back as a handle
-    "builtin.structural": _structural,  # result is plain JSON -> passes through
-    "builtin.crash": _crash,  # drives worker-crash handling
-    "builtin.sleep": _sleep,  # drives worker-timeout handling
+    "builtin.opaque": _opaque,
+    "builtin.structural": _structural,
+    "builtin.binary": _binary,
+    "builtin.crash": _crash,
+    "builtin.sleep": _sleep,
 }
 
 
 class FakeRuntime:
-    def __init__(self) -> None:
-        self._package_cleanups: list[Callable[[], None]] = []
-
-    def materialize(self, kind: str, data: bytes) -> Any:
-        if kind == "package":  # the real (GPU-free) package loader
-            entry, cleanup = load_package_entry(data)
-            self._package_cleanups.append(cleanup)
-            return entry
-        if kind != "function":
-            raise ExecutionError("runtime", f"kind {kind!r} not supported")
-        ns: dict = {}
+    def load_module(self, source: str) -> Any:
+        namespace: dict[str, Any] = {}
         try:
-            exec(compile(data.decode("utf-8"), "<uploaded>", "exec"), ns)
+            exec(compile(source, "<uploaded>", "exec"), namespace)
         except SyntaxError as exc:
             raise ExecutionError("parse", str(exc)) from exc
-        fns = [v for v in ns.values() if callable(v)]
-        if not fns:
-            raise ExecutionError("parse", "source defines no function")
-        return fns[-1]
+        except Exception as exc:
+            raise ExecutionError("parse", f"{type(exc).__name__}: {exc}") from exc
+        entry = namespace.get("main")
+        if not callable(entry):
+            raise ExecutionError("parse", "source must define callable 'main'")
+        return entry
+
+    def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> _FakeTensor:
+        return _FakeTensor(data=data, dtype=dtype, shape=shape)
+
+    def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None:
+        if not isinstance(value, _FakeTensor):
+            return None
+        return value.dtype, value.shape, value.data
 
     def builtin(self, name: str) -> Callable:
         fn = _BUILTINS.get(name)
@@ -76,11 +81,8 @@ class FakeRuntime:
         return fn
 
     def reset(self) -> None:
-        for cleanup in self._package_cleanups:
-            cleanup()
-        self._package_cleanups.clear()
+        pass
 
 
 def fake_runtime_factory() -> FakeRuntime:
-    """Module-level (picklable) factory so a spawned worker can build the fake."""
     return FakeRuntime()

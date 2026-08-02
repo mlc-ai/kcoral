@@ -1,3 +1,4 @@
+import json
 import os
 import time
 
@@ -7,230 +8,299 @@ from fastapi.testclient import TestClient
 from benchmark_server.app import create_app
 from benchmark_server.config import ServerConfig
 from benchmark_server.gpu_runtime import gpu_runtime_factory
-from benchmark_server.keys import compute_key
+from benchmark_server.keys import compute_blob_hash
+from benchmark_server.multipart import parse_multipart
+from benchmark_server.schemas import strict_json_loads
 from benchmark_server.testing import fake_runtime_factory
 
-STUB_FN = "def main(a):\n    return a\n"  # a callable the fake materializes; body irrelevant
+ADD_ONE = "def main(value):\n    return value + 1\n"
 
 
-def make_client():
-    return TestClient(create_app(runtime_factory=fake_runtime_factory))
+def make_client(config=None):
+    return TestClient(create_app(config, runtime_factory=fake_runtime_factory))
 
 
-def _fn_upload(inline: bool):
-    src = {"source": STUB_FN}
-    up = {"id": "fn", "op": "upload", "kind": "function", "key": compute_key("function", src)}
-    if inline:
-        up["inline"] = src
-    return up
+def post_program(client, program, blobs=None, *, raw_program=None):
+    program_data = raw_program if raw_program is not None else json.dumps(program)
+    files = [("program", (None, program_data, "application/json"))]
+    files.extend(
+        (f"blob:{blob_hash}", (None, data, "application/octet-stream"))
+        for blob_hash, data in (blobs or {}).items()
+    )
+    return client.post("/execute", files=files)
 
 
-def bench_program(inline_upload: bool = True):
-    # An upload (so CACHE_MISS has a key to report) followed by a few runs that
-    # thread a handle through the engine. The fake's builtins fake only the work.
+def response_parts(response):
+    media_type = response.headers["content-type"].split(";", 1)[0]
+    if media_type == "application/json":
+        return response.json(), {}
+    result = None
+    binary = {}
+    for part in parse_multipart(response.headers["content-type"], response.content):
+        if part.name == "result":
+            result = strict_json_loads(part.data)
+        else:
+            binary[part.name] = part.data
+    assert result is not None
+    return result, binary
+
+
+def scalar_program():
     return {
         "instructions": [
-            _fn_upload(inline_upload),
-            {"id": "x", "op": "run", "fn": "builtin.opaque", "args": []},
-            {"id": "y", "op": "run", "fn": {"$ref": "fn"}, "args": [{"$ref": "x"}]},
-            {"id": "r", "op": "run", "fn": "builtin.structural", "args": [{"$ref": "y"}]},
+            {"op": "upload", "id": "fn", "kind": "module", "source": ADD_ONE},
+            {"op": "run", "id": "answer", "fn": {"$ref": "fn"}, "args": [41]},
+            {"op": "return", "key": "answer", "value": {"$ref": "answer"}},
         ]
     }
 
 
 def test_health():
-    with make_client() as c:
-        data = c.get("/health").json()
+    with make_client() as client:
+        data = client.get("/health").json()
     assert data["status"] == "ok" and data["gpu_count"] == 1 and data["queue_length"] == 0
-    worker = data["workers"][0]
-    assert worker["gpu_id"] == 0 and worker["status"] == "idle"
-    assert worker["uptime_seconds"] >= 0
+    assert data["workers"][0]["status"] == "idle"
 
 
-def test_request_id_in_header_and_body():
-    with make_client() as c:
-        first = c.post("/benchmark", json=bench_program())
-        second = c.post("/benchmark", json=bench_program())
-    assert first.json()["request_id"] == first.headers["x-request-id"]
+def test_request_id_and_timing_are_returned():
+    with make_client() as client:
+        first = post_program(client, scalar_program())
+        second = post_program(client, scalar_program())
+    data = first.json()
+    assert data["request_id"] == first.headers["x-request-id"]
     assert first.headers["x-request-id"] != second.headers["x-request-id"]
+    assert data["queue_ms"] >= 0 and data["elapsed_ms"] >= 0
 
 
-def test_timing_metrics_in_response():
-    prog = {"instructions": [{"id": "s", "op": "run", "fn": "builtin.sleep", "args": [0.2]}]}
-    with make_client() as c:
-        data = c.post("/benchmark", json=prog).json()
-    assert data["elapsed_ms"] >= 200
-    assert data["queue_ms"] >= 0
+def test_completed_program_returns_only_selected_values():
+    with make_client() as client:
+        response = post_program(client, scalar_program())
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "COMPLETED"
+    assert data["results"] == {"answer": {"type": "integer", "value": 42}}
+    assert data["stdout"] == "" and data["stderr"] == ""
 
 
-def test_full_program_completed():
-    with make_client() as c:
-        r = c.post("/benchmark", json=bench_program())
-        assert r.status_code == 200
-        data = r.json()
-        assert data["status"] == "COMPLETED"
-        last = data["results"][-1]
-        assert last["status"] == "OK" and last["value"] == {"ok": True}
-        assert data["results"][0] == {"id": "fn", "op": "upload", "status": "OK"}
-
-
-def test_failed_instruction_reports_failed_status():
-    prog = {
+def test_failed_instruction_stops_without_results():
+    program = {
         "instructions": [
-            {"id": "a", "op": "run", "fn": "builtin.opaque", "args": []},
-            {"id": "b", "op": "run", "fn": "builtin.nope", "args": []},  # unknown -> FAILED
-            {"id": "c", "op": "run", "fn": "builtin.opaque", "args": []},  # -> SKIPPED
+            {"op": "run", "id": "ok", "fn": "builtin.structural"},
+            {"op": "run", "id": "bad", "fn": "builtin.nope"},
+            {"op": "return", "key": "ok", "value": {"$ref": "ok"}},
         ]
     }
-    with make_client() as c:
-        r = c.post("/benchmark", json=prog)
-    assert r.status_code == 200  # 200 = "we ran your program"
-    data = r.json()
-    assert data["status"] == "FAILED"  # body status reflects the instruction outcome
-    assert [x["status"] for x in data["results"]] == ["OK", "FAILED", "SKIPPED"]
+    with make_client() as client:
+        response = post_program(client, program)
+    data = response.json()
+    assert response.status_code == 200 and data["status"] == "FAILED"
+    assert "results" not in data
+    assert data["error"]["kind"] == "runtime" and data["error"]["instruction_index"] == 1
 
 
-def test_cache_miss_then_retry_with_inline():
-    with make_client() as c:
-        miss = c.post("/benchmark", json=bench_program(inline_upload=False)).json()
-        assert miss["status"] == "CACHE_MISS"
-        assert compute_key("function", {"source": STUB_FN}) in miss["missing_keys"]
-        done = c.post("/benchmark", json=bench_program(inline_upload=True)).json()
-        assert done["status"] == "COMPLETED"
+def test_tensor_cache_miss_upload_and_warm_hit():
+    raw = b"\x00\x00\x80?"
+    digest = compute_blob_hash(raw)
+    program = {
+        "instructions": [
+            {
+                "op": "upload",
+                "id": "tensor",
+                "kind": "tensor",
+                "blob": digest,
+                "dtype": "float32",
+                "shape": [1],
+            },
+            {"op": "return", "key": "tensor", "value": {"$ref": "tensor"}},
+        ]
+    }
+    with make_client() as client:
+        miss = post_program(client, program)
+        uploaded = post_program(client, program, {digest: raw})
+        warm = post_program(client, program)
+    assert miss.json()["missing_blobs"] == [digest]
+    for response in (uploaded, warm):
+        result, binary = response_parts(response)
+        assert result["status"] == "COMPLETED"
+        assert result["results"]["tensor"]["part"] == "return:0"
+        assert binary == {"return:0": raw}
 
 
-def test_cache_hit_lets_key_only_upload_run():
-    with make_client() as c:
-        assert c.post("/benchmark", json=bench_program(True)).json()["status"] == "COMPLETED"
-        # key now cached: a key-only program resolves from the cache
-        assert c.post("/benchmark", json=bench_program(False)).json()["status"] == "COMPLETED"
+@pytest.mark.parametrize(
+    "files,match",
+    [
+        (
+            [
+                ("program", (None, json.dumps(scalar_program()), "application/json")),
+                ("program", (None, json.dumps(scalar_program()), "application/json")),
+            ],
+            "duplicate",
+        ),
+        (
+            [("blob:bad", (None, b"data", "application/octet-stream"))],
+            "malformed",
+        ),
+        (
+            [("unknown", (None, b"data", "application/octet-stream"))],
+            "unsupported",
+        ),
+    ],
+)
+def test_invalid_multipart_parts_are_rejected(files, match):
+    if not any(name == "program" for name, _ in files):
+        files = [("program", (None, json.dumps(scalar_program()), "application/json")), *files]
+    with make_client() as client:
+        response = client.post("/execute", files=files)
+    assert response.status_code == 400 and match in response.json()["error"]["message"]
 
 
-def test_key_mismatch_is_400():
-    with make_client() as c:
-        prog = {
+def test_duplicate_blob_hash_mismatch_unreferenced_and_wrong_length_rejected():
+    raw = b"data"
+    digest = compute_blob_hash(raw)
+    tensor_program = {
+        "instructions": [
+            {
+                "op": "upload",
+                "id": "x",
+                "kind": "tensor",
+                "blob": digest,
+                "dtype": "float32",
+                "shape": [1],
+            }
+        ]
+    }
+    duplicate_files = [
+        ("program", (None, json.dumps(tensor_program), "application/json")),
+        (f"blob:{digest}", (None, raw, "application/octet-stream")),
+        (f"blob:{digest}", (None, raw, "application/octet-stream")),
+    ]
+    with make_client() as client:
+        duplicate = client.post("/execute", files=duplicate_files)
+        mismatch = post_program(client, tensor_program, {digest: b"bad"})
+        unreferenced_hash = compute_blob_hash(b"other")
+        unreferenced = post_program(client, scalar_program(), {unreferenced_hash: b"other"})
+        wrong_length_hash = compute_blob_hash(b"abc")
+        wrong_length_program = {
             "instructions": [
                 {
-                    "id": "k",
                     "op": "upload",
-                    "kind": "function",
-                    "key": "sha256:wrong",
-                    "inline": {"source": STUB_FN},
+                    "id": "x",
+                    "kind": "tensor",
+                    "blob": wrong_length_hash,
+                    "dtype": "float32",
+                    "shape": [1],
                 }
             ]
         }
-        assert c.post("/benchmark", json=prog).status_code == 400
-
-
-def test_bad_json_is_400():
-    with make_client() as c:
-        r = c.post("/benchmark", content=b"not json", headers={"content-type": "application/json"})
-        assert r.status_code == 400
-
-
-def test_duplicate_json_key_is_400():
-    raw = b'{"instructions": [], "instructions": []}'
-    with make_client() as c:
-        r = c.post("/benchmark", content=raw, headers={"content-type": "application/json"})
-    assert r.status_code == 400 and "duplicate" in r.json()["error"]
-
-
-def test_non_finite_number_is_400():
-    raw = b'{"instructions": [{"id": "x", "op": "run", "fn": "builtin.structural", "args": [NaN]}]}'
-    with make_client() as c:
-        r = c.post("/benchmark", content=raw, headers={"content-type": "application/json"})
-    assert r.status_code == 400 and "non-finite" in r.json()["error"]
-
-
-def test_request_too_large_is_413():
-    config = ServerConfig(gpus=[0], max_request_bytes=100)
-    with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as c:
-        r = c.post("/benchmark", json=bench_program())
-    assert r.status_code == 413
-
-
-def test_response_too_large_is_500():
-    config = ServerConfig(gpus=[0], max_response_bytes=50)
-    prog = {"instructions": [{"id": "x", "op": "run", "fn": "builtin.structural", "args": []}]}
-    with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as c:
-        r = c.post("/benchmark", json=prog)
-    assert r.status_code == 500
-    assert r.json()["error"]["kind"] == "response_too_large"
-
-
-def test_unknown_op_is_400():
-    with make_client() as c:
-        r = c.post("/benchmark", json={"instructions": [{"id": "a", "op": "frob"}]})
-        assert r.status_code == 400
-
-
-def test_worker_crash_is_500():
-    with make_client() as c:
-        prog = {"instructions": [{"id": "boom", "op": "run", "fn": "builtin.crash", "args": []}]}
-        r = c.post("/benchmark", json=prog)
-        assert r.status_code == 500 and r.json()["error"]["kind"] == "engine"
-
-
-def test_stdout_stderr_come_back_in_results():
-    src = (
-        "import sys\n"
-        "def main():\n"
-        "    print('worker stdout')\n"
-        "    print('worker stderr', file=sys.stderr)\n"
+        wrong_length = post_program(client, wrong_length_program, {wrong_length_hash: b"abc"})
+    assert duplicate.status_code == 400 and "duplicate" in duplicate.json()["error"]["message"]
+    assert mismatch.status_code == 400 and "mismatch" in mismatch.json()["error"]["message"]
+    assert (
+        unreferenced.status_code == 400
+        and "unreferenced" in unreferenced.json()["error"]["message"]
     )
-    prog = {
+    assert (
+        wrong_length.status_code == 400
+        and "expects 4 bytes" in wrong_length.json()["error"]["message"]
+    )
+
+
+def test_strict_json_and_unknown_instruction_are_400():
+    with make_client() as client:
+        duplicate = post_program(
+            client,
+            {},
+            raw_program='{"instructions": [], "instructions": []}',
+        )
+        non_finite = post_program(
+            client,
+            {},
+            raw_program=(
+                '{"instructions":[{"op":"run","id":"x","fn":"builtin.structural","args":[NaN]}]}'
+            ),
+        )
+        unknown = post_program(client, {"instructions": [{"op": "frob"}]})
+    assert duplicate.status_code == 400 and "duplicate" in duplicate.json()["error"]["message"]
+    assert non_finite.status_code == 400 and "non-finite" in non_finite.json()["error"]["message"]
+    assert unknown.status_code == 400 and "unknown op" in unknown.json()["error"]["message"]
+
+
+def test_request_and_response_size_limits():
+    with TestClient(
+        create_app(
+            ServerConfig(gpus=[0], max_request_bytes=100), runtime_factory=fake_runtime_factory
+        )
+    ) as client:
+        too_large = post_program(client, scalar_program())
+    assert too_large.status_code == 413
+
+    source = "def main():\n    return b'x' * 1000\n"
+    program = {
         "instructions": [
-            {
-                "id": "fn",
-                "op": "upload",
-                "kind": "function",
-                "key": compute_key("function", {"source": src}),
-                "inline": {"source": src},
-            },
-            {"id": "call", "op": "run", "fn": {"$ref": "fn"}, "args": []},
+            {"op": "upload", "id": "fn", "kind": "module", "source": source},
+            {"op": "run", "id": "value", "fn": {"$ref": "fn"}},
+            {"op": "return", "key": "value", "value": {"$ref": "value"}},
         ]
     }
-    with make_client() as c:
-        data = c.post("/benchmark", json=prog).json()
-    assert data["status"] == "COMPLETED"
-    call = data["results"][1]
-    assert call["stdout"] == "worker stdout\n"
-    assert call["stderr"] == "worker stderr\n"
-    assert "stdout" not in data["results"][0]  # silent instruction carries no output
+    with TestClient(
+        create_app(
+            ServerConfig(gpus=[0], max_response_bytes=300), runtime_factory=fake_runtime_factory
+        )
+    ) as client:
+        too_large = post_program(client, program)
+    assert too_large.status_code == 500
+    assert too_large.json()["error"]["kind"] == "response_too_large"
 
 
-def test_output_limit_option_is_applied():
-    src = "def main():\n    print('a' * 100)\n"
-    prog = {
+def test_binary_response_uses_multipart():
+    program = {
         "instructions": [
-            {
-                "id": "fn",
-                "op": "upload",
-                "kind": "function",
-                "key": compute_key("function", {"source": src}),
-                "inline": {"source": src},
-            },
-            {"id": "call", "op": "run", "fn": {"$ref": "fn"}, "args": []},
-        ],
-        "options": {"output_limit_bytes": 5},
+            {"op": "run", "id": "value", "fn": "builtin.binary"},
+            {"op": "return", "key": "value", "value": {"$ref": "value"}},
+        ]
     }
-    with make_client() as c:
-        data = c.post("/benchmark", json=prog).json()
-    call = data["results"][1]
-    assert call["stdout"] == "aaaaa" and call["stdout_truncated"] is True
+    with make_client() as client:
+        response = post_program(client, program)
+    result, binary = response_parts(response)
+    assert response.headers["content-type"].startswith("multipart/form-data")
+    assert result["results"]["value"]["sha256"] == compute_blob_hash(b"binary-result")
+    assert binary == {"return:0": b"binary-result"}
 
 
-def test_timeout_is_504():
-    with make_client() as c:
-        prog = {
-            "instructions": [{"id": "s", "op": "run", "fn": "builtin.sleep", "args": [3.0]}],
-            "options": {"timeout_seconds": 0.5},
-        }
-        r = c.post("/benchmark", json=prog)
-        assert r.status_code == 504 and r.json()["error"]["kind"] == "timeout"
+def test_stdout_stderr_and_output_limit_are_request_level():
+    source = (
+        "import sys\n"
+        "print('load output')\n"
+        "def main():\n"
+        "    print('run output')\n"
+        "    print('error output', file=sys.stderr)\n"
+        "    return 1\n"
+    )
+    program = {
+        "instructions": [
+            {"op": "upload", "id": "fn", "kind": "module", "source": source},
+            {"op": "run", "id": "value", "fn": {"$ref": "fn"}},
+        ],
+        "options": {"output_limit_bytes": 8},
+    }
+    with make_client() as client:
+        data = post_program(client, program).json()
+    assert data["stdout"] == "load out" and data["stdout_truncated"] is True
+    assert data["stderr"] == "error ou" and data["stderr_truncated"] is True
 
 
-# --- process-tree cleanup: submitted code spawns a child, worker gets killed ---
+def test_timeout_and_worker_crash_statuses():
+    timeout_program = {
+        "instructions": [{"op": "run", "id": "sleep", "fn": "builtin.sleep", "args": [3]}],
+        "options": {"timeout_seconds": 0.5},
+    }
+    crash_program = {"instructions": [{"op": "run", "id": "crash", "fn": "builtin.crash"}]}
+    with make_client() as client:
+        timeout = post_program(client, timeout_program)
+        crash = post_program(client, crash_program)
+    assert timeout.status_code == 504 and timeout.json()["error"]["kind"] == "timeout"
+    assert crash.status_code == 500 and crash.json()["error"]["kind"] == "engine"
+
 
 SPAWN_AND_HANG = (
     "import subprocess, time\n"
@@ -240,32 +310,18 @@ SPAWN_AND_HANG = (
     "    time.sleep(60)\n"
 )
 
-SPAWN_AND_CRASH = (
-    "import os, subprocess\n"
-    "def main(pid_file):\n"
-    "    child = subprocess.Popen(['sleep', '60'])\n"
-    "    open(pid_file, 'w').write(str(child.pid))\n"
-    "    os._exit(1)\n"
-)
-
 
 def _spawner_program(source, pid_file):
     return {
         "instructions": [
-            {
-                "id": "fn",
-                "op": "upload",
-                "kind": "function",
-                "key": compute_key("function", {"source": source}),
-                "inline": {"source": source},
-            },
-            {"id": "call", "op": "run", "fn": {"$ref": "fn"}, "args": [pid_file]},
+            {"op": "upload", "id": "fn", "kind": "module", "source": source},
+            {"op": "run", "id": "call", "fn": {"$ref": "fn"}, "args": [pid_file]},
         ],
-        "options": {"timeout_seconds": 1.0},
+        "options": {"timeout_seconds": 1},
     }
 
 
-def _wait_until_pid_gone(pid, deadline_seconds=10.0):
+def _wait_until_pid_gone(pid, deadline_seconds=10):
     end = time.monotonic() + deadline_seconds
     while time.monotonic() < end:
         try:
@@ -276,31 +332,14 @@ def _wait_until_pid_gone(pid, deadline_seconds=10.0):
     return False
 
 
-def _grace_client():
-    config = ServerConfig(gpus=[0], worker_termination_grace_seconds=1.0)
-    return TestClient(create_app(config, runtime_factory=fake_runtime_factory))
-
-
 def test_timeout_kills_spawned_process_tree(tmp_path):
     pid_file = str(tmp_path / "pid")
-    with _grace_client() as c:
-        r = c.post("/benchmark", json=_spawner_program(SPAWN_AND_HANG, pid_file))
-    assert r.status_code == 504
-    child_pid = int(open(pid_file).read())
-    assert _wait_until_pid_gone(child_pid), "spawned child survived the worker timeout kill"
+    config = ServerConfig(gpus=[0], worker_termination_grace_seconds=1)
+    with make_client(config) as client:
+        response = post_program(client, _spawner_program(SPAWN_AND_HANG, pid_file))
+    assert response.status_code == 504
+    assert _wait_until_pid_gone(int(open(pid_file).read()))
 
-
-def test_crash_kills_spawned_process_tree(tmp_path):
-    pid_file = str(tmp_path / "pid")
-    with _grace_client() as c:
-        r = c.post("/benchmark", json=_spawner_program(SPAWN_AND_CRASH, pid_file))
-    assert r.status_code == 500
-    child_pid = int(open(pid_file).read())
-    assert _wait_until_pid_gone(child_pid), "spawned child survived the worker crash cleanup"
-
-
-# --- real kernel over the full stack (HTTP -> spawned worker -> GPURuntime) ---
-# Skipped unless BENCH_GPU_TEST=1 and a GPU with a TIRX-enabled tvm are available.
 
 KERNEL = """from __future__ import annotations
 from tvm.script import tirx as T
@@ -309,105 +348,58 @@ from tvm.script import tirx as T
 def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):
     T.device_entry()
     i = T.cta_id([N])
-    t = T.thread_id([1])
     B[i] = A[i] + 1.0
 """
-REF = "def main(a):\n    return a + 1.0\n"
-
-
-def _gpu_id() -> int:
-    cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
-    return int(cvd) if cvd.isdigit() else 0
-
-
-def _upload(id, source):
-    return {
-        "id": id,
-        "op": "upload",
-        "kind": "function",
-        "key": compute_key("function", {"source": source}),
-        "inline": {"source": source},
-    }
-
-
-def _tensor_upload(id, arr):
-    import base64
-
-    inline = {
-        "dtype": "float32",
-        "shape": list(arr.shape),
-        "data_b64": base64.b64encode(arr.tobytes()).decode(),
-    }
-    return {
-        "id": id,
-        "op": "upload",
-        "kind": "tensor",
-        "key": compute_key("tensor", inline),
-        "inline": inline,
-    }
 
 
 @pytest.mark.skipif(
     os.environ.get("BENCH_GPU_TEST") != "1",
-    reason="real-kernel e2e; set BENCH_GPU_TEST=1 with the TIRX env to run",
+    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
 )
 def test_real_kernel_end_to_end():
     import numpy as np
 
-    body = {
+    raw = np.arange(256, dtype=np.float32).tobytes()
+    digest = compute_blob_hash(raw)
+    program = {
         "instructions": [
-            _upload("kernel", KERNEL),
-            _upload("reffn", REF),
-            _tensor_upload("x", np.arange(256, dtype=np.float32)),  # client-provided input tensor
+            {"op": "upload", "id": "kernel", "kind": "module", "source": KERNEL},
             {
-                "id": "out",
+                "op": "upload",
+                "id": "input",
+                "kind": "tensor",
+                "blob": digest,
+                "dtype": "float32",
+                "shape": [256],
+            },
+            {
                 "op": "run",
+                "id": "output",
                 "fn": "builtin.empty",
                 "args": [{"shape": [256], "dtype": "float32"}],
             },
             {
-                "id": "mod",
                 "op": "run",
+                "id": "compiled",
                 "fn": "builtin.compile_tirx",
                 "args": [{"$ref": "kernel"}, {"N": 256}],
             },
             {
-                "id": "_run",
                 "op": "run",
-                "fn": {"$ref": "mod"},
-                "args": [{"$ref": "x"}, {"$ref": "out"}],
+                "id": "invoke",
+                "fn": {"$ref": "compiled"},
+                "args": [{"$ref": "input"}, {"$ref": "output"}],
             },
-            {"id": "ref", "op": "run", "fn": {"$ref": "reffn"}, "args": [{"$ref": "x"}]},
-            {
-                "id": "chk",
-                "op": "run",
-                "fn": "builtin.check_close",
-                "args": [{"$ref": "out"}, {"$ref": "ref"}],
-            },
-            {
-                "id": "perf",
-                "op": "run",
-                "fn": "builtin.benchmark",
-                "args": [
-                    {"$ref": "mod"},
-                    {"$ref": "x"},
-                    {"$ref": "out"},
-                    {"warmup": 5, "repeat": 20},
-                ],
-            },
+            {"op": "return", "key": "output", "value": {"$ref": "output"}},
         ],
         "options": {"timeout_seconds": 120},
     }
-
-    app = create_app(ServerConfig(gpus=[_gpu_id()]), runtime_factory=gpu_runtime_factory)
-    with TestClient(app) as c:
-        data = c.post("/benchmark", json=body).json()
-
-    assert data["status"] == "COMPLETED"
-    assert [r["status"] for r in data["results"]] == ["OK"] * 9
-    results = {r["id"]: r for r in data["results"]}
-    assert results["chk"]["value"]["passed"] and results["chk"]["value"]["max_abs_err"] == 0.0
-    assert (
-        results["perf"]["value"]["latency_ms_median"] > 0
-        and results["perf"]["value"]["repeat"] == 20
-    )
+    gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
+    gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0
+    app = create_app(ServerConfig(gpus=[gpu_id]), runtime_factory=gpu_runtime_factory)
+    with TestClient(app) as client:
+        response = post_program(client, program, {digest: raw})
+    result, binary = response_parts(response)
+    assert result["status"] == "COMPLETED"
+    returned = np.frombuffer(binary["return:0"], dtype=np.float32)
+    np.testing.assert_allclose(returned, np.arange(256, dtype=np.float32) + 1)
