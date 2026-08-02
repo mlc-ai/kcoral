@@ -53,6 +53,17 @@ def test_parse_complete_program():
             },
             "lowercase SHA-256",
         ),
+        (
+            {
+                "op": "upload",
+                "id": "x",
+                "kind": "tensor",
+                "blob": TENSOR_HASH,
+                "dtype": "float4_e2m1",
+                "shape": [1],
+            },
+            "unsupported dtype",
+        ),
         ({"op": "run", "id": "x", "fn": "builtin.zeros", "extra": 1}, "unknown field"),
         ({"op": "unknown", "id": "x"}, "unknown op"),
     ],

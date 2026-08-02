@@ -14,7 +14,6 @@ DTYPE_ITEM_SIZES: dict[str, int] = {
     "bool": 1,
     "uint8": 1,
     "int8": 1,
-    "float4_e2m1": 1,
     "float8_e4m3fn": 1,
     "float8_e5m2": 1,
     "int16": 2,
