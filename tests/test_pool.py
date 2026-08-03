@@ -4,7 +4,7 @@ import time
 import pytest
 
 from benchmark_server.pool import PoolBusy, WorkerPool
-from benchmark_server.schemas import Program, Return, Run
+from benchmark_server.schemas import Program, Ref, Return, Run
 from benchmark_server.testing import fake_runtime_factory
 from benchmark_server.worker import WorkerCrashed, WorkerTimeout
 
@@ -18,7 +18,7 @@ def op(id="x"):
 
 
 def successful_program():
-    return prog(op(), Return("value", {"$ref": "x"}))
+    return prog(op(), Return("value", Ref("x")))
 
 
 @pytest.fixture

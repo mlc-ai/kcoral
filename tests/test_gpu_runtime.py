@@ -6,7 +6,7 @@ import pytest
 
 from benchmark_server.engine import execute
 from benchmark_server.keys import compute_blob_hash
-from benchmark_server.schemas import Program, Return, Run, Upload
+from benchmark_server.schemas import Program, Ref, Return, Run, Upload
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("BENCH_GPU_TEST") != "1",
@@ -20,6 +20,7 @@ from tvm.script import tirx as T
 def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):
     T.device_entry()
     i = T.cta_id([N])
+    t = T.thread_id([1])
     B[i] = A[i] + 1.0
 """
 REF = "def main(a):\n    return a + 1.0\n"
@@ -30,12 +31,13 @@ PRIM_KERNEL = """from tvm.script import tirx as T
 def main(A: T.Buffer((256,), "float32"), B: T.Buffer((256,), "float32")):
     T.device_entry()
     i = T.cta_id([256])
+    t = T.thread_id([1])
     B[i] = A[i] + 1.0
 """
 
 
 def ref(handle):
-    return {"$ref": handle}
+    return Ref(handle)
 
 
 def runtime():

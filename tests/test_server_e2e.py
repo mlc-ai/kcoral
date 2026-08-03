@@ -348,6 +348,7 @@ from tvm.script import tirx as T
 def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):
     T.device_entry()
     i = T.cta_id([N])
+    t = T.thread_id([1])
     B[i] = A[i] + 1.0
 """
 

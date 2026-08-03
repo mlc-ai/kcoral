@@ -37,18 +37,25 @@ class Upload:
     op: Literal["upload"] = "upload"
 
 
+@dataclass(frozen=True)
+class Ref:
+    """A validated reference to an earlier handle; wire form is ``{"$ref": id}``."""
+
+    id: str
+
+
 @dataclass
 class Run:
     id: str
-    fn: str | dict[str, str]
-    args: list[Any] = field(default_factory=list)
+    fn: str | Ref
+    args: list[Any] = field(default_factory=list)  # ``Ref`` or a JSON literal
     op: Literal["run"] = "run"
 
 
 @dataclass
 class Return:
     key: str
-    value: dict[str, str]
+    value: Ref
     op: Literal["return"] = "return"
 
 
@@ -70,8 +77,26 @@ class Program:
         ]
 
 
+@dataclass
+class ProgramOutcome:
+    """What running one program produced, before the front-end adds request metadata."""
+
+    status: str
+    results: dict[str, dict[str, Any]] = field(default_factory=dict)
+    error: dict[str, Any] | None = None
+    binary_parts: dict[str, bytes] = field(default_factory=dict)
+    stdout: str = ""
+    stderr: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+
+
 def is_ref(value: Any) -> bool:
-    """Return whether ``value`` is exactly a handle reference."""
+    """Return whether ``value`` has the wire shape of a handle reference.
+
+    Parsing turns every such value into a :class:`Ref`, so only ``parse_program``
+    inspects the wire shape; everything downstream matches on ``Ref``.
+    """
     return (
         isinstance(value, dict)
         and set(value) == {"$ref"}
@@ -218,23 +243,29 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
 
 def _parse_run(item: dict[str, Any], index: int, handles: set[str]) -> Run:
     _check_fields(item, {"op", "id", "fn", "args"}, {"op", "id", "fn"}, f"instruction {index}")
-    fn = item["fn"]
-    if isinstance(fn, str):
-        if not fn:
+    raw_fn = item["fn"]
+    fn: str | Ref
+    if isinstance(raw_fn, str):
+        if not raw_fn:
             raise ValidationError(f"run {item['id']!r}: 'fn' must not be empty")
-    elif is_ref(fn):
-        _check_known_ref(fn, handles, item["id"])
+        fn = raw_fn
+    elif is_ref(raw_fn):
+        fn = _resolve_ref(raw_fn, handles, item["id"])
     else:
         raise ValidationError(f"run {item['id']!r}: 'fn' must be a name or {{'$ref': id}}")
 
-    args = item.get("args", [])
-    if not isinstance(args, list):
+    raw_args = item.get("args", [])
+    if not isinstance(raw_args, list):
         raise ValidationError(f"run {item['id']!r}: 'args' must be an array")
-    for argument in args:
+    args: list[Any] = []
+    for argument in raw_args:
+        # Only a top-level argument is a reference; one nested inside a JSON
+        # value stays a literal, as it does at execution time.
         if is_ref(argument):
-            _check_known_ref(argument, handles, item["id"])
+            args.append(_resolve_ref(argument, handles, item["id"]))
         else:
             _validate_json_value(argument, f"run {item['id']!r} argument")
+            args.append(argument)
     return Run(id=item["id"], fn=fn, args=args)
 
 
@@ -250,14 +281,14 @@ def _parse_return(
     value = item["value"]
     if not is_ref(value):
         raise ValidationError(f"return {key!r}: 'value' must be {{'$ref': id}}")
-    _check_known_ref(value, handles, f"return {key!r}")
-    return Return(key=key, value=value)
+    return Return(key=key, value=_resolve_ref(value, handles, f"return {key!r}"))
 
 
-def _check_known_ref(reference: dict[str, str], handles: set[str], owner: str) -> None:
+def _resolve_ref(reference: dict[str, Any], handles: set[str], owner: str) -> Ref:
     target = reference["$ref"]
     if target not in handles:
         raise ValidationError(f"{owner!r} references unknown/forward handle {target!r}")
+    return Ref(target)
 
 
 def _validate_json_value(value: Any, label: str) -> None:

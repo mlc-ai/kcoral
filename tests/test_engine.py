@@ -1,11 +1,11 @@
 from benchmark_server.engine import execute
 from benchmark_server.keys import compute_blob_hash
-from benchmark_server.schemas import Program, Return, Run, Upload
+from benchmark_server.schemas import Program, Ref, Return, Run, Upload
 from benchmark_server.testing import FakeRuntime
 
 
 def ref(handle):
-    return {"$ref": handle}
+    return Ref(handle)
 
 
 def test_module_run_and_explicit_return():

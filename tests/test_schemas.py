@@ -1,7 +1,7 @@
 import pytest
 
 from benchmark_server.errors import ValidationError
-from benchmark_server.schemas import Return, Run, Upload, parse_program, strict_json_loads
+from benchmark_server.schemas import Ref, Return, Run, Upload, parse_program, strict_json_loads
 
 TENSOR_HASH = "0" * 64
 
@@ -33,6 +33,10 @@ def test_parse_complete_program():
     assert isinstance(program.instructions[0], Upload)
     assert isinstance(program.instructions[2], Run)
     assert isinstance(program.instructions[3], Return)
+    # References are resolved to ``Ref`` at parse time; literals stay untouched.
+    assert program.instructions[2].fn == Ref("module")
+    assert program.instructions[2].args == [1]
+    assert program.instructions[3].value == Ref("result")
     assert program.options == {"timeout_seconds": 12.0, "output_limit_bytes": 0}
     assert program.tensor_uploads()[0].blob == TENSOR_HASH
 

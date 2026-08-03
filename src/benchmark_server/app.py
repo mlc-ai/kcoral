@@ -13,13 +13,18 @@ from fastapi.responses import JSONResponse, Response
 
 from .cache import ByteCache
 from .config import ServerConfig
-from .engine import ExecutionOutcome
 from .errors import ValidationError
 from .events import EventLogger
 from .keys import is_blob_hash, verify_blob
 from .multipart import MultipartPart, encode_multipart, parse_multipart
 from .pool import PoolBusy, WorkerPool
-from .schemas import Program, expected_tensor_nbytes, parse_program, strict_json_loads
+from .schemas import (
+    Program,
+    ProgramOutcome,
+    expected_tensor_nbytes,
+    parse_program,
+    strict_json_loads,
+)
 from .worker import WorkerCrashed, WorkerTimeout
 
 
@@ -153,7 +158,7 @@ def create_app(
             cache.unpin(cache_keys)
 
         execution = outcome.execution
-        if not isinstance(execution, ExecutionOutcome):
+        if not isinstance(execution, ProgramOutcome):
             finished(500, level="ERROR", error="invalid_worker_response")
             return _error_response(500, "engine", "invalid worker response", request_id)
         payload: dict[str, object] = {

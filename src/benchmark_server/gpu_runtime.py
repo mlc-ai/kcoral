@@ -81,8 +81,12 @@ class GPURuntime:
             raise ExecutionError("parse", f"syntax error: {exc}") from exc
         except Exception as exc:
             raise ExecutionError("parse", f"{type(exc).__name__}: {exc}") from exc
-        if ENTRY_POINT not in ns or not callable(ns[ENTRY_POINT]):
+        if ENTRY_POINT not in ns:
             raise ExecutionError("parse", f"source must define {ENTRY_POINT!r}")
+        # Deliberately not a callable check: a ``@T.jit`` kernel is a TIRJit, which
+        # defines no ``__call__`` and is meant for ``builtin.compile_tirx`` rather
+        # than direct invocation. Calling a non-callable handle is caught at run
+        # time, and compiling a non-kernel is caught by the builtin.
         return ns[ENTRY_POINT]
 
 

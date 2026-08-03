@@ -8,12 +8,21 @@ import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import IO, Any, Protocol
 
 from .errors import ExecutionError
 from .keys import compute_blob_hash
-from .schemas import DTYPE_ITEM_SIZES, Program, Return, Run, Upload, expected_tensor_nbytes, is_ref
+from .schemas import (
+    DTYPE_ITEM_SIZES,
+    Program,
+    ProgramOutcome,
+    Ref,
+    Return,
+    Run,
+    Upload,
+    expected_tensor_nbytes,
+)
 
 DEFAULT_OUTPUT_LIMIT_BYTES = 1024**2
 
@@ -26,19 +35,7 @@ class Runtime(Protocol):
     def reset(self) -> None: ...
 
 
-@dataclass
-class ExecutionOutcome:
-    status: str
-    results: dict[str, dict[str, Any]] = field(default_factory=dict)
-    error: dict[str, Any] | None = None
-    binary_parts: dict[str, bytes] = field(default_factory=dict)
-    stdout: str = ""
-    stderr: str = ""
-    stdout_truncated: bool = False
-    stderr_truncated: bool = False
-
-
-def execute(program: Program, runtime: Runtime) -> ExecutionOutcome:
+def execute(program: Program, runtime: Runtime) -> ProgramOutcome:
     """Run a program and serialize only values selected by return instructions."""
     env: dict[str, Any] = {}
     results: dict[str, dict[str, Any]] = {}
@@ -68,11 +65,11 @@ def execute(program: Program, runtime: Runtime) -> ExecutionOutcome:
                     elif isinstance(instruction, Run):
                         fn = _resolve_fn(instruction.fn, env, runtime)
                         args = [
-                            env[arg["$ref"]] if is_ref(arg) else arg for arg in instruction.args
+                            env[arg.id] if isinstance(arg, Ref) else arg for arg in instruction.args
                         ]
                         env[instruction.id] = fn(*args)
                     elif isinstance(instruction, Return):
-                        results[instruction.key] = encoder.encode(env[instruction.value["$ref"]])
+                        results[instruction.key] = encoder.encode(env[instruction.value.id])
             except ExecutionError as exc:
                 error = {
                     "kind": exc.kind,
@@ -91,7 +88,7 @@ def execute(program: Program, runtime: Runtime) -> ExecutionOutcome:
     if error is not None:
         results = {}
         encoder.binary_parts.clear()
-    return ExecutionOutcome(
+    return ProgramOutcome(
         status="FAILED" if error is not None else "COMPLETED",
         results=results,
         error=error,
@@ -227,10 +224,10 @@ def _read_captured(file: IO[bytes], limit_bytes: int) -> tuple[str, bool]:
     return data[:limit_bytes].decode("utf-8", errors="replace"), len(data) > limit_bytes
 
 
-def _resolve_fn(fn: Any, env: dict[str, Any], runtime: Runtime) -> Callable:
-    if is_ref(fn):
-        obj = env[fn["$ref"]]
+def _resolve_fn(fn: str | Ref, env: dict[str, Any], runtime: Runtime) -> Callable:
+    if isinstance(fn, Ref):
+        obj = env[fn.id]
         if not callable(obj):
-            raise ExecutionError("runtime", f"handle {fn['$ref']!r} is not callable")
+            raise ExecutionError("runtime", f"handle {fn.id!r} is not callable")
         return obj
     return runtime.builtin(fn)
