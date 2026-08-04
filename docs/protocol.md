@@ -123,15 +123,19 @@ callable named `main`.
 
 ### Fields
 
-| Field | Kinds | Required | Notes |
-|---|---|---:|---|
-| `op` | all | yes | `"upload"` |
-| `id` | all | yes | Unique handle name |
-| `kind` | all | yes | `"module"` or `"tensor"` |
-| `source` | module | yes | UTF-8 Python source defining `main` |
-| `blob` | tensor | yes | SHA-256 of raw tensor bytes |
-| `dtype` | tensor | yes | Tensor data type |
-| `shape` | tensor | yes | Tensor shape |
+A field is required exactly for the kinds it lists, and is rejected for the
+others: a `module` upload carries `source` and no tensor fields, a `tensor`
+upload carries `blob`, `dtype`, and `shape` and no `source`.
+
+| Field | Kinds | Required for | Notes |
+|---|---|---|---|
+| `op` | all | all | `"upload"` |
+| `id` | all | all | Unique handle name |
+| `kind` | all | all | `"module"` or `"tensor"` |
+| `source` | module | module | UTF-8 Python source defining `main` |
+| `blob` | tensor | tensor | SHA-256 of raw tensor bytes |
+| `dtype` | tensor | tensor | Tensor data type |
+| `shape` | tensor | tensor | Tensor shape |
 
 ### Tensor blob cache
 
@@ -213,8 +217,11 @@ Selects a handle for the response:
 | `key` | string | yes | Unique key in the response `results` object |
 | `value` | `{"$ref": id}` | yes | Earlier handle to return |
 
-`return` has no `id` and creates no handle. All `return` instructions follow the
-`upload` and `run` instructions.
+`return` has no `id` and creates no handle. Instructions run in the order given
+and a `return` may appear anywhere after the instruction it references, so a
+program can interleave returns with the uploads and runs that follow them. A
+`return` that has already run contributes its entry to `results` even if a later
+instruction fails.
 
 ---
 
@@ -256,6 +263,25 @@ For a successful program, HTTP status is `200`:
 in the `X-Request-ID` header. `queue_ms` is worker wait time; `elapsed_ms` is
 worker execution and result serialization time.
 
+### Fields
+
+| Field | Type | Present | Notes |
+|---|---|---|---|
+| `status` | string | always | `COMPLETED`, `FAILED`, or `CACHE_MISS` |
+| `request_id` | string | always | Also sent as `X-Request-ID` |
+| `queue_ms` | number | run | Worker wait time |
+| `elapsed_ms` | number | run | Worker execution and serialization time |
+| `results` | object | run | Entries for every `return` that ran; may be empty |
+| `error` | object | `FAILED` | See [Errors](#errors) |
+| `missing_blobs` | array | `CACHE_MISS` | Blob hashes the server does not hold |
+| `stdout` | string | run | Captured standard output |
+| `stderr` | string | run | Captured standard error |
+| `stdout_truncated` | boolean | run | Whether `stdout` hit `output_limit_bytes` |
+| `stderr_truncated` | boolean | run | Whether `stderr` hit `output_limit_bytes` |
+
+"run" marks fields present whenever the program reached a worker, so on both
+`COMPLETED` and `FAILED` but not on `CACHE_MISS`.
+
 ### Value encoding
 
 | Type | Encoding |
@@ -288,7 +314,9 @@ length must match `dtype` and `shape`.
 
 ### Errors
 
-An instruction failure stops the program and returns no `results`:
+An instruction failure stops the program. Every `return` that already ran keeps
+its entry in `results`, so a program can checkpoint partial work by returning it
+before the instructions that might fail:
 
 ```json
 {
@@ -296,15 +324,38 @@ An instruction failure stops the program and returns no `results`:
   "request_id": "7f61b94e-034a-4e80-b67d-eca52bb952cc",
   "queue_ms": 0.4,
   "elapsed_ms": 12.7,
+  "results": {
+    "timing": {
+      "type": "object",
+      "value": {
+        "latency_ms_median": {"type": "number", "value": 0.0073}
+      }
+    }
+  },
   "error": {
     "kind": "correctness",
-    "message": "outputs differ",
-    "instruction_index": 6
+    "message": "outputs differ: max_abs_err=0.5 exceeds atol=0.001",
+    "instruction_index": 6,
+    "instruction_op": "run",
+    "instruction_id": "check",
+    "traceback": "Traceback (most recent call last):\n  ..."
   },
   "stdout": "",
   "stderr": ""
 }
 ```
+
+The failing instruction itself contributes nothing: a `return` that fails while
+encoding adds neither a `results` entry nor binary parts.
+
+| Field | Type | Notes |
+|---|---|---|
+| `kind` | string | See kinds below |
+| `message` | string | Human-readable description |
+| `instruction_index` | integer | Zero-based position in `instructions` |
+| `instruction_op` | string | `"upload"`, `"run"`, or `"return"` |
+| `instruction_id` | string \| null | The instruction's `id`; `null` for `return` |
+| `traceback` | string | Server-side traceback, truncated to 8192 bytes |
 
 Instruction error kinds are `parse`, `compile`, `runtime`, `correctness`,
 `serialization`, `unavailable`, and `engine`.
@@ -312,7 +363,7 @@ Instruction error kinds are `parse`, `compile`, `runtime`, `correctness`,
 | HTTP | Body | Meaning |
 |---:|---|---|
 | 200 | `status: COMPLETED` | Program completed |
-| 200 | `status: FAILED` | An instruction failed |
+| 200 | `status: FAILED` | An instruction failed; `results` holds the returns that ran |
 | 200 | `status: CACHE_MISS` | Tensor blobs are missing; program did not run |
 | 400 | `status: ERROR` | Malformed request or program, including duplicate JSON keys and NaN/Infinity |
 | 413 | `status: ERROR` | Request body exceeds the server's size limit |
@@ -398,6 +449,7 @@ from tvm.script import tirx as T
 def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):
     T.device_entry()
     i = T.cta_id([N])
+    t = T.thread_id([1])
     B[i] = A[i] + 1.0
 """
 input_array = np.arange(256, dtype=np.float32)

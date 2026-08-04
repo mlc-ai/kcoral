@@ -82,20 +82,24 @@ def test_completed_program_returns_only_selected_values():
     assert data["stdout"] == "" and data["stderr"] == ""
 
 
-def test_failed_instruction_stops_without_results():
+def test_failed_instruction_stops_after_a_return_that_already_ran():
     program = {
         "instructions": [
             {"op": "run", "id": "ok", "fn": "builtin.structural"},
-            {"op": "run", "id": "bad", "fn": "builtin.nope"},
             {"op": "return", "key": "ok", "value": {"$ref": "ok"}},
+            {"op": "run", "id": "bad", "fn": "builtin.nope"},
+            {"op": "return", "key": "never", "value": {"$ref": "ok"}},
         ]
     }
     with make_client() as client:
         response = post_program(client, program)
     data = response.json()
     assert response.status_code == 200 and data["status"] == "FAILED"
-    assert "results" not in data
-    assert data["error"]["kind"] == "runtime" and data["error"]["instruction_index"] == 1
+    assert set(data["results"]) == {"ok"}
+    error = data["error"]
+    assert error["kind"] == "runtime" and error["instruction_index"] == 2
+    assert error["instruction_op"] == "run" and error["instruction_id"] == "bad"
+    assert "Traceback" in error["traceback"]
 
 
 def test_tensor_cache_miss_upload_and_warm_hit():

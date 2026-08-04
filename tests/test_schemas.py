@@ -99,7 +99,22 @@ def test_duplicate_handles_and_return_keys_rejected():
         )
 
 
-def test_forward_references_and_instructions_after_return_rejected():
+def test_returns_may_interleave_with_uploads_and_runs():
+    program = parse_program(
+        {
+            "instructions": [
+                {"op": "run", "id": "x", "fn": "builtin.zeros"},
+                {"op": "return", "key": "x", "value": {"$ref": "x"}},
+                {"op": "run", "id": "y", "fn": "builtin.zeros", "args": [{"$ref": "x"}]},
+                {"op": "return", "key": "y", "value": {"$ref": "y"}},
+            ]
+        }
+    )
+    # The run after the first return still resolves its reference.
+    assert program.instructions[2].args == [Ref("x")]
+
+
+def test_forward_references_rejected():
     with pytest.raises(ValidationError, match="unknown/forward"):
         parse_program(
             {
@@ -108,13 +123,13 @@ def test_forward_references_and_instructions_after_return_rejected():
                 ]
             }
         )
-    with pytest.raises(ValidationError, match="must follow"):
+    # A return may not reach forward either, even though order is otherwise free.
+    with pytest.raises(ValidationError, match="unknown/forward"):
         parse_program(
             {
                 "instructions": [
-                    {"op": "run", "id": "x", "fn": "builtin.zeros"},
                     {"op": "return", "key": "x", "value": {"$ref": "x"}},
-                    {"op": "run", "id": "y", "fn": "builtin.zeros"},
+                    {"op": "run", "id": "x", "fn": "builtin.zeros"},
                 ]
             }
         )

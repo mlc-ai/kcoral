@@ -211,6 +211,35 @@ def test_assert_close_failure_stops_without_results():
     outcome = execute(program, runtime())
     assert outcome.status == "FAILED" and outcome.results == {}
     assert outcome.error["kind"] == "correctness" and outcome.error["instruction_index"] == 7
+    assert outcome.error["instruction_op"] == "run" and outcome.error["instruction_id"] == "check"
+
+
+def test_timing_returned_before_a_correctness_failure_is_kept():
+    """Returning timing before the check keeps the benchmark when the kernel is wrong."""
+    wrong = KERNEL.replace("A[i] + 1.0", "A[i] + 2.0")
+    program = Program(
+        [
+            Upload("kernel", "module", source=wrong),
+            Upload("reference", "module", source=REF),
+            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32"}]),
+            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"N": 256}]),
+            Run(
+                "timing",
+                "builtin.benchmark",
+                [ref("compiled"), ref("input"), ref("output"), {"warmup": 5, "repeat": 20}],
+            ),
+            Return("timing", ref("timing")),
+            Run("expected", ref("reference"), [ref("input")]),
+            Run("check", "builtin.assert_close", [ref("output"), ref("expected")]),
+            Return("output", ref("output")),
+        ]
+    )
+    outcome = execute(program, runtime())
+    assert outcome.status == "FAILED"
+    assert set(outcome.results) == {"timing"}
+    assert decode_structural(outcome.results["timing"])["latency_ms_median"] > 0
+    assert outcome.error["kind"] == "correctness" and outcome.error["instruction_id"] == "check"
 
 
 def test_uploaded_and_returned_tensor_bytes():

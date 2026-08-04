@@ -52,7 +52,6 @@ class Program:
     _blobs: dict[str, bytes] = field(default_factory=dict, init=False)
     _ids: set[str] = field(default_factory=set, init=False)
     _return_keys: set[str] = field(default_factory=set, init=False)
-    _return_phase: bool = field(default=False, init=False)
 
     @property
     def instructions(self) -> list[dict[str, Any]]:
@@ -118,13 +117,12 @@ class Program:
             and isinstance(reference["$ref"], str)
         ):
             raise TypeError("return value must be a Register or {'$ref': id}")
-        self._return_phase = True
+        if reference["$ref"] not in self._ids:
+            raise ValueError(f"return {key!r} references unknown handle {reference['$ref']!r}")
         self._return_keys.add(key)
         self._instructions.append({"op": "return", "key": key, "value": reference})
 
     def _add_id(self, instruction_id: str) -> None:
-        if self._return_phase:
-            raise ValueError("uploads and runs cannot follow return instructions")
         if not isinstance(instruction_id, str) or not instruction_id:
             raise ValueError("instruction id must be a non-empty string")
         if instruction_id in self._ids:
@@ -405,45 +403,24 @@ def _parse_program_result(body: dict[str, Any], binary_parts: dict[str, bytes]) 
             raise ValueError("output truncation flags must be booleans")
 
         used_parts: set[str] = set()
+        # A FAILED program still reports every return that ran before the failure.
+        encoded_results = body["results"]
+        if not isinstance(encoded_results, dict):
+            raise ValueError("results must be an object")
+        results = {
+            key: _decode_value(value, binary_parts, used_parts)
+            for key, value in encoded_results.items()
+            if isinstance(key, str)
+        }
+        if len(results) != len(encoded_results):
+            raise ValueError("result keys must be strings")
+
         if status == "COMPLETED":
             if "error" in body:
                 raise ValueError("COMPLETED response must not contain error details")
-            encoded_results = body["results"]
-            if not isinstance(encoded_results, dict):
-                raise ValueError("results must be an object")
-            results = {
-                key: _decode_value(value, binary_parts, used_parts)
-                for key, value in encoded_results.items()
-                if isinstance(key, str)
-            }
-            if len(results) != len(encoded_results):
-                raise ValueError("result keys must be strings")
             error = None
         else:
-            if "results" in body:
-                raise ValueError("FAILED response must not contain results")
-            error = body["error"]
-            if not isinstance(error, dict):
-                raise ValueError("error must be an object")
-            if set(error) != {"kind", "message", "instruction_index"}:
-                raise ValueError("error details have unexpected fields")
-            if error["kind"] not in {
-                "parse",
-                "compile",
-                "runtime",
-                "correctness",
-                "serialization",
-                "unavailable",
-                "engine",
-            }:
-                raise ValueError("error kind is invalid")
-            if not isinstance(error["message"], str):
-                raise ValueError("error message must be a string")
-            if isinstance(error["instruction_index"], bool) or not isinstance(
-                error["instruction_index"], int
-            ):
-                raise ValueError("error instruction_index must be an integer")
-            results = {}
+            error = _parse_error(body["error"])
         unreferenced = set(binary_parts) - used_parts
         if unreferenced:
             raise ValueError(f"unreferenced binary response parts: {sorted(unreferenced)}")
@@ -461,6 +438,42 @@ def _parse_program_result(body: dict[str, Any], binary_parts: dict[str, bytes]) 
         stderr_truncated=stderr_truncated,
         error=error,
     )
+
+
+def _parse_error(error: Any) -> dict[str, Any]:
+    if not isinstance(error, dict):
+        raise ValueError("error must be an object")
+    expected = {
+        "kind",
+        "message",
+        "instruction_index",
+        "instruction_op",
+        "instruction_id",
+        "traceback",
+    }
+    if set(error) != expected:
+        raise ValueError("error details have unexpected fields")
+    if error["kind"] not in {
+        "parse",
+        "compile",
+        "runtime",
+        "correctness",
+        "serialization",
+        "unavailable",
+        "engine",
+    }:
+        raise ValueError("error kind is invalid")
+    if not isinstance(error["message"], str) or not isinstance(error["traceback"], str):
+        raise ValueError("error message and traceback must be strings")
+    if isinstance(error["instruction_index"], bool) or not isinstance(
+        error["instruction_index"], int
+    ):
+        raise ValueError("error instruction_index must be an integer")
+    if error["instruction_op"] not in ("upload", "run", "return"):
+        raise ValueError("error instruction_op is invalid")
+    if error["instruction_id"] is not None and not isinstance(error["instruction_id"], str):
+        raise ValueError("error instruction_id must be a string or null")
+    return error
 
 
 def _decode_value(encoded: Any, binary_parts: dict[str, bytes], used_parts: set[str]) -> Any:

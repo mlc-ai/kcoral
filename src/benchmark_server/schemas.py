@@ -142,19 +142,17 @@ def parse_program(body: Any) -> Program:
     handles: set[str] = set()
     return_keys: set[str] = set()
     instructions: list[Instruction] = []
-    return_phase = False
 
+    # Instructions may appear in any order; ``handles`` grows as they are parsed,
+    # so a reference to a later instruction is rejected as a forward reference.
     for index, item in enumerate(raw_instructions):
         if not isinstance(item, dict):
             raise ValidationError(f"instruction {index} must be an object")
         op = item.get("op")
         if op == "return":
-            return_phase = True
             instruction = _parse_return(item, index, handles, return_keys)
             return_keys.add(instruction.key)
         elif op in ("upload", "run"):
-            if return_phase:
-                raise ValidationError("all return instructions must follow uploads and runs")
             instruction_id = item.get("id")
             if not isinstance(instruction_id, str) or not instruction_id:
                 raise ValidationError(f"instruction {index} needs a non-empty string 'id'")

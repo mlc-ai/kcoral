@@ -171,9 +171,8 @@ def create_app(
             "stdout_truncated": execution.stdout_truncated,
             "stderr_truncated": execution.stderr_truncated,
         }
-        if execution.status == "COMPLETED":
-            payload["results"] = execution.results
-        else:
+        payload["results"] = execution.results
+        if execution.status != "COMPLETED":
             payload["error"] = execution.error
 
         response_body, content_type = _encode_response(payload, execution.binary_parts)

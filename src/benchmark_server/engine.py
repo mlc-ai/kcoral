@@ -6,6 +6,7 @@ import math
 import os
 import sys
 import tempfile
+import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from .errors import ExecutionError
 from .keys import compute_blob_hash
 from .schemas import (
     DTYPE_ITEM_SIZES,
+    Instruction,
     Program,
     ProgramOutcome,
     Ref,
@@ -25,6 +27,7 @@ from .schemas import (
 )
 
 DEFAULT_OUTPUT_LIMIT_BYTES = 1024**2
+MAX_TRACEBACK_BYTES = 8192
 
 
 class Runtime(Protocol):
@@ -42,11 +45,13 @@ def execute(program: Program, runtime: Runtime) -> ProgramOutcome:
     encoder = _ValueEncoder(runtime)
     error: dict[str, Any] | None = None
     current_index: int | None = None
+    current: Instruction | None = None
     captured = CapturedOutput()
     try:
         with _capture_output(_output_limit(program)) as captured:
             try:
                 for current_index, instruction in enumerate(program.instructions):
+                    current = instruction
                     if isinstance(instruction, Upload):
                         if instruction.kind == "module":
                             assert instruction.source is not None
@@ -69,25 +74,26 @@ def execute(program: Program, runtime: Runtime) -> ProgramOutcome:
                         ]
                         env[instruction.id] = fn(*args)
                     elif isinstance(instruction, Return):
-                        results[instruction.key] = encoder.encode(env[instruction.value.id])
+                        # A return that fails mid-encode must leave nothing behind: it
+                        # adds no results entry, so a binary part it already registered
+                        # for an encoded child would ship unreferenced. The client
+                        # rejects that, masking the real serialization error.
+                        checkpoint = encoder.checkpoint()
+                        try:
+                            results[instruction.key] = encoder.encode(env[instruction.value.id])
+                        except BaseException:
+                            encoder.rollback(checkpoint)
+                            raise
             except ExecutionError as exc:
-                error = {
-                    "kind": exc.kind,
-                    "message": exc.message,
-                    "instruction_index": current_index,
-                }
+                error = _instruction_error(exc.kind, exc.message, current_index, current)
             except Exception as exc:
-                error = {
-                    "kind": "engine",
-                    "message": f"{type(exc).__name__}: {exc}",
-                    "instruction_index": current_index,
-                }
+                error = _instruction_error(
+                    "engine", f"{type(exc).__name__}: {exc}", current_index, current
+                )
     finally:
         runtime.reset()
 
-    if error is not None:
-        results = {}
-        encoder.binary_parts.clear()
+    # A failure stops the program but keeps the returns that already ran.
     return ProgramOutcome(
         status="FAILED" if error is not None else "COMPLETED",
         results=results,
@@ -98,6 +104,21 @@ def execute(program: Program, runtime: Runtime) -> ProgramOutcome:
         stdout_truncated=captured.stdout_truncated,
         stderr_truncated=captured.stderr_truncated,
     )
+
+
+def _instruction_error(
+    kind: str, message: str, index: int | None, instruction: Instruction | None
+) -> dict[str, Any]:
+    """Describe the failing instruction alongside the raised error."""
+    return {
+        "kind": kind,
+        "message": message,
+        "instruction_index": index,
+        "instruction_op": instruction.op if instruction is not None else None,
+        # ``Return`` carries a key rather than a handle name, so it has no id.
+        "instruction_id": getattr(instruction, "id", None),
+        "traceback": traceback.format_exc()[-MAX_TRACEBACK_BYTES:],
+    }
 
 
 class _ValueEncoder:
@@ -157,6 +178,14 @@ class _ValueEncoder:
             encoded.update({"dtype": dtype, "shape": shape})
             return encoded
         raise ExecutionError("serialization", f"cannot return value of type {type(value).__name__}")
+
+    def checkpoint(self) -> int:
+        return len(self.binary_parts)
+
+    def rollback(self, checkpoint: int) -> None:
+        """Drop parts registered since ``checkpoint``, keeping numbering contiguous."""
+        for name in list(self.binary_parts)[checkpoint:]:
+            del self.binary_parts[name]
 
     def _binary_value(self, value_type: str, data: bytes) -> dict[str, Any]:
         part_name = f"return:{len(self.binary_parts)}"

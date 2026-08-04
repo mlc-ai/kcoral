@@ -8,7 +8,7 @@ import httpx
 import pytest
 import uvicorn
 
-from benchmark_server import Client, Program
+from benchmark_server import Client, Program, Register
 from benchmark_server.app import create_app
 from benchmark_server.client import (
     BenchmarkServerError,
@@ -99,6 +99,20 @@ def test_failed_instruction_is_data(server_url):
     assert outcome.error["kind"] == "runtime"
 
 
+def test_interleaved_return_survives_a_later_failure(server_url):
+    program = Program()
+    fn = program.upload(id="fn", kind="module", source="def main():\n    return b'checkpoint'\n")
+    early = program.run(id="early", fn=fn)
+    program.return_(key="early", value=early)  # checkpointed before the failure
+    program.run(id="bad", fn="builtin.nope")
+    with Client(server_url) as client:
+        outcome = client.execute(program)
+    assert outcome.status == "FAILED"
+    assert outcome.results == {"early": b"checkpoint"}
+    assert outcome.error["instruction_op"] == "run" and outcome.error["instruction_id"] == "bad"
+    assert "Traceback" in outcome.error["traceback"]
+
+
 def test_timeout_raises_server_error(server_url):
     program = Program()
     program.run(id="sleep", fn="builtin.sleep", args=[5])
@@ -126,13 +140,19 @@ def test_health_and_transport_errors(server_url):
             client.health()
 
 
-def test_program_builder_validates_ids_order_and_tensor_metadata():
+def test_program_builder_allows_interleaved_returns():
     program = Program()
     register = program.upload(id="module", kind="module", source="def main(): pass\n")
     program.return_(key="module", value=register)
-    with pytest.raises(ValueError, match="cannot follow"):
-        program.run(id="late", fn="builtin.structural")
+    program.run(id="later", fn="builtin.structural")
+    program.return_(key="later", value=Register("later"))
+    assert len(program.instructions) == 4
 
+    with pytest.raises(ValueError, match="unknown handle"):
+        Program().return_(key="missing", value=Register("nope"))
+
+
+def test_program_builder_validates_ids_and_tensor_metadata():
     with pytest.raises(ValueError, match="expects 4 bytes"):
         Program().upload(id="bad", kind="tensor", value=b"abc", dtype="float32", shape=[1])
 
@@ -162,6 +182,16 @@ def test_torch_bfloat16_tensor_builder():
     assert len(program._blobs[instruction["blob"]]) == 8
 
 
+FAILED_ERROR = {
+    "kind": "runtime",
+    "message": "bad",
+    "instruction_index": 2,
+    "instruction_op": "run",
+    "instruction_id": "boom",
+    "traceback": "Traceback (most recent call last):\n  ...",
+}
+
+
 def test_client_rejects_malformed_execution_responses():
     common = {
         "request_id": "request",
@@ -170,13 +200,24 @@ def test_client_rejects_malformed_execution_responses():
         "stdout": "",
         "stderr": "",
     }
-    with pytest.raises(ProtocolError, match="must not contain results"):
+    with pytest.raises(ProtocolError, match="unexpected fields"):
         _parse_program_result(
             {
                 **common,
                 "status": "FAILED",
                 "results": {},
                 "error": {"kind": "runtime", "message": "bad", "instruction_index": 0},
+            },
+            {},
+        )
+
+    with pytest.raises(ProtocolError, match="instruction_op is invalid"):
+        _parse_program_result(
+            {
+                **common,
+                "status": "FAILED",
+                "results": {},
+                "error": {**FAILED_ERROR, "instruction_op": "nope"},
             },
             {},
         )

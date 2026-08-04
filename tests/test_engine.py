@@ -68,7 +68,7 @@ def test_tensor_return_has_metadata_hash_and_binary_part():
     assert outcome.binary_parts == {"return:0": raw}
 
 
-def test_instruction_failure_stops_and_returns_no_results():
+def test_instruction_failure_stops_and_describes_the_instruction():
     outcome = execute(
         Program(
             [
@@ -80,7 +80,51 @@ def test_instruction_failure_stops_and_returns_no_results():
         FakeRuntime(),
     )
     assert outcome.status == "FAILED" and outcome.results == {}
-    assert outcome.error["kind"] == "runtime" and outcome.error["instruction_index"] == 1
+    error = outcome.error
+    assert error["kind"] == "runtime" and error["instruction_index"] == 1
+    assert error["instruction_op"] == "run" and error["instruction_id"] == "bad"
+    assert "Traceback" in error["traceback"]
+
+
+def test_returns_that_ran_survive_a_later_failure():
+    outcome = execute(
+        Program(
+            [
+                Run("ok", "builtin.structural", []),
+                Return("early", ref("ok")),
+                Run("bad", "builtin.nope", []),
+                Return("late", ref("ok")),
+            ]
+        ),
+        FakeRuntime(),
+    )
+    assert outcome.status == "FAILED"
+    assert set(outcome.results) == {"early"}
+    assert outcome.results["early"]["value"]["ok"] == {"type": "boolean", "value": True}
+
+
+def test_failed_return_rolls_back_only_its_own_binary_parts():
+    # ``main`` encodes one part before hitting a value the encoder cannot handle.
+    source = "def main():\n    return [b'partial', object()]\n"
+    outcome = execute(
+        Program(
+            [
+                Run("blob", "builtin.binary", []),
+                Return("kept", ref("blob")),
+                Upload("fn", "module", source=source),
+                Run("mixed", ref("fn"), []),
+                Return("dropped", ref("mixed")),
+            ]
+        ),
+        FakeRuntime(),
+    )
+    assert outcome.status == "FAILED"
+    assert set(outcome.results) == {"kept"}
+    # Without rollback the aborted return would leave an orphan 'return:1'.
+    assert outcome.binary_parts == {"return:0": b"binary-result"}
+    error = outcome.error
+    assert error["kind"] == "serialization" and error["instruction_index"] == 4
+    assert error["instruction_op"] == "return" and error["instruction_id"] is None
 
 
 def test_unsupported_return_is_serialization_failure():
