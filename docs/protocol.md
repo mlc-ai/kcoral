@@ -230,7 +230,9 @@ instruction fails.
 | Field | Type | Required | Default | Notes |
 |---|---|---:|---|---|
 | `timeout_seconds` | number | no | `300` | Worker execution deadline; maximum `3600` |
-| `output_limit_bytes` | integer | no | `1048576` | Maximum bytes returned for each of stdout and stderr; `0` disables capture |
+| `output_limit_bytes` | integer | no | `1048576` | Maximum bytes returned for each of stdout and stderr; maximum `16777216`; `0` disables capture |
+
+A value above either maximum is clamped to it, not rejected.
 
 ---
 
@@ -265,6 +267,9 @@ worker execution and result serialization time.
 
 ### Fields
 
+A 200 response carries the fields below. A non-200 carries the smaller error
+body described under [Errors](#errors) instead.
+
 | Field | Type | Present | Notes |
 |---|---|---|---|
 | `status` | string | always | `COMPLETED`, `FAILED`, or `CACHE_MISS` |
@@ -279,7 +284,7 @@ worker execution and result serialization time.
 | `stdout_truncated` | boolean | run | Whether `stdout` hit `output_limit_bytes` |
 | `stderr_truncated` | boolean | run | Whether `stderr` hit `output_limit_bytes` |
 
-"run" marks fields present whenever the program reached a worker, so on both
+"run" marks fields present whenever the worker returned an outcome, so on both
 `COMPLETED` and `FAILED` but not on `CACHE_MISS`.
 
 ### Value encoding
@@ -348,6 +353,8 @@ before the instructions that might fail:
 The failing instruction itself contributes nothing: a `return` that fails while
 encoding adds neither a `results` entry nor binary parts.
 
+A `FAILED` response's `error` describes that instruction:
+
 | Field | Type | Notes |
 |---|---|---|
 | `kind` | string | See kinds below |
@@ -371,6 +378,25 @@ Instruction error kinds are `parse`, `compile`, `runtime`, `correctness`,
 | 504 | `status: ERROR`, `error.kind: timeout` | Execution timed out |
 | 500 | `status: ERROR`, `error.kind: engine` | Worker or server failure |
 | 500 | `status: ERROR`, `error.kind: response_too_large` | Results exceed the server's response-size limit |
+
+`ERROR` is not a program outcome, so its body is much smaller: `status`,
+`request_id`, and an `error` of `kind` and `message` only, with no `results`,
+timings, or captured output.
+
+```json
+{
+  "status": "ERROR",
+  "request_id": "7f61b94e-034a-4e80-b67d-eca52bb952cc",
+  "error": {"kind": "busy", "message": "server saturated"}
+}
+```
+
+Its `kind` is `parse`, `request_too_large`, `busy`, `timeout`, `engine`, or
+`response_too_large` — a separate set from the instruction kinds above.
+
+The dividing line is whether the worker returned an outcome, not whether the
+program ran: a timed-out or crashed program reaches a worker but is killed, so
+it answers `ERROR` rather than `FAILED`.
 
 ---
 
