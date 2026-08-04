@@ -31,6 +31,7 @@ class Upload:
     id: str
     kind: Literal["module", "tensor"]
     source: str | None = None
+    entry: str | None = None
     blob: str | None = None
     dtype: str | None = None
     shape: list[int] | None = None
@@ -206,12 +207,21 @@ def _parse_options(value: Any) -> dict[str, Any]:
 def _parse_upload(item: dict[str, Any], index: int) -> Upload:
     kind = item.get("kind")
     if kind == "module":
-        module_fields = {"op", "id", "kind", "source"}
-        _check_fields(item, module_fields, module_fields, f"instruction {index}")
+        _check_fields(
+            item,
+            {"op", "id", "kind", "source", "entry"},
+            {"op", "id", "kind", "source"},
+            f"instruction {index}",
+        )
         source = item["source"]
         if not isinstance(source, str):
             raise ValidationError(f"module upload {item['id']!r}: 'source' must be a string")
-        return Upload(id=item["id"], kind="module", source=source)
+        entry = item.get("entry")
+        if entry is not None and not (isinstance(entry, str) and entry.isidentifier()):
+            raise ValidationError(
+                f"module upload {item['id']!r}: 'entry' must be a Python identifier"
+            )
+        return Upload(id=item["id"], kind="module", source=source, entry=entry)
     if kind == "tensor":
         _check_fields(
             item,

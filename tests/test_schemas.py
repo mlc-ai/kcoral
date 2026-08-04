@@ -14,7 +14,8 @@ def test_parse_complete_program():
                     "op": "upload",
                     "id": "module",
                     "kind": "module",
-                    "source": "def main(x):\n    return x\n",
+                    "source": "def kernel(x):\n    return x\n",
+                    "entry": "kernel",
                 },
                 {
                     "op": "upload",
@@ -31,6 +32,7 @@ def test_parse_complete_program():
         }
     )
     assert isinstance(program.instructions[0], Upload)
+    assert program.instructions[0].entry == "kernel"
     assert isinstance(program.instructions[2], Run)
     assert isinstance(program.instructions[3], Return)
     # References are resolved to ``Ref`` at parse time; literals stay untouched.
@@ -70,6 +72,10 @@ def test_parse_complete_program():
         ),
         ({"op": "run", "id": "x", "fn": "builtin.zeros", "extra": 1}, "unknown field"),
         ({"op": "unknown", "id": "x"}, "unknown op"),
+        (
+            {"op": "upload", "id": "x", "kind": "module", "source": "", "entry": "not an id"},
+            "'entry' must be a Python identifier",
+        ),
     ],
 )
 def test_invalid_instruction_shapes_rejected(instruction, match):

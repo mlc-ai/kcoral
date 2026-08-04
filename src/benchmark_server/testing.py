@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .errors import ExecutionError
+from .gpu_runtime import resolve_entry  # shared so the double cannot drift; touches no GPU
 
 
 class _Opaque:
@@ -53,7 +54,7 @@ _BUILTINS: dict[str, Callable] = {
 
 
 class FakeRuntime:
-    def load_module(self, source: str) -> Any:
+    def load_module(self, source: str, entry: str | None = None) -> Any:
         namespace: dict[str, Any] = {}
         try:
             exec(compile(source, "<uploaded>", "exec"), namespace)
@@ -61,10 +62,7 @@ class FakeRuntime:
             raise ExecutionError("parse", str(exc)) from exc
         except Exception as exc:
             raise ExecutionError("parse", f"{type(exc).__name__}: {exc}") from exc
-        entry = namespace.get("main")
-        if not callable(entry):
-            raise ExecutionError("parse", "source must define callable 'main'")
-        return entry
+        return resolve_entry(namespace, source, entry)
 
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> _FakeTensor:
         return _FakeTensor(data=data, dtype=dtype, shape=shape)

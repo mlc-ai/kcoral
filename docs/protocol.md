@@ -102,8 +102,30 @@ Uploads a module or tensor and binds it to a handle.
 }
 ```
 
-`source` is UTF-8 Python source embedded in the `program` part and must define a
-callable named `main`.
+`source` is UTF-8 Python source embedded in the `program` part. The handle binds
+to one object defined there, chosen in this order:
+
+1. the name given by `entry`, if the upload sets one;
+2. `main`, if the source defines it;
+3. the source's only top-level `def` or `class`.
+
+Several top-level definitions and no `main` is ambiguous: the upload fails and
+the error names the candidates. Only definitions count, so a module-level
+constant beside one kernel keeps the entry unambiguous.
+
+```json
+{
+  "op": "upload",
+  "id": "kernel",
+  "kind": "module",
+  "source": "def tile(x):\n    ...\n\ndef matmul(...):\n    ...\n",
+  "entry": "matmul"
+}
+```
+
+The entry object need not be callable: a decorator may bind a handle that a
+builtin consumes rather than one `run` calls directly. Using a non-callable
+handle as a `run` `fn` fails at run time.
 
 ### Tensor
 
@@ -123,16 +145,17 @@ callable named `main`.
 
 ### Fields
 
-A field is required exactly for the kinds it lists, and is rejected for the
-others: a `module` upload carries `source` and no tensor fields, a `tensor`
-upload carries `blob`, `dtype`, and `shape` and no `source`.
+A field is accepted exactly for the kinds it lists, and is rejected for the
+others: a `module` upload carries `source` and an optional `entry` and no tensor
+fields, a `tensor` upload carries `blob`, `dtype`, and `shape` and no `source`.
 
 | Field | Kinds | Required for | Notes |
 |---|---|---|---|
 | `op` | all | all | `"upload"` |
 | `id` | all | all | Unique handle name |
 | `kind` | all | all | `"module"` or `"tensor"` |
-| `source` | module | module | UTF-8 Python source defining `main` |
+| `source` | module | module | UTF-8 Python source defining the entry object |
+| `entry` | module | — | Python identifier naming the entry object in `source` |
 | `blob` | tensor | tensor | SHA-256 of raw tensor bytes |
 | `dtype` | tensor | tensor | Tensor data type |
 | `shape` | tensor | tensor | Tensor shape |
@@ -487,7 +510,7 @@ print(result.stdout, result.stderr)
 ```
 
 ```python
-Program.upload(id=..., kind="module", source=...) -> Register
+Program.upload(id=..., kind="module", source=..., entry=None) -> Register
 Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None

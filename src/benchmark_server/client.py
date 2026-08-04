@@ -63,6 +63,7 @@ class Program:
         id: str,
         kind: str,
         source: str | None = None,
+        entry: str | None = None,
         value: Any = None,
         dtype: str | None = None,
         shape: list[int] | None = None,
@@ -73,9 +74,15 @@ class Program:
             if value is not None or dtype is not None or shape is not None:
                 raise TypeError("module upload does not accept tensor fields")
             instruction = {"op": "upload", "id": id, "kind": "module", "source": source}
+            if entry is not None:
+                if not (isinstance(entry, str) and entry.isidentifier()):
+                    raise ValueError("module upload 'entry' must be a Python identifier")
+                instruction["entry"] = entry
         elif kind == "tensor":
             if source is not None:
                 raise TypeError("tensor upload does not accept 'source'")
+            if entry is not None:
+                raise TypeError("tensor upload does not accept 'entry'")
             tensor_dtype, tensor_shape, raw = _tensor_fields(value, dtype=dtype, shape=shape)
             blob_hash = compute_blob_hash(raw)
             self._blobs.setdefault(blob_hash, raw)

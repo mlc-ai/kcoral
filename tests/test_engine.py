@@ -1,3 +1,5 @@
+import pytest
+
 from benchmark_server.engine import execute
 from benchmark_server.keys import compute_blob_hash
 from benchmark_server.schemas import Program, Ref, Return, Run, Upload
@@ -6,6 +8,20 @@ from benchmark_server.testing import FakeRuntime
 
 def ref(handle):
     return Ref(handle)
+
+
+def call_module(source, entry=None):
+    """Upload ``source``, call whatever object the handle bound, and return the outcome."""
+    return execute(
+        Program(
+            [
+                Upload("fn", "module", source=source, entry=entry),
+                Run("answer", ref("fn"), [41]),
+                Return("value", ref("answer")),
+            ]
+        ),
+        FakeRuntime(),
+    )
 
 
 def test_module_run_and_explicit_return():
@@ -21,6 +37,45 @@ def test_module_run_and_explicit_return():
     )
     assert outcome.status == "COMPLETED"
     assert outcome.results == {"value": {"type": "integer", "value": 42}}
+
+
+@pytest.mark.parametrize(
+    "source,entry",
+    [
+        # The sole top-level definition is the entry, whatever it is named.
+        ("def matmul(x):\n    return x + 1\n", None),
+        # A module-level constant is not a definition, so it does not compete.
+        ("BLOCK = 127\n\ndef matmul(x):\n    return x + BLOCK - 126\n", None),
+        # ``main`` still wins when the source defines several names.
+        ("def helper(x):\n    return 0\n\ndef main(x):\n    return x + 1\n", None),
+        # An explicit ``entry`` outranks ``main``.
+        ("def main(x):\n    return 0\n\ndef matmul(x):\n    return x + 1\n", "matmul"),
+    ],
+)
+def test_module_entry_resolution(source, entry):
+    outcome = call_module(source, entry)
+    assert outcome.status == "COMPLETED"
+    assert outcome.results == {"value": {"type": "integer", "value": 42}}
+
+
+@pytest.mark.parametrize(
+    "source,entry,message",
+    [
+        (
+            "def helper(x):\n    return 0\n\ndef matmul(x):\n    return x\n",
+            None,
+            "top-level names 'helper', 'matmul'",
+        ),
+        ("BLOCK = 128\n", None, "no top-level function or class"),
+        ("def matmul(x):\n    return x\n", "typo", "does not define 'typo'"),
+    ],
+)
+def test_unresolvable_module_entry_fails_the_upload(source, entry, message):
+    outcome = call_module(source, entry)
+    assert outcome.status == "FAILED"
+    assert outcome.error["kind"] == "parse"
+    assert outcome.error["instruction_op"] == "upload"
+    assert message in outcome.error["message"]
 
 
 def test_unreturned_values_are_not_serialized():

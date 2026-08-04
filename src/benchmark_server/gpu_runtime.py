@@ -8,6 +8,7 @@ module touches no GPU.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import linecache
 from collections.abc import Callable
@@ -16,7 +17,7 @@ from typing import Any
 from . import builtin_ops
 from .errors import ExecutionError
 
-# An uploaded function module defines its entry object under this name.
+# The name an uploaded module's entry object takes when the upload names none.
 ENTRY_POINT = "main"
 
 
@@ -30,8 +31,8 @@ class GPURuntime:
         _require_torch_and_ffi()
         self._seeded_fnames: list[str] = []  # linecache keys to clear on reset
 
-    def load_module(self, source: str) -> Any:
-        return self._materialize_module(source)
+    def load_module(self, source: str, entry: str | None = None) -> Any:
+        return self._materialize_module(source, entry)
 
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any:
         return _materialize_tensor(data, dtype, shape)
@@ -65,7 +66,7 @@ class GPURuntime:
         except Exception:
             pass  # a poisoned CUDA context is handled at the worker level
 
-    def _materialize_module(self, source: str) -> Any:
+    def _materialize_module(self, source: str, entry: str | None) -> Any:
         # A kernel is re-read from its source text at compile time, so seed
         # linecache. Key by content hash so two functions in one program don't
         # overwrite each other's source.
@@ -81,13 +82,49 @@ class GPURuntime:
             raise ExecutionError("parse", f"syntax error: {exc}") from exc
         except Exception as exc:
             raise ExecutionError("parse", f"{type(exc).__name__}: {exc}") from exc
-        if ENTRY_POINT not in ns:
-            raise ExecutionError("parse", f"source must define {ENTRY_POINT!r}")
-        # Deliberately not a callable check: a ``@T.jit`` kernel is a TIRJit, which
-        # defines no ``__call__`` and is meant for ``builtin.compile_tirx`` rather
-        # than direct invocation. Calling a non-callable handle is caught at run
-        # time, and compiling a non-kernel is caught by the builtin.
-        return ns[ENTRY_POINT]
+        return resolve_entry(ns, source, entry)
+
+
+def resolve_entry(namespace: dict, source: str, entry: str | None) -> Any:
+    """Pick the entry object out of an uploaded module's executed namespace.
+
+    An explicit ``entry`` wins, then ``main``, then the sole top-level definition.
+    Several definitions and no ``main`` is ambiguous, so the error names the
+    candidates instead of guessing. The result is deliberately not checked for
+    callability: a decorator may bind a handle a builtin consumes rather than one
+    ``run`` calls.
+    """
+    if entry is not None:
+        try:
+            return namespace[entry]
+        except KeyError:
+            raise ExecutionError("parse", f"source does not define {entry!r}") from None
+    if ENTRY_POINT in namespace:
+        return namespace[ENTRY_POINT]
+    candidates = [name for name in _top_level_definitions(source) if name in namespace]
+    if len(candidates) == 1:
+        return namespace[candidates[0]]
+    if not candidates:
+        raise ExecutionError("parse", "source defines no top-level function or class")
+    raise ExecutionError(
+        "parse",
+        f"source defines top-level names {', '.join(repr(name) for name in candidates)}; "
+        f"name one {ENTRY_POINT!r} or set 'entry' on the upload",
+    )
+
+
+def _top_level_definitions(source: str) -> list[str]:
+    """Names bound by a top-level ``def``/``async def``/``class``, in source order.
+
+    Imports and assignments are excluded, so a module-level constant beside one
+    kernel does not make the entry ambiguous.
+    """
+    names: list[str] = []
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name not in names:
+                names.append(node.name)
+    return names
 
 
 def _require_torch_and_ffi() -> None:
