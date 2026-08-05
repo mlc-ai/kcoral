@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+import ml_dtypes
+import numpy as np
 
 from .keys import compute_blob_hash, is_blob_hash, verify_blob
 from .multipart import parse_multipart
@@ -301,25 +303,20 @@ def _array_fields(value: Any) -> tuple[str, list[int], bytes]:
     except ImportError:
         pass
 
-    try:
-        import numpy as np
-
-        if isinstance(value, np.ndarray):
-            array = np.ascontiguousarray(value)
-            if array.dtype.byteorder == ">" or (
-                array.dtype.byteorder == "=" and sys.byteorder == "big"
-            ):
-                array = array.astype(array.dtype.newbyteorder("<"))
-            return array.dtype.name, [int(dimension) for dimension in array.shape], array.tobytes()
-        if hasattr(value, "__dlpack__"):
-            try:
-                array = np.from_dlpack(value)
-            except Exception:
-                array = None
-            if array is not None:
-                return _array_fields(array)
-    except ImportError:
-        pass
+    if isinstance(value, np.ndarray):
+        array = np.ascontiguousarray(value)
+        if array.dtype.byteorder == ">" or (
+            array.dtype.byteorder == "=" and sys.byteorder == "big"
+        ):
+            array = array.astype(array.dtype.newbyteorder("<"))
+        return array.dtype.name, [int(dimension) for dimension in array.shape], array.tobytes()
+    if hasattr(value, "__dlpack__"):
+        try:
+            array = np.from_dlpack(value)
+        except Exception:
+            array = None
+        if array is not None:
+            return _array_fields(array)
 
     if hasattr(value, "dtype") and hasattr(value, "shape") and hasattr(value, "tobytes"):
         return (
@@ -574,42 +571,34 @@ def _binary_part(
     return data
 
 
+# Every protocol dtype as a numpy dtype. Explicit '<' pins the little-endian wire
+# layout independently of host endianness; the ml_dtypes entries (numpy has no
+# native scalar type for them) come only in native order, so those assume a
+# little-endian host, as does every target the server runs on.
+_NUMPY_DTYPES = {
+    "bool": np.dtype("bool"),
+    "uint8": np.dtype("uint8"),
+    "int8": np.dtype("int8"),
+    "int16": np.dtype("<i2"),
+    "int32": np.dtype("<i4"),
+    "int64": np.dtype("<i8"),
+    "float16": np.dtype("<f2"),
+    "float32": np.dtype("<f4"),
+    "float64": np.dtype("<f8"),
+    "bfloat16": np.dtype(ml_dtypes.bfloat16),
+    "float8_e4m3fn": np.dtype(ml_dtypes.float8_e4m3fn),
+    "float8_e5m2": np.dtype(ml_dtypes.float8_e5m2),
+}
+
+
 def _decode_tensor(dtype: str, shape: list[int], data: bytes) -> Any:
     try:
-        import tvm_ffi
-    except ImportError as exc:
-        raise ValueError("decoding tensor results requires tvm_ffi") from exc
-
-    numpy_dtypes = {
-        "bool": "bool",
-        "uint8": "uint8",
-        "int8": "int8",
-        "int16": "<i2",
-        "int32": "<i4",
-        "int64": "<i8",
-        "float16": "<f2",
-        "float32": "<f4",
-        "float64": "<f8",
-    }
-    if dtype in numpy_dtypes:
-        try:
-            import numpy as np
-        except ImportError as exc:
-            raise ValueError("decoding tensor results requires numpy") from exc
-        array = np.frombuffer(data, dtype=np.dtype(numpy_dtypes[dtype])).reshape(shape).copy()
-        return tvm_ffi.from_dlpack(array)
-
-    try:
-        import torch
-
-        torch_dtype = getattr(torch, dtype)
-        if data:
-            tensor = torch.frombuffer(bytearray(data), dtype=torch_dtype).reshape(shape)
-        else:
-            tensor = torch.empty(shape, dtype=torch_dtype)
-        return tvm_ffi.from_dlpack(tensor)
-    except Exception as exc:
-        raise ValueError(f"cannot decode tensor dtype {dtype!r}: {exc}") from exc
+        numpy_dtype = _NUMPY_DTYPES[dtype]
+    except KeyError:
+        raise ValueError(f"cannot decode tensor dtype {dtype!r}") from None
+    # frombuffer aliases the read-only response bytes; copy() gives the caller a
+    # writable array that owns its storage and outlives the response.
+    return np.frombuffer(data, dtype=numpy_dtype).reshape(shape).copy()
 
 
 def _expect_fields(value: dict[str, Any], expected: set[str]) -> None:

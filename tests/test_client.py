@@ -5,21 +5,26 @@ import threading
 import time
 
 import httpx
+import ml_dtypes
+import numpy as np
 import pytest
 import uvicorn
 
 from benchmark_server import Client, Program, Register
 from benchmark_server.app import create_app
 from benchmark_server.client import (
+    _NUMPY_DTYPES,
     BenchmarkServerError,
     ProtocolError,
     TransportError,
+    _decode_tensor,
     _parse_program_result,
     _response_body,
 )
 from benchmark_server.config import ServerConfig
 from benchmark_server.keys import compute_blob_hash
 from benchmark_server.multipart import MultipartPart, encode_multipart
+from benchmark_server.schemas import DTYPE_ITEM_SIZES, expected_tensor_nbytes
 from benchmark_server.testing import fake_runtime_factory
 
 
@@ -46,6 +51,11 @@ def server_url():
     thread.join(timeout=10)
 
 
+# The three protocol dtypes numpy has no native scalar type for; ml_dtypes
+# supplies them, and they are the reason it is a dependency.
+ML_DTYPE_NAMES = ("bfloat16", "float8_e4m3fn", "float8_e5m2")
+
+
 def add_one_program():
     program = Program()
     fn = program.upload(id="fn", kind="module", source="def main(x):\n    return x + 1\n")
@@ -61,9 +71,7 @@ def test_execute_module_and_return_value(server_url):
     assert outcome.request_id and outcome.queue_ms >= 0 and outcome.elapsed_ms >= 0
 
 
-def test_tensor_cache_retry_and_tvm_ffi_result(server_url):
-    np = pytest.importorskip("numpy")
-    tvm_ffi = pytest.importorskip("tvm_ffi")
+def test_tensor_cache_retry_and_numpy_result(server_url):
     value = np.arange(6, dtype=np.float32).reshape(2, 3)
     program = Program()
     tensor = program.upload(id="tensor", kind="tensor", value=value)
@@ -72,8 +80,24 @@ def test_tensor_cache_retry_and_tvm_ffi_result(server_url):
         first = client.execute(program)
         second = client.execute(program)
     for outcome in (first, second):
-        assert isinstance(outcome.results["tensor"], tvm_ffi.Tensor)
-        np.testing.assert_array_equal(np.from_dlpack(outcome.results["tensor"]), value)
+        result = outcome.results["tensor"]
+        assert isinstance(result, np.ndarray)
+        assert result.flags.writeable and result.flags.owndata
+        np.testing.assert_array_equal(result, value)
+
+
+@pytest.mark.parametrize("name", ML_DTYPE_NAMES)
+def test_ml_dtype_tensor_round_trips_through_the_server(server_url, name):
+    """An ml_dtypes array survives upload, return, and decode with its dtype intact."""
+    value = np.array([[1.0, -0.5], [2.0, 4.0]]).astype(getattr(ml_dtypes, name))
+    program = Program()
+    tensor = program.upload(id="tensor", kind="tensor", value=value)
+    program.return_(key="tensor", value=tensor)
+    with Client(server_url) as client:
+        outcome = client.execute(program)
+    result = outcome.results["tensor"]
+    assert isinstance(result, np.ndarray) and result.dtype == value.dtype
+    np.testing.assert_array_equal(result, value)
 
 
 def test_nested_binary_results_are_decoded(server_url):
@@ -163,7 +187,6 @@ def test_program_builder_validates_ids_and_tensor_metadata():
 
 
 def test_numpy_tensor_builder_uses_raw_byte_hash():
-    np = pytest.importorskip("numpy")
     value = np.arange(4, dtype=np.float32)
     program = Program()
     program.upload(id="tensor", kind="tensor", value=value)
@@ -180,6 +203,60 @@ def test_torch_bfloat16_tensor_builder():
     instruction = program.instructions[0]
     assert instruction["dtype"] == "bfloat16" and instruction["shape"] == [2, 2]
     assert len(program._blobs[instruction["blob"]]) == 8
+
+
+def test_decoder_covers_every_protocol_dtype():
+    """The decoder's dtype table must match the protocol's exactly, both ways."""
+    assert set(_NUMPY_DTYPES) == set(DTYPE_ITEM_SIZES)
+    for name, numpy_dtype in _NUMPY_DTYPES.items():
+        assert numpy_dtype.itemsize == DTYPE_ITEM_SIZES[name]
+
+
+@pytest.mark.parametrize("dtype", sorted(DTYPE_ITEM_SIZES))
+def test_every_protocol_dtype_decodes_to_numpy(dtype):
+    shape = [2, 3]
+    data = bytes(expected_tensor_nbytes(dtype, shape))
+    array = _decode_tensor(dtype, shape, data)
+    assert isinstance(array, np.ndarray)
+    assert array.dtype.name == dtype and list(array.shape) == shape
+
+
+@pytest.mark.parametrize("name", ML_DTYPE_NAMES)
+def test_ml_dtype_round_trip_is_bit_exact(name):
+    """Values ml_dtypes can represent survive a tobytes/decode round trip."""
+    original = np.array([1.0, 2.0, -0.5, 4.0]).astype(getattr(ml_dtypes, name))
+    decoded = _decode_tensor(name, [4], original.tobytes())
+    assert decoded.dtype == original.dtype
+    np.testing.assert_array_equal(decoded, original)
+
+
+@pytest.mark.parametrize("name", ML_DTYPE_NAMES)
+def test_ml_dtype_arrays_upload_with_protocol_dtype_names(name):
+    """ml_dtypes' dtype names are exactly the protocol's, so uploads need no mapping."""
+    value = np.arange(4).astype(getattr(ml_dtypes, name)).reshape(2, 2)
+    program = Program()
+    program.upload(id="tensor", kind="tensor", value=value)
+    instruction = program.instructions[0]
+    assert instruction["dtype"] == name and instruction["shape"] == [2, 2]
+    assert instruction["blob"] == compute_blob_hash(value.tobytes())
+
+
+def test_decode_rejects_an_unknown_dtype():
+    with pytest.raises(ValueError, match="cannot decode tensor dtype"):
+        _decode_tensor("float128", [1], bytes(16))
+
+
+def test_decoded_tensor_owns_writable_storage():
+    """frombuffer would alias the read-only response bytes; the decoder copies."""
+    array = _decode_tensor("float32", [2], bytes(8))
+    assert array.flags.writeable and array.flags.owndata
+    array[0] = 1.5  # must not raise
+
+
+@pytest.mark.parametrize("shape", [[0], [], [0, 3]])
+def test_empty_and_scalar_tensors_decode(shape):
+    array = _decode_tensor("float32", shape, bytes(expected_tensor_nbytes("float32", shape)))
+    assert list(array.shape) == shape
 
 
 FAILED_ERROR = {
@@ -270,8 +347,6 @@ def test_client_rejects_invalid_json_in_multipart_result():
     reason="real tensor client test requires BENCH_GPU_TEST=1",
 )
 def test_tensor_round_trip_on_gpu():
-    import numpy as np
-
     from benchmark_server.gpu_runtime import gpu_runtime_factory
 
     gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
@@ -285,7 +360,7 @@ def test_tensor_round_trip_on_gpu():
         program.return_(key="tensor", value=tensor)
         with Client(url) as client:
             outcome = client.execute(program)
-        np.testing.assert_array_equal(np.from_dlpack(outcome.results["tensor"]), value)
+        np.testing.assert_array_equal(outcome.results["tensor"], value)
     finally:
         server.should_exit = True
         thread.join(timeout=10)

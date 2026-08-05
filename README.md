@@ -74,7 +74,13 @@ that are not returned do not appear in the response.
 
 The client starts with a cache-only request. When the server reports a
 `CACHE_MISS`, it retries once with only the requested blobs. Returned tensor
-values are decoded as CPU `tvm_ffi.Tensor` objects.
+values are decoded as CPU `numpy.ndarray` objects.
+
+`bfloat16` and `float8` arrays reach torch through a byte reinterpretation:
+
+```python
+torch.from_numpy(value.view(np.uint8)).view(torch.bfloat16)
+```
 
 ## Protocol summary
 

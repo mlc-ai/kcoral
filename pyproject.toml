@@ -12,6 +12,8 @@ dependencies = [
   "fastapi>=0.110",
   "uvicorn>=0.29",
   "httpx>=0.27",
+  "numpy>=1.24",
+  "ml_dtypes>=0.5", # the bfloat16 and float8 scalar types numpy lacks
 ]
 
 # torch and tvm_ffi are mandatory in the GPU worker but are supplied by the
@@ -31,7 +33,6 @@ benchmark-server = "benchmark_server.__main__:main"
 gpu = [
   "torch>=2.9",
   "apache-tvm-ffi>=0.1",
-  "numpy>=1.24",
 ]
 
 [tool.uv]

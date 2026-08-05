@@ -549,5 +549,6 @@ Client.close() -> None
 
 For tensors, the client derives `blob`, `dtype`, and `shape` from `value`, retries
 one `CACHE_MISS` with the missing parts, and decodes returned tensors to CPU
-`tvm_ffi.Tensor`. Server errors, transport failures, and malformed responses use
-`BenchmarkServerError`, `TransportError`, and `ProtocolError`.
+`numpy.ndarray` (`bfloat16` and `float8_*` via `ml_dtypes`). Server errors,
+transport failures, and malformed responses use `BenchmarkServerError`,
+`TransportError`, and `ProtocolError`.

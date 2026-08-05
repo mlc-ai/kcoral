@@ -20,6 +20,7 @@ def main(
 ):
     T.device_entry()
     i = T.cta_id([N])
+    t = T.thread_id([1])
     B[i] = A[i] + 1.0
 """
 
