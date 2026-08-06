@@ -15,13 +15,40 @@ Python 3.10 or newer is required.
 pip install .
 ```
 
-The CUDA runtime also requires PyTorch and TVM FFI supplied by its environment.
-The checked-in lockfile can create the development environments:
+This gives the Python client and the HTTP front-end, neither of which touches a
+GPU. Running programs needs a worker environment holding more, and how much
+depends on which builtins the programs use:
+
+| To run | The worker environment needs |
+|---|---|
+| any program | PyTorch and TVM FFI |
+| `compile_tirx` | TVM as well |
+| `compile_cuda` | `nvcc`, a host C++ compiler, and `ninja` as well |
+
+A builtin whose requirement is absent answers `unavailable` and the rest of the
+server is unaffected, so a partial environment is a usable deployment.
+
+Build whichever of the two environments below matches the work.
+
+### Front-end, engine, and client
+
+The lockfile builds this one, CPU-only, with no GPU or compiler needed:
 
 ```bash
-uv sync --extra test
-uv sync --group gpu --extra test
+uv sync
 ```
+
+### Running GPU programs
+
+The `gpu` group adds PyTorch, TVM, and TVM FFI, which together cover every
+builtin:
+
+```bash
+uv sync --group gpu
+```
+
+`nvcc` and a host C++ compiler still come from the system; everything else is a
+wheel, and no environment variables are needed.
 
 ## Run the server
 
@@ -104,14 +131,16 @@ and `return:<index>` parts contain raw bytes in depth-first traversal order.
 
 ## Development
 
+`--group test` adds pytest to either environment from [Install](#install):
+
 ```bash
-pip install '.[test]'
+uv sync --group test             # or --group test --group gpu
 pytest -q
 ruff check src tests
 ruff format --check src tests
 ```
 
-GPU integration tests are opt-in:
+The GPU integration tests are opt-in, and need the GPU environment:
 
 ```bash
 BENCH_GPU_TEST=1 pytest -q

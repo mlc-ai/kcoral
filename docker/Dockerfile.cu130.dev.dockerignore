@@ -1,7 +1,6 @@
 .git
 .gitignore
 .venv
-.venv-gpu
 venv
 __pycache__
 **/__pycache__

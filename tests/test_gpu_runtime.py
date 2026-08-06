@@ -1,4 +1,4 @@
-"""GPU integration tests for the runtime and TIRx builtins."""
+"""GPU integration tests for the runtime and the TIRx and CUDA C builtins."""
 
 import os
 
@@ -33,6 +33,45 @@ def main(A: T.Buffer((256,), "float32"), B: T.Buffer((256,), "float32")):
     i = T.cta_id([256])
     t = T.thread_id([1])
     B[i] = A[i] + 1.0
+"""
+
+CUDA_KERNEL = """
+__global__ void add_one_kernel(const float* x, float* y, int n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) y[i] = x[i] + 1.0f;
+}
+
+void add_one(tvm::ffi::TensorView x, tvm::ffi::TensorView y) {
+  int n = static_cast<int>(x.numel());
+  add_one_kernel<<<(n + 255) / 256, 256>>>(static_cast<const float*>(x.data_ptr()),
+                                           static_cast<float*>(y.data_ptr()), n);
+}
+"""
+
+# One warp round-trips a value per lane through tensor memory. tcgen05 is gated
+# behind the sm_100a target. The tcgen05 ops are warp-synchronous, so no
+# __syncthreads is needed, but the allocation must be freed or the launch reports
+# cudaErrorTensorMemoryLeak.
+TMEM_KERNEL = """
+__global__ void tmem_kernel(int* out) {
+  __shared__ unsigned taddr_smem;
+  unsigned smem = static_cast<unsigned>(__cvta_generic_to_shared(&taddr_smem));
+  asm volatile("tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%0], %1;"
+               :: "r"(smem), "r"(32));
+  unsigned taddr = taddr_smem;
+  unsigned value = 100u + threadIdx.x;
+  asm volatile("tcgen05.st.sync.aligned.32x32b.x1.b32 [%0], {%1};" :: "r"(taddr), "r"(value));
+  asm volatile("tcgen05.wait::st.sync.aligned;");
+  unsigned got;
+  asm volatile("tcgen05.ld.sync.aligned.32x32b.x1.b32 {%0}, [%1];" : "=r"(got) : "r"(taddr));
+  asm volatile("tcgen05.wait::ld.sync.aligned;");
+  out[threadIdx.x] = static_cast<int>(got);
+  asm volatile("tcgen05.dealloc.cta_group::1.sync.aligned.b32 %0, %1;" :: "r"(taddr), "r"(32));
+}
+
+void tmem_roundtrip(tvm::ffi::TensorView out) {
+  tmem_kernel<<<1, 32>>>(static_cast<int*>(out.data_ptr()));
+}
 """
 
 
@@ -83,6 +122,77 @@ def test_compile_correctness_and_benchmark():
     timing = decode_structural(outcome.results["timing"])
     assert check["passed"] and check["max_abs_err"] == 0
     assert timing["latency_ms_median"] > 0 and timing["repeat"] == 20
+
+
+def test_cuda_c_compile_correctness_and_benchmark():
+    program = Program(
+        [
+            Upload("kernel", "module", source=CUDA_KERNEL, entry="add_one", language="cuda"),
+            Upload("reference", "module", source=REF),
+            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            Run("compiled", "builtin.compile_cuda", [ref("kernel")]),
+            Run("invoke", ref("compiled"), [ref("input"), ref("output")]),
+            Run("expected", ref("reference"), [ref("input")]),
+            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
+            Run(
+                "timing",
+                "builtin.benchmark",
+                [ref("compiled"), ref("input"), ref("output"), {"warmup": 5, "repeat": 20}],
+            ),
+            Return("check", ref("check")),
+            Return("timing", ref("timing")),
+        ]
+    )
+    outcome = execute(program, runtime())
+    assert outcome.status == "COMPLETED", outcome.error
+    check = decode_structural(outcome.results["check"])
+    timing = decode_structural(outcome.results["timing"])
+    assert check["passed"] and check["max_abs_err"] == 0
+    assert timing["latency_ms_median"] > 0 and timing["repeat"] == 20
+
+
+def test_cuda_c_nvcc_error_is_compile_failure_and_names_the_mistake():
+    bad = CUDA_KERNEL.replace("x.data_ptr()", "undeclared_symbol")
+    outcome = execute(
+        Program(
+            [
+                Upload("kernel", "module", source=bad, entry="add_one", language="cuda"),
+                Run("compiled", "builtin.compile_cuda", [ref("kernel")]),
+            ]
+        ),
+        runtime(),
+    )
+    assert outcome.status == "FAILED" and outcome.error["kind"] == "compile"
+    assert "undeclared_symbol" in outcome.error["message"]
+
+
+def test_cuda_c_runs_on_the_arch_specific_target():
+    """A plain sm_100 target cannot even assemble tcgen05, so building and running
+    this kernel is what proves the worker selects sm_100a."""
+    import numpy as np
+    import torch
+
+    if torch.cuda.get_device_capability()[0] != 10:
+        pytest.skip("tcgen05 needs a Blackwell device")
+    outcome = execute(
+        Program(
+            [
+                Upload(
+                    "kernel", "module", source=TMEM_KERNEL, entry="tmem_roundtrip", language="cuda"
+                ),
+                Run("out", "builtin.zeros", [{"shape": [32], "dtype": "int32"}]),
+                Run("compiled", "builtin.compile_cuda", [ref("kernel")]),
+                Run("invoke", ref("compiled"), [ref("out")]),
+                Return("out", ref("out")),
+            ]
+        ),
+        runtime(),
+    )
+    assert outcome.status == "COMPLETED", outcome.error
+    np.testing.assert_array_equal(
+        np.frombuffer(outcome.binary_parts["return:0"], dtype=np.int32), np.arange(100, 132)
+    )
 
 
 def test_benchmark_budget_counts_and_no_flush():

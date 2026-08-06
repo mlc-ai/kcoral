@@ -54,7 +54,8 @@ _BUILTINS: dict[str, Callable] = {
 
 
 class FakeRuntime:
-    def load_module(self, source: str, entry: str | None = None) -> Any:
+    def load_module(self, source: str, entry: str | None = None, language: str = "python") -> Any:
+        assert language == "python", "the fake runtime has no compiler"
         namespace: dict[str, Any] = {}
         try:
             exec(compile(source, "<uploaded>", "exec"), namespace)

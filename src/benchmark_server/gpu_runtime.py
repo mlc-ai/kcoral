@@ -31,7 +31,11 @@ class GPURuntime:
         _require_torch_and_ffi()
         self._seeded_fnames: list[str] = []  # linecache keys to clear on reset
 
-    def load_module(self, source: str, entry: str | None = None) -> Any:
+    def load_module(self, source: str, entry: str | None = None, language: str = "python") -> Any:
+        if language == "cuda":
+            # Nothing runs here: `builtin.compile_cuda` turns the text into a module.
+            assert entry is not None
+            return builtin_ops.CUDASource(source=source, entry=entry)
         return self._materialize_module(source, entry)
 
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any:

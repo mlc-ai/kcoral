@@ -12,8 +12,6 @@ Thumbs.db
 __pycache__/
 *.py[cod]
 *.egg-info/
-.venv/
-.venv-gpu/
 venv/
 
 # Misc

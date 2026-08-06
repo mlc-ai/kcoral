@@ -32,6 +32,7 @@ class Upload:
     kind: Literal["module", "tensor"]
     source: str | None = None
     entry: str | None = None
+    language: Literal["python", "cuda"] = "python"
     blob: str | None = None
     dtype: str | None = None
     shape: list[int] | None = None
@@ -209,19 +210,32 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
     if kind == "module":
         _check_fields(
             item,
-            {"op", "id", "kind", "source", "entry"},
+            {"op", "id", "kind", "source", "entry", "language"},
             {"op", "id", "kind", "source"},
             f"instruction {index}",
         )
         source = item["source"]
         if not isinstance(source, str):
             raise ValidationError(f"module upload {item['id']!r}: 'source' must be a string")
+        language = item.get("language", "python")
+        if language not in ("python", "cuda"):
+            raise ValidationError(
+                f"module upload {item['id']!r}: unsupported language {language!r}"
+            )
         entry = item.get("entry")
         if entry is not None and not (isinstance(entry, str) and entry.isidentifier()):
-            raise ValidationError(
-                f"module upload {item['id']!r}: 'entry' must be a Python identifier"
-            )
-        return Upload(id=item["id"], kind="module", source=source, entry=entry)
+            raise ValidationError(f"module upload {item['id']!r}: 'entry' must be an identifier")
+        if language == "cuda":
+            # Nothing executes a CUDA upload, so no entry can be inferred from it.
+            if entry is None:
+                raise ValidationError(
+                    f"module upload {item['id']!r}: a 'cuda' module must name its 'entry'"
+                )
+            if entry == "main":
+                raise ValidationError(
+                    f"module upload {item['id']!r}: C++ reserves 'main'; name the entry otherwise"
+                )
+        return Upload(id=item["id"], kind="module", source=source, entry=entry, language=language)
     if kind == "tensor":
         _check_fields(
             item,

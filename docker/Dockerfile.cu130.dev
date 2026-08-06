@@ -5,6 +5,7 @@ FROM ghcr.io/astral-sh/uv:0.11.30 AS uv
 FROM nvidia/cuda:13.0.2-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
+    CXX=g++ \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
@@ -14,6 +15,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         ca-certificates \
+        g++ \
         python3 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -24,11 +26,11 @@ WORKDIR /workspace/benchmark-server
 # Install locked third-party dependencies in a layer unaffected by source edits.
 COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-install-project --group gpu --extra test
+    uv sync --locked --no-install-project --group gpu --group test
 
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --group gpu --extra test
+    uv sync --locked --group gpu --group test
 
 ENV BENCH_HOST=0.0.0.0
 

@@ -186,6 +186,30 @@ def test_program_builder_validates_ids_and_tensor_metadata():
     reusable.upload(id="tensor", kind="tensor", value=b"\x00" * 4, dtype="float32", shape=[1])
 
 
+def test_cuda_module_builder_emits_language_and_entry():
+    program = Program()
+    program.upload(id="kernel", kind="module", source="void add() {}", entry="add", language="cuda")
+    assert program.instructions[0]["language"] == "cuda"
+    assert program.instructions[0]["entry"] == "add"
+
+    # python is the default and stays off the wire
+    program.upload(id="py", kind="module", source="def main():\n    pass\n")
+    assert "language" not in program.instructions[1]
+
+
+@pytest.mark.parametrize(
+    "kwargs,match",
+    [
+        ({"kind": "module", "source": "x", "language": "cuda"}, "must name its 'entry'"),
+        ({"kind": "module", "source": "x", "language": "cuda", "entry": "main"}, "reserves 'main'"),
+        ({"kind": "module", "source": "x", "language": "rust"}, "'python' or 'cuda'"),
+    ],
+)
+def test_cuda_module_builder_validation(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        Program().upload(id="kernel", **kwargs)
+
+
 def test_numpy_tensor_builder_uses_raw_byte_hash():
     value = np.arange(4, dtype=np.float32)
     program = Program()

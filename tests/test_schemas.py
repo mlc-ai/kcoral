@@ -33,6 +33,7 @@ def test_parse_complete_program():
     )
     assert isinstance(program.instructions[0], Upload)
     assert program.instructions[0].entry == "kernel"
+    assert program.instructions[0].language == "python"  # the default when unset
     assert isinstance(program.instructions[2], Run)
     assert isinstance(program.instructions[3], Return)
     # References are resolved to ``Ref`` at parse time; literals stay untouched.
@@ -41,6 +42,25 @@ def test_parse_complete_program():
     assert program.instructions[3].value == Ref("result")
     assert program.options == {"timeout_seconds": 12.0, "output_limit_bytes": 0}
     assert program.tensor_uploads()[0].blob == TENSOR_HASH
+
+
+def test_parse_cuda_module_upload():
+    program = parse_program(
+        {
+            "instructions": [
+                {
+                    "op": "upload",
+                    "id": "kernel",
+                    "kind": "module",
+                    "language": "cuda",
+                    "source": "void add(tvm::ffi::TensorView x) {}",
+                    "entry": "add",
+                }
+            ]
+        }
+    )
+    assert program.instructions[0].language == "cuda"
+    assert program.instructions[0].entry == "add"
 
 
 @pytest.mark.parametrize(
@@ -74,7 +94,26 @@ def test_parse_complete_program():
         ({"op": "unknown", "id": "x"}, "unknown op"),
         (
             {"op": "upload", "id": "x", "kind": "module", "source": "", "entry": "not an id"},
-            "'entry' must be a Python identifier",
+            "'entry' must be an identifier",
+        ),
+        (
+            {"op": "upload", "id": "x", "kind": "module", "source": "", "language": "rust"},
+            "unsupported language",
+        ),
+        (
+            {"op": "upload", "id": "x", "kind": "module", "source": "", "language": "cuda"},
+            "must name its 'entry'",
+        ),
+        (
+            {
+                "op": "upload",
+                "id": "x",
+                "kind": "module",
+                "source": "",
+                "language": "cuda",
+                "entry": "main",
+            },
+            "C\\+\\+ reserves 'main'",
         ),
     ],
 )

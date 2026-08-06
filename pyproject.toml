@@ -16,23 +16,17 @@ dependencies = [
   "ml_dtypes>=0.5", # the bfloat16 and float8 scalar types numpy lacks
 ]
 
-# torch and tvm_ffi are mandatory in the GPU worker but are supplied by the
-# environment (not pinned here). Full tvm is optional — only `compile_tirx` needs
-# it. The front-end, engine, cache, and worker-management layers import none.
-[project.optional-dependencies]
-test = [
-  "pytest>=8",
-]
-
 [project.scripts]
 benchmark-server = "benchmark_server.__main__:main"
 
-# The `gpu` group pins the worker environment used by the CUDA 13.0 development
-# image. Full tvm remains optional; only `compile_tirx` requires it.
 [dependency-groups]
+test = [
+  "pytest>=8",
+]
 gpu = [
   "torch>=2.9",
-  "apache-tvm-ffi>=0.1",
+  "apache-tvm==0.26.0rc0",
+  "apache-tvm-ffi[cpp]==0.1.13.post2",
 ]
 
 [tool.uv]

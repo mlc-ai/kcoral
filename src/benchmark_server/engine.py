@@ -31,7 +31,9 @@ MAX_TRACEBACK_BYTES = 8192
 
 
 class Runtime(Protocol):
-    def load_module(self, source: str, entry: str | None = None) -> Any: ...
+    def load_module(
+        self, source: str, entry: str | None = None, language: str = "python"
+    ) -> Any: ...
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any: ...
     def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None: ...
     def builtin(self, name: str) -> Callable: ...
@@ -56,7 +58,9 @@ def execute(program: Program, runtime: Runtime) -> ProgramOutcome:
                         if instruction.kind == "module":
                             assert instruction.source is not None
                             env[instruction.id] = runtime.load_module(
-                                instruction.source, entry=instruction.entry
+                                instruction.source,
+                                entry=instruction.entry,
+                                language=instruction.language,
                             )
                         else:
                             assert (

@@ -1,36 +1,14 @@
-"""Server builtins and the registry that holds them.
-
-Each builtin is a module-level function registered as ``builtin.<name>`` by
-:func:`register_builtin`; the runtime looks one up with :func:`resolve`. Extend
-the server by adding a builtin, not a runtime. torch/tvm are imported lazily, so
-importing this module touches no GPU. Builtins raise :class:`ExecutionError`
-tagged with the failing stage (parse / compile / runtime / correctness), or
-``unavailable`` when an optional dependency (tvm) is not installed.
-"""
+"""Builtins that need no kernel-language toolchain: tensor creation, timing, and
+correctness comparison. They accept any callable a compile builtin returns."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
 
-from .errors import ExecutionError
-
-_REGISTRY: dict[str, Callable] = {}
-
-
-def register_builtin(name: str) -> Callable:
-    """Register a module-level function as the builtin ``builtin.<name>``."""
-
-    def decorator(fn: Callable) -> Callable:
-        _REGISTRY["builtin." + name] = fn
-        return fn
-
-    return decorator
-
-
-def resolve(name: str) -> Callable | None:
-    """The builtin registered under ``name`` (e.g. ``builtin.randn``), or None."""
-    return _REGISTRY.get(name)
+from ..errors import ExecutionError
+from ._common import short, split_cfg, torch_dtype
+from ._registry import register_builtin
 
 
 @register_builtin("randn")
@@ -63,46 +41,6 @@ def zeros(spec: Any) -> Any:
     return torch.zeros(shape, dtype=dtype, device="cuda")
 
 
-@register_builtin("compile_tirx")
-def compile_tirx(fn: Any, bindings: Any = None) -> Any:
-    try:
-        import tvm
-    except ImportError as exc:  # tvm is an optional server dependency
-        raise ExecutionError(
-            "unavailable",
-            "server-side compilation requires tvm, which is not installed on this server",
-        ) from exc
-
-    if bindings is not None and not isinstance(bindings, dict):
-        raise ExecutionError("compile", "compile_tirx bindings must be a dict of constexpr values")
-    kwargs = bindings or {}
-    if isinstance(fn, tvm.tirx.PrimFunc):  # a @T.prim_func kernel — already concrete
-        if kwargs:
-            raise ExecutionError(
-                "compile",
-                "bindings apply only to @T.jit kernels; this kernel is already a PrimFunc",
-            )
-        pf = fn
-    elif hasattr(fn, "specialize"):  # a @T.jit kernel handle (TIRJit)
-        try:
-            pf = fn.specialize(**kwargs)  # TIRX parse happens here
-        except tvm.error.DiagnosticError as exc:
-            raise ExecutionError("parse", _short(exc)) from exc
-        except TypeError as exc:  # wrong, missing, or unhashable constexpr bindings
-            raise ExecutionError("compile", _short(exc)) from exc
-    else:
-        raise ExecutionError(
-            "compile", "compile_tirx expects a @T.jit or @T.prim_func kernel handle"
-        )
-    try:
-        mod = tvm.IRModule({"main": pf})
-        return tvm.compile(mod, target=tvm.target.Target("cuda"), tir_pipeline="tirx")
-    except tvm.error.InternalError as exc:  # lowering
-        raise ExecutionError("compile", _short(exc)) from exc
-    except RuntimeError as exc:  # codegen (nvcc/nvrtc)
-        raise ExecutionError("compile", _short(exc)) from exc
-
-
 @register_builtin("benchmark")
 def benchmark(mod: Any, *rest: Any) -> dict:
     """Per-iteration CUPTI kernel timing (via triton's proton profiler). cfg:
@@ -113,7 +51,7 @@ def benchmark(mod: Any, *rest: Any) -> dict:
 
     import torch
 
-    tensors, cfg = _split_cfg(rest)
+    tensors, cfg = split_cfg(rest)
     if not callable(mod):
         raise ExecutionError("runtime", "benchmark expects a compiled module handle")
     flush_l2 = bool(cfg.get("flush_l2", True))
@@ -134,7 +72,7 @@ def benchmark(mod: Any, *rest: Any) -> dict:
         torch.cuda.synchronize()
         times = _time_proton(call, repeat, flush)
     except RuntimeError as exc:  # a tvm run error or torch "CUDA error: ..."
-        raise ExecutionError("runtime", _short(exc)) from exc
+        raise ExecutionError("runtime", short(exc)) from exc
     return {
         "latency_ms_median": statistics.median(times),
         "latency_ms_mean": statistics.mean(times),
@@ -150,7 +88,7 @@ def benchmark(mod: Any, *rest: Any) -> dict:
 def check_close(actual: Any, expected: Any, *rest: Any) -> dict:
     import torch
 
-    _, cfg = _split_cfg(rest)
+    _, cfg = split_cfg(rest)
     rtol = float(cfg.get("rtol", 1e-2))
     atol = float(cfg.get("atol", 1e-3))
     try:
@@ -164,7 +102,7 @@ def check_close(actual: Any, expected: Any, *rest: Any) -> dict:
         max_rel = float((diff[nz] / e[nz].abs()).max()) if bool(nz.any()) else 0.0
         passed = bool(torch.allclose(a, e, rtol=rtol, atol=atol))
     except RuntimeError as exc:
-        raise ExecutionError("runtime", _short(exc)) from exc
+        raise ExecutionError("runtime", short(exc)) from exc
     return {
         "passed": passed,
         "max_abs_err": max_abs,
@@ -293,16 +231,6 @@ def _proton_scope_times(tree: Any, prefix: str) -> list[float]:
     return [t for _, t in sorted(found)]  # zero-padded names sort in iteration order
 
 
-def torch_dtype(name: str) -> Any:
-    """Resolve a dtype name (e.g. ``"float16"``) to the torch dtype."""
-    import torch
-
-    dt = getattr(torch, str(name), None)
-    if not isinstance(dt, torch.dtype):
-        raise ExecutionError("runtime", f"unknown dtype: {name!r}")
-    return dt
-
-
 def _read_spec(spec: Any) -> tuple[list[int], Any, Any]:
     if not isinstance(spec, dict):
         raise ExecutionError("runtime", "expected a {shape, dtype} spec")
@@ -311,15 +239,3 @@ def _read_spec(spec: Any) -> tuple[list[int], Any, Any]:
     except (KeyError, TypeError, ValueError) as exc:
         raise ExecutionError("runtime", f"bad 'shape' in spec: {exc}") from exc
     return shape, torch_dtype(spec.get("dtype", "float16")), spec.get("seed")
-
-
-def _split_cfg(args: tuple) -> tuple[tuple, dict]:
-    """Split a builtin's trailing config dict from its leading tensor args."""
-    if args and isinstance(args[-1], dict):
-        return args[:-1], args[-1]
-    return args, {}
-
-
-def _short(exc: Exception, limit: int = 600) -> str:
-    text = str(exc).strip()
-    return text if len(text) <= limit else text[:limit] + " …[truncated]"

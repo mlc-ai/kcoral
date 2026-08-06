@@ -127,6 +127,33 @@ The entry object need not be callable: a decorator may bind a handle that a
 builtin consumes rather than one `run` calls directly. Using a non-callable
 handle as a `run` `fn` fails at run time.
 
+#### CUDA C modules
+
+`language` selects how `source` is read. It defaults to `"python"`; `"cuda"`
+makes `source` CUDA C that `builtin.compile_cuda` builds into a callable:
+
+```json
+{
+  "op": "upload",
+  "id": "kernel",
+  "kind": "module",
+  "language": "cuda",
+  "source": "void add_one(tvm::ffi::TensorView x, tvm::ffi::TensorView y) { ... }",
+  "entry": "add_one"
+}
+```
+
+A CUDA upload executes nothing, so it binds the source text rather than an
+object, and `entry` is required — there is no namespace to infer it from. The
+entry is exported through TVM FFI, so it takes `tvm::ffi::TensorView` parameters
+and returns `void`; the includes and the export macro are supplied by the server.
+`main` is rejected, because C++ reserves it as the program entry point.
+
+The kernel is built for the worker GPU's arch-specific target (`sm_100a` on
+Blackwell, `sm_90a` on Hopper), so instructions gated behind those targets —
+tcgen05, wgmma — are available. Set `TVM_FFI_CUDA_ARCH_LIST` on the server to
+override. Builds are cached on disk by source and flags.
+
 ### Tensor
 
 ```json
@@ -146,16 +173,18 @@ handle as a `run` `fn` fails at run time.
 ### Fields
 
 A field is accepted exactly for the kinds it lists, and is rejected for the
-others: a `module` upload carries `source` and an optional `entry` and no tensor
-fields, a `tensor` upload carries `blob`, `dtype`, and `shape` and no `source`.
+others: a `module` upload carries `source` and an optional `entry` and
+`language` and no tensor fields, a `tensor` upload carries `blob`, `dtype`, and
+`shape` and no `source`.
 
 | Field | Kinds | Required for | Notes |
 |---|---|---|---|
 | `op` | all | all | `"upload"` |
 | `id` | all | all | Unique handle name |
 | `kind` | all | all | `"module"` or `"tensor"` |
-| `source` | module | module | UTF-8 Python source defining the entry object |
-| `entry` | module | — | Python identifier naming the entry object in `source` |
+| `source` | module | module | UTF-8 source defining the entry object |
+| `entry` | module | `cuda` modules | Identifier naming the entry object in `source` |
+| `language` | module | — | `"python"` (default) or `"cuda"` |
 | `blob` | tensor | tensor | SHA-256 of raw tensor bytes |
 | `dtype` | tensor | tensor | Tensor data type |
 | `shape` | tensor | tensor | Tensor shape |
@@ -210,6 +239,7 @@ values are passed as literals.
 | `builtin.empty` | `spec = {shape, dtype}` | an uninitialized tensor |
 | `builtin.zeros` | `spec = {shape, dtype}` | a zero tensor |
 | `builtin.compile_tirx` | `(kernel, bindings?)` — `bindings` binds `T.constexpr` dimensions | a compiled module |
+| `builtin.compile_cuda` | `(source, cfg?)` — `cfg = {extra_cuda_cflags?}` | the module's exported function |
 | `builtin.benchmark` | `(mod, *tensors, cfg?)` — `cfg = {warmup_ms?, repeat_ms?, warmup?, repeat?, flush_l2?}` | timing statistics |
 | `builtin.check_close` | `(actual, expected, cfg?)` — `cfg = {atol?, rtol?}` | comparison statistics |
 | `builtin.assert_close` | same as `check_close` | comparison statistics; fails on mismatch |
@@ -536,7 +566,7 @@ print(result.stdout, result.stderr)
 ```
 
 ```python
-Program.upload(id=..., kind="module", source=..., entry=None) -> Register
+Program.upload(id=..., kind="module", source=..., entry=None, language="python") -> Register
 Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None

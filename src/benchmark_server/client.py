@@ -66,6 +66,7 @@ class Program:
         kind: str,
         source: str | None = None,
         entry: str | None = None,
+        language: str = "python",
         value: Any = None,
         dtype: str | None = None,
         shape: list[int] | None = None,
@@ -75,16 +76,27 @@ class Program:
                 raise TypeError("module upload requires string 'source'")
             if value is not None or dtype is not None or shape is not None:
                 raise TypeError("module upload does not accept tensor fields")
+            if language not in ("python", "cuda"):
+                raise ValueError("module upload 'language' must be 'python' or 'cuda'")
             instruction = {"op": "upload", "id": id, "kind": "module", "source": source}
+            if language != "python":
+                instruction["language"] = language
             if entry is not None:
                 if not (isinstance(entry, str) and entry.isidentifier()):
-                    raise ValueError("module upload 'entry' must be a Python identifier")
+                    raise ValueError("module upload 'entry' must be an identifier")
                 instruction["entry"] = entry
+            if language == "cuda":
+                if entry is None:
+                    raise ValueError("a 'cuda' module upload must name its 'entry'")
+                if entry == "main":
+                    raise ValueError("C++ reserves 'main'; name the entry otherwise")
         elif kind == "tensor":
             if source is not None:
                 raise TypeError("tensor upload does not accept 'source'")
             if entry is not None:
                 raise TypeError("tensor upload does not accept 'entry'")
+            if language != "python":
+                raise TypeError("tensor upload does not accept 'language'")
             tensor_dtype, tensor_shape, raw = _tensor_fields(value, dtype=dtype, shape=shape)
             blob_hash = compute_blob_hash(raw)
             self._blobs.setdefault(blob_hash, raw)

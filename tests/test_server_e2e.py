@@ -408,3 +408,77 @@ def test_real_kernel_end_to_end():
     assert result["status"] == "COMPLETED"
     returned = np.frombuffer(binary["return:0"], dtype=np.float32)
     np.testing.assert_allclose(returned, np.arange(256, dtype=np.float32) + 1)
+
+
+CUDA_KERNEL = """
+__global__ void scale_kernel(const float* x, float* y, int n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) y[i] = x[i] * 3.0f;
+}
+
+void scale(tvm::ffi::TensorView x, tvm::ffi::TensorView y) {
+  int n = static_cast<int>(x.numel());
+  scale_kernel<<<(n + 255) / 256, 256>>>(static_cast<const float*>(x.data_ptr()),
+                                         static_cast<float*>(y.data_ptr()), n);
+}
+"""
+
+
+@pytest.mark.skipif(
+    os.environ.get("BENCH_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
+)
+def test_cuda_c_kernel_end_to_end():
+    import numpy as np
+
+    raw = np.arange(256, dtype=np.float32).tobytes()
+    digest = compute_blob_hash(raw)
+    program = {
+        "instructions": [
+            {
+                "op": "upload",
+                "id": "kernel",
+                "kind": "module",
+                "language": "cuda",
+                "source": CUDA_KERNEL,
+                "entry": "scale",
+            },
+            {
+                "op": "upload",
+                "id": "input",
+                "kind": "tensor",
+                "blob": digest,
+                "dtype": "float32",
+                "shape": [256],
+            },
+            {
+                "op": "run",
+                "id": "output",
+                "fn": "builtin.empty",
+                "args": [{"shape": [256], "dtype": "float32"}],
+            },
+            {
+                "op": "run",
+                "id": "compiled",
+                "fn": "builtin.compile_cuda",
+                "args": [{"$ref": "kernel"}],
+            },
+            {
+                "op": "run",
+                "id": "invoke",
+                "fn": {"$ref": "compiled"},
+                "args": [{"$ref": "input"}, {"$ref": "output"}],
+            },
+            {"op": "return", "key": "output", "value": {"$ref": "output"}},
+        ],
+        "options": {"timeout_seconds": 300},
+    }
+    gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
+    gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0
+    app = create_app(ServerConfig(gpus=[gpu_id]), runtime_factory=gpu_runtime_factory)
+    with TestClient(app) as client:
+        response = post_program(client, program, {digest: raw})
+    result, binary = response_parts(response)
+    assert result["status"] == "COMPLETED", result.get("error")
+    returned = np.frombuffer(binary["return:0"], dtype=np.float32)
+    np.testing.assert_allclose(returned, np.arange(256, dtype=np.float32) * 3.0)
