@@ -63,6 +63,8 @@ def test_health_reports_idle_workers(pool):
         }
     ]
     assert health["workers"][0]["uptime_seconds"] >= 0
+    # the pool serves one target; versions are reported separately
+    assert health["target"] == {"arch": "fake"} and health["versions"] == {}
 
 
 def test_backpressure_when_all_workers_busy(pool):

@@ -235,7 +235,7 @@ def _parse_execute_request(
     if program_bytes is None:
         raise ValidationError("missing multipart part: 'program'")
     program = parse_program(strict_json_loads(program_bytes))
-    uploads = program.tensor_uploads()
+    uploads = program.blob_uploads()
     referenced_blobs = _dedup([upload.blob for upload in uploads if upload.blob is not None])
     unreferenced = set(supplied_blobs) - set(referenced_blobs)
     if unreferenced:
@@ -246,18 +246,20 @@ def _parse_execute_request(
 
     missing: list[str] = []
     for upload in uploads:
-        assert upload.blob is not None and upload.dtype is not None and upload.shape is not None
+        assert upload.blob is not None
         data = supplied_blobs.get(upload.blob)
         if data is None:
             data = cache.get(upload.blob)
         if data is None:
             missing.append(upload.blob)
             continue
-        expected_size = expected_tensor_nbytes(upload.dtype, upload.shape)
-        if len(data) != expected_size:
-            raise ValidationError(
-                f"tensor upload {upload.id!r} expects {expected_size} bytes, got {len(data)}"
-            )
+        if upload.kind == "tensor":
+            assert upload.dtype is not None and upload.shape is not None
+            expected_size = expected_tensor_nbytes(upload.dtype, upload.shape)
+            if len(data) != expected_size:
+                raise ValidationError(
+                    f"tensor upload {upload.id!r} expects {expected_size} bytes, got {len(data)}"
+                )
         program.blob_bytes[upload.blob] = data
     if missing:
         raise _CacheMiss(_dedup(missing))

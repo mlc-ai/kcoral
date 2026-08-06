@@ -428,6 +428,76 @@ void scale(tvm::ffi::TensorView x, tvm::ffi::TensorView y) {
     os.environ.get("BENCH_GPU_TEST") != "1",
     reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
 )
+def test_prebuilt_library_is_cached_like_a_tensor(tmp_path):
+    """A client-compiled library goes through the same content-addressed cache as a
+    tensor: missing on the first attempt, then served from the cache by hash alone."""
+    import numpy as np
+
+    from tests.test_gpu_runtime import CUDA_KERNEL, build_library
+
+    data = build_library(CUDA_KERNEL, "add_one", tmp_path)
+    digest = compute_blob_hash(data)
+    raw = np.arange(256, dtype=np.float32).tobytes()
+    input_digest = compute_blob_hash(raw)
+    program = {
+        "instructions": [
+            {
+                "op": "upload",
+                "id": "kernel",
+                "kind": "library",
+                "blob": digest,
+                "entry": "add_one",
+            },
+            {
+                "op": "upload",
+                "id": "input",
+                "kind": "tensor",
+                "blob": input_digest,
+                "dtype": "float32",
+                "shape": [256],
+            },
+            {
+                "op": "run",
+                "id": "output",
+                "fn": "builtin.empty",
+                "args": [{"shape": [256], "dtype": "float32"}],
+            },
+            {
+                "op": "run",
+                "id": "invoke",
+                "fn": {"$ref": "kernel"},
+                "args": [{"$ref": "input"}, {"$ref": "output"}],
+            },
+            {"op": "return", "key": "output", "value": {"$ref": "output"}},
+        ],
+        "options": {"timeout_seconds": 300},
+    }
+    gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
+    gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0
+    app = create_app(ServerConfig(gpus=[gpu_id]), runtime_factory=gpu_runtime_factory)
+    with TestClient(app) as client:
+        # the server advertises what the library had to be built for
+        assert client.get("/health").json()["target"]["arch"].startswith("sm_")
+
+        miss = post_program(client, program).json()
+        assert miss["status"] == "CACHE_MISS"
+        assert set(miss["missing_blobs"]) == {digest, input_digest}
+
+        uploaded = post_program(client, program, {digest: data, input_digest: raw})
+        warm = post_program(client, program)  # hashes only; both blobs are cached
+    for response in (uploaded, warm):
+        result, binary = response_parts(response)
+        assert result["status"] == "COMPLETED", result.get("error")
+        np.testing.assert_allclose(
+            np.frombuffer(binary["return:0"], dtype=np.float32),
+            np.arange(256, dtype=np.float32) + 1,
+        )
+
+
+@pytest.mark.skipif(
+    os.environ.get("BENCH_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
+)
 def test_cuda_c_kernel_end_to_end():
     import numpy as np
 

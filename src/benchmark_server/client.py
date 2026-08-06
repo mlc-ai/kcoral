@@ -108,8 +108,25 @@ class Program:
                 "dtype": tensor_dtype,
                 "shape": tensor_shape,
             }
+        elif kind == "library":
+            if source is not None:
+                raise TypeError("library upload does not accept 'source'")
+            if dtype is not None or shape is not None:
+                raise TypeError("library upload does not accept tensor fields")
+            if not (isinstance(entry, str) and entry.isidentifier()):
+                raise ValueError("library upload requires an identifier 'entry'")
+            raw = value if isinstance(value, bytes) else bytes(memoryview(value))
+            blob_hash = compute_blob_hash(raw)
+            self._blobs.setdefault(blob_hash, raw)
+            instruction = {
+                "op": "upload",
+                "id": id,
+                "kind": "library",
+                "blob": blob_hash,
+                "entry": entry,
+            }
         else:
-            raise ValueError("upload kind must be 'module' or 'tensor'")
+            raise ValueError("upload kind must be 'module', 'tensor', or 'library'")
         self._add_id(id)
         self._instructions.append(instruction)
         return Register(id)
@@ -230,6 +247,13 @@ class Client:
         if body.get("status") != "ok":
             raise ProtocolError("health status is not ok")
         return body
+
+    def target(self) -> dict[str, str]:
+        """What an uploaded library must be built for, e.g. ``{"arch": "sm_100a"}``."""
+        target = self.health().get("target")
+        if not isinstance(target, dict) or "arch" not in target:
+            raise ProtocolError("the server reported no compilation target")
+        return target
 
     def _post_program(
         self, program: Program, options: dict[str, Any], include_blobs: set[str]

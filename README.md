@@ -66,7 +66,8 @@ Useful options include:
 --max-request-bytes 268435456     Maximum request body size
 ```
 
-Check readiness with `GET /health`. Submit programs with `POST /execute` using
+Check readiness with `GET /health`, which also reports the `target` an uploaded
+library must be built for and the `versions` the worker runs. Submit programs with `POST /execute` using
 `multipart/form-data`.
 
 ## Python client
@@ -94,6 +95,18 @@ with Client("http://localhost:8000") as client:
 print(response.status)
 print(response.results["answer"])
 ```
+
+A kernel compiled elsewhere can be uploaded instead of source, which keeps
+compilation off the benchmark GPU entirely:
+
+```python
+target = client.target()                      # {"arch": "sm_100a"} — build for this
+kernel = program.upload(id="kernel", kind="library", value=so_bytes, entry="add_one")
+program.run(id="invoke", fn=kernel, args=[x, y])   # no compile instruction
+```
+
+The server builds nothing here; it loads the shared object and calls `entry`. The
+protocol document states what a library must export.
 
 `Program.upload()` and `Program.run()` return a `Register`, which can be passed
 to later instructions. `Program.return_()` adds an explicit result; run values

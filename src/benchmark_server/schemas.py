@@ -29,7 +29,7 @@ DTYPE_ITEM_SIZES: dict[str, int] = {
 @dataclass
 class Upload:
     id: str
-    kind: Literal["module", "tensor"]
+    kind: Literal["module", "tensor", "library"]
     source: str | None = None
     entry: str | None = None
     language: Literal["python", "cuda"] = "python"
@@ -71,11 +71,12 @@ class Program:
     # Filled by the HTTP front-end after multipart validation and cache lookup.
     blob_bytes: dict[str, bytes] = field(default_factory=dict)
 
-    def tensor_uploads(self) -> list[Upload]:
+    def blob_uploads(self) -> list[Upload]:
+        """Uploads whose payload comes from the content-addressed blob cache."""
         return [
             instruction
             for instruction in self.instructions
-            if isinstance(instruction, Upload) and instruction.kind == "tensor"
+            if isinstance(instruction, Upload) and instruction.blob is not None
         ]
 
 
@@ -260,6 +261,22 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
                 f"tensor upload {item['id']!r}: 'shape' must be an array of non-negative integers"
             )
         return Upload(id=item["id"], kind="tensor", blob=blob, dtype=dtype, shape=shape)
+    if kind == "library":
+        _check_fields(
+            item,
+            {"op", "id", "kind", "blob", "entry"},
+            {"op", "id", "kind", "blob", "entry"},
+            f"instruction {index}",
+        )
+        blob = item["blob"]
+        entry = item["entry"]
+        if not is_blob_hash(blob):
+            raise ValidationError(
+                f"library upload {item['id']!r}: 'blob' must be a lowercase SHA-256 digest"
+            )
+        if not (isinstance(entry, str) and entry.isidentifier()):
+            raise ValidationError(f"library upload {item['id']!r}: 'entry' must be an identifier")
+        return Upload(id=item["id"], kind="library", blob=blob, entry=entry)
     raise ValidationError(f"upload {item.get('id')!r}: unknown kind {kind!r}")
 
 

@@ -164,6 +164,15 @@ def test_health_and_transport_errors(server_url):
             client.health()
 
 
+def test_target_reports_what_a_library_must_be_built_for(server_url):
+    with Client(server_url) as client:
+        assert client.target() == {"arch": "fake"}
+        # a server that reports no target is a protocol violation, not a None result
+        client.health = lambda: {"status": "ok", "gpu_count": 1}
+        with pytest.raises(ProtocolError, match="no compilation target"):
+            client.target()
+
+
 def test_program_builder_allows_interleaved_returns():
     program = Program()
     register = program.upload(id="module", kind="module", source="def main(): pass\n")
@@ -208,6 +217,17 @@ def test_cuda_module_builder_emits_language_and_entry():
 def test_cuda_module_builder_validation(kwargs, match):
     with pytest.raises(ValueError, match=match):
         Program().upload(id="kernel", **kwargs)
+
+
+def test_library_builder_hashes_bytes_and_carries_entry():
+    program = Program()
+    program.upload(id="k", kind="library", value=b"\x7fELF...", entry="add_one")
+    instruction = program.instructions[0]
+    assert instruction["kind"] == "library" and instruction["entry"] == "add_one"
+    assert instruction["blob"] == compute_blob_hash(b"\x7fELF...")
+
+    with pytest.raises(ValueError, match="requires an identifier 'entry'"):
+        Program().upload(id="k", kind="library", value=b"x")
 
 
 def test_numpy_tensor_builder_uses_raw_byte_hash():

@@ -11,7 +11,9 @@ from __future__ import annotations
 import ast
 import hashlib
 import linecache
+import tempfile
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from . import builtin_ops
@@ -19,6 +21,14 @@ from .errors import ExecutionError
 
 # The name an uploaded module's entry object takes when the upload names none.
 ENTRY_POINT = "main"
+
+# Libraries already dlopened by this worker, keyed by the SHA-256 of their bytes.
+# Purely a memoization — every request carries the bytes it needs. Entries live as
+# long as the worker: a dlopened object cannot be unmapped while values it produced
+# are still reachable.
+_LOADED_LIBRARIES: dict[str, Any] = {}
+_LIBRARY_DIR: Path | None = None
+_LOADERS_READY = False
 
 
 class GPURuntime:
@@ -37,6 +47,17 @@ class GPURuntime:
             assert entry is not None
             return builtin_ops.CUDASource(source=source, entry=entry)
         return self._materialize_module(source, entry)
+
+    def load_library(self, data: bytes, entry: str) -> Any:
+        return _materialize_library(data, entry)
+
+    def target(self) -> dict[str, str]:
+        """What a client must compile a library for."""
+        return describe_target()
+
+    def versions(self) -> dict[str, str]:
+        """The worker's library versions, for a client comparing its own."""
+        return describe_versions()
 
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any:
         return _materialize_tensor(data, dtype, shape)
@@ -154,6 +175,72 @@ def _materialize_tensor(data: bytes, dtype_name: str, shape: list[int]) -> Any:
         raise
     except Exception as exc:
         raise ExecutionError("runtime", f"malformed tensor: {exc}") from exc
+
+
+def describe_target() -> dict[str, str]:
+    """The compilation target of the visible GPU."""
+    import torch
+
+    major, minor = torch.cuda.get_device_capability()
+    return {"arch": f"sm_{major}{minor}a" if major >= 9 else f"sm_{major}{minor}"}
+
+
+def describe_versions() -> dict[str, str]:
+    """Versions a client may want to match; optional dependencies are absent."""
+    import torch
+
+    versions = {"torch": torch.__version__}
+    if torch.version.cuda:
+        versions["cuda"] = torch.version.cuda
+    for name in ("tvm", "tvm_ffi"):
+        try:
+            versions[name] = __import__(name).__version__
+        except Exception:  # optional, or no version attribute
+            pass
+    return versions
+
+
+def _materialize_library(data: bytes, entry: str) -> Any:
+    """Load a prebuilt shared object and bind the function it exports as ``entry``.
+    Loading needs a path, so the bytes go to a file unlinked once dlopen maps it."""
+    import tvm_ffi
+
+    _register_library_loaders()
+    digest = hashlib.sha256(data).hexdigest()
+    cached = _LOADED_LIBRARIES.get(digest)
+    if cached is None:
+        path = _library_dir() / f"{digest}.so"
+        path.write_bytes(data)
+        try:
+            cached = tvm_ffi.load_module(str(path))
+        except Exception as exc:
+            raise ExecutionError("compile", f"cannot load the uploaded library: {exc}") from exc
+        finally:
+            path.unlink(missing_ok=True)  # the mapping outlives the file
+        _LOADED_LIBRARIES[digest] = cached
+    if not cached.implements_function(entry):
+        raise ExecutionError("compile", f"the uploaded library exports no function {entry!r}")
+    return getattr(cached, entry)
+
+
+def _register_library_loaders() -> None:
+    """Unpacking an ``export_library`` blob needs the loader the TVM CUDA runtime
+    registers, and nothing else in a library-only program imports tvm."""
+    global _LOADERS_READY
+    if _LOADERS_READY:
+        return
+    try:
+        import tvm  # noqa: F401
+    except Exception:
+        pass  # tvm is optional; only embedded-blob libraries depend on it
+    _LOADERS_READY = True
+
+
+def _library_dir() -> Path:
+    global _LIBRARY_DIR
+    if _LIBRARY_DIR is None:
+        _LIBRARY_DIR = Path(tempfile.mkdtemp(prefix="benchmark-server-lib-"))
+    return _LIBRARY_DIR
 
 
 def gpu_runtime_factory() -> GPURuntime:

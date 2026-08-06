@@ -34,6 +34,7 @@ class Runtime(Protocol):
     def load_module(
         self, source: str, entry: str | None = None, language: str = "python"
     ) -> Any: ...
+    def load_library(self, data: bytes, entry: str) -> Any: ...
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any: ...
     def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None: ...
     def builtin(self, name: str) -> Callable: ...
@@ -61,6 +62,11 @@ def execute(program: Program, runtime: Runtime) -> ProgramOutcome:
                                 instruction.source,
                                 entry=instruction.entry,
                                 language=instruction.language,
+                            )
+                        elif instruction.kind == "library":
+                            assert instruction.blob is not None and instruction.entry is not None
+                            env[instruction.id] = runtime.load_library(
+                                program.blob_bytes[instruction.blob], instruction.entry
                             )
                         else:
                             assert (

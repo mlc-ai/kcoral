@@ -31,10 +31,12 @@ def worker_main(gpu_id: int, conn, runtime_factory: Callable) -> None:
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     try:
         runtime = runtime_factory()
+        described = {"target": runtime.target(), "versions": runtime.versions()}
     except Exception as exc:  # runtime init failed — report and exit
         conn.send({"__error__": f"runtime init failed: {type(exc).__name__}: {exc}"})
         return
-    conn.send("__ready__")
+    # Only this process sees the GPU, so only it can describe the target.
+    conn.send({"__ready__": described})
     while True:
         try:
             program = conn.recv()
@@ -88,9 +90,12 @@ class Worker:
             self._kill()
             raise WorkerCrashed(f"worker on GPU {self.gpu_id} did not become ready")
         msg = self._conn.recv()
-        if msg != "__ready__":
+        if not (isinstance(msg, dict) and "__ready__" in msg):
             self._kill()
             raise WorkerCrashed(f"worker init error: {msg}")
+        described = msg["__ready__"]
+        self.target: dict[str, str] = described["target"]
+        self.versions: dict[str, str] = described["versions"]
 
     def run(self, program, timeout: float):
         """Run a program; kill+respawn on timeout or crash, then re-raise."""

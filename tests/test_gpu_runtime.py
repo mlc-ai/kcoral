@@ -1,6 +1,7 @@
 """GPU integration tests for the runtime and the TIRx and CUDA C builtins."""
 
 import os
+import pathlib
 
 import pytest
 
@@ -73,6 +74,37 @@ void tmem_roundtrip(tvm::ffi::TensorView out) {
   tmem_kernel<<<1, 32>>>(static_cast<int*>(out.data_ptr()));
 }
 """
+
+
+def build_library(source, entry, tmp_path):
+    """Compile CUDA C the way a client would, off the server, and return the bytes."""
+    import tvm_ffi.cpp
+    from tvm_ffi.cpp import extension
+
+    from benchmark_server.builtin_ops.cuda import _cuda_arch_list
+
+    os.environ.setdefault("TVM_FFI_CUDA_ARCH_LIST", _cuda_arch_list())
+    cu = tmp_path / f"{entry}.cu"
+    cu.write_text(extension._decorate_with_tvm_ffi(source, {entry: ""}))
+    return pathlib.Path(tvm_ffi.cpp.build(name=entry, cuda_files=[str(cu)])).read_bytes()
+
+
+def build_tirx_library(tmp_path):
+    """Compile TIRx the way a client would, with an explicit target so no GPU is
+    consulted. The exported name comes from the function, not the IRModule key."""
+    import tvm
+
+    from benchmark_server.gpu_runtime import GPURuntime, describe_target
+
+    prim_func = GPURuntime().load_module(PRIM_KERNEL.replace("def main(", "def add_one("))
+    target = tvm.target.Target({"kind": "cuda", "arch": describe_target()["arch"]})
+    with target:  # the tirx pipeline reads the arch from Target.current()
+        executable = tvm.compile(
+            tvm.IRModule({"add_one": prim_func}), target=target, tir_pipeline="tirx"
+        )
+    path = tmp_path / "tirx_add_one.so"
+    executable.export_library(str(path))
+    return path.read_bytes()
 
 
 def ref(handle):
@@ -193,6 +225,115 @@ def test_cuda_c_runs_on_the_arch_specific_target():
     np.testing.assert_array_equal(
         np.frombuffer(outcome.binary_parts["return:0"], dtype=np.int32), np.arange(100, 132)
     )
+
+
+def test_prebuilt_library_runs_and_benchmarks(tmp_path):
+    """A client-compiled .so uploads as bytes and needs no compile instruction."""
+    data = build_library(CUDA_KERNEL, "add_one", tmp_path)
+    digest = compute_blob_hash(data)
+    program = Program(
+        [
+            Upload("kernel", "library", blob=digest, entry="add_one"),
+            Upload("reference", "module", source=REF),
+            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            Run("invoke", ref("kernel"), [ref("input"), ref("output")]),
+            Run("expected", ref("reference"), [ref("input")]),
+            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
+            Run(
+                "timing",
+                "builtin.benchmark",
+                [ref("kernel"), ref("input"), ref("output"), {"warmup": 5, "repeat": 20}],
+            ),
+            Return("check", ref("check")),
+            Return("timing", ref("timing")),
+        ],
+        blob_bytes={digest: data},
+    )
+    outcome = execute(program, runtime())
+    assert outcome.status == "COMPLETED", outcome.error
+    assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
+    assert decode_structural(outcome.results["timing"])["latency_ms_median"] > 0
+
+
+def test_prebuilt_tirx_library_runs(tmp_path):
+    """An export_library artifact carries its device code as an embedded blob, so
+    this is the path that needs the TVM CUDA runtime loader registered."""
+    data = build_tirx_library(tmp_path)
+    digest = compute_blob_hash(data)
+    program = Program(
+        [
+            Upload("kernel", "library", blob=digest, entry="add_one"),
+            Upload("reference", "module", source=REF),
+            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            Run("invoke", ref("kernel"), [ref("input"), ref("output")]),
+            Run("expected", ref("reference"), [ref("input")]),
+            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
+            Return("check", ref("check")),
+        ],
+        blob_bytes={digest: data},
+    )
+    outcome = execute(program, runtime())
+    assert outcome.status == "COMPLETED", outcome.error
+    assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
+
+
+def test_library_with_a_wrong_entry_fails_to_compile(tmp_path):
+    data = build_library(CUDA_KERNEL, "add_one", tmp_path)
+    digest = compute_blob_hash(data)
+    outcome = execute(
+        Program(
+            [Upload("kernel", "library", blob=digest, entry="not_there")],
+            blob_bytes={digest: data},
+        ),
+        runtime(),
+    )
+    assert outcome.status == "FAILED" and outcome.error["kind"] == "compile"
+    assert "not_there" in outcome.error["message"]
+
+
+def test_library_cache_is_only_a_memoization(tmp_path):
+    """A cold worker must behave exactly like a warm one: every request carries the
+    bytes, so dropping the cache changes speed and nothing else."""
+    from benchmark_server import gpu_runtime
+
+    data = build_library(CUDA_KERNEL, "add_one", tmp_path)
+    digest = compute_blob_hash(data)
+
+    def run_once():
+        program = Program(
+            [
+                Upload("kernel", "library", blob=digest, entry="add_one"),
+                Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+                Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+                Run("invoke", ref("kernel"), [ref("input"), ref("output")]),
+                Return("output", ref("output")),
+            ],
+            blob_bytes={digest: data},
+        )
+        return execute(program, runtime())
+
+    gpu_runtime._LOADED_LIBRARIES.clear()
+    cold = run_once()
+    warm = run_once()  # served from the in-process cache
+    gpu_runtime._LOADED_LIBRARIES.clear()
+    cold_again = run_once()  # a respawned worker starts empty and must still work
+    for outcome in (cold, warm, cold_again):
+        assert outcome.status == "COMPLETED", outcome.error
+    assert cold.binary_parts == warm.binary_parts == cold_again.binary_parts
+
+
+def test_compile_tirx_reuses_an_already_compiled_kernel():
+    from benchmark_server.builtin_ops import tirx
+
+    tirx._COMPILED.clear()
+    rt = runtime()
+    kernel = rt.load_module(KERNEL)
+    first = tirx.compile_tirx(kernel, {"N": 256})
+    second = tirx.compile_tirx(kernel, {"N": 256})
+    assert first is second  # same Executable, so codegen ran once
+    assert tirx.compile_tirx(kernel, {"N": 512}) is not first  # a new shape still compiles
 
 
 def test_benchmark_budget_counts_and_no_flush():

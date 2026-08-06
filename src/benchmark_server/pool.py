@@ -21,6 +21,10 @@ from dataclasses import dataclass
 from .worker import Worker, WorkerCrashed, WorkerTimeout
 
 
+class MixedTargets(Exception):
+    """The configured GPUs do not share one compilation target."""
+
+
 class PoolBusy(Exception):
     def __init__(self, message: str, queue_ms: float = 0.0):
         super().__init__(message)
@@ -46,6 +50,7 @@ class WorkerPool:
             Worker(g, runtime_factory, termination_grace_seconds=termination_grace_seconds)
             for g in gpus
         ]
+        self._require_one_target()
         self._idle: queue.Queue[Worker] = queue.Queue()
         for w in self._workers:
             self._idle.put(w)
@@ -86,6 +91,19 @@ class WorkerPool:
                 self._busy_gpu_ids.discard(worker.gpu_id)
             self._idle.put(worker)  # worker was respawned in-place on crash/timeout
 
+    def _require_one_target(self) -> None:
+        """One pool serves one target, so a client builds one library that any
+        worker runs. Mixed GPUs mean two servers."""
+        by_target = {}
+        for worker in self._workers:
+            by_target.setdefault(tuple(sorted(worker.target.items())), []).append(worker.gpu_id)
+        if len(by_target) > 1:
+            self.shutdown()
+            grouped = "; ".join(
+                f"GPU(s) {gpus} are {dict(target)['arch']}" for target, gpus in by_target.items()
+            )
+            raise MixedTargets(f"a pool serves one target, but {grouped}")
+
     def health(self) -> dict:
         with self._state_lock:
             busy_gpu_ids = set(self._busy_gpu_ids)
@@ -93,6 +111,8 @@ class WorkerPool:
         now = time.monotonic()
         return {
             "queue_length": waiting,
+            "target": self.target(),
+            "versions": self.versions(),
             "workers": [
                 {
                     "gpu_id": w.gpu_id,
@@ -102,6 +122,14 @@ class WorkerPool:
                 for w in self._workers
             ],
         }
+
+    def target(self) -> dict[str, str]:
+        """What a client must compile an uploaded library for; startup rejects a
+        pool whose workers would disagree."""
+        return self._workers[0].target
+
+    def versions(self) -> dict[str, str]:
+        return self._workers[0].versions
 
     def shutdown(self) -> None:
         for w in self._workers:

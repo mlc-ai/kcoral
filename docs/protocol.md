@@ -7,7 +7,26 @@ its handles live only for that request.
 
 ```text
 POST /execute          Content-Type: multipart/form-data
+GET  /health
 ```
+
+`GET /health` reports readiness, the `target` an uploaded library must be built
+for, and the `versions` a client may want to match:
+
+```json
+{
+  "status": "ok",
+  "gpu_count": 1,
+  "queue_length": 0,
+  "target": {"arch": "sm_100a"},
+  "versions": {"torch": "2.13.0+cu130", "cuda": "13.0",
+               "tvm": "0.26.0rc0", "tvm_ffi": "0.1.13.post2"},
+  "workers": [{"gpu_id": 0, "status": "idle", "uptime_seconds": 12.4}]
+}
+```
+
+Every worker in a pool shares one target — a server whose GPUs disagree refuses
+to start, so run one server per GPU model.
 
 ## Request envelope
 
@@ -170,30 +189,110 @@ override. Builds are cached on disk by source and flags.
 `blob` names raw contiguous row-major bytes. Their length must equal
 `product(shape) * dtype.itemsize`. The tensor is copied to the assigned GPU.
 
+### Library
+
+A library is a shared object the client already built, so the server compiles
+nothing:
+
+```json
+{
+  "op": "upload",
+  "id": "kernel",
+  "kind": "library",
+  "blob": "<sha256>",
+  "entry": "add_one"
+}
+```
+
+`blob` names the bytes of an ELF shared object for the server's platform. The
+server loads it with `tvm_ffi.load_module` and checks that it exports `entry`;
+one that cannot be loaded, or that has no such function, fails the upload with a
+`compile` error. Nothing else about the object is inspected, so any producer TVM
+FFI can load is accepted. Two are usual:
+
+- `TVM_FFI_DLL_EXPORT_TYPED_FUNC`, which `tvm_ffi.cpp.build` applies for you,
+  emitting a `__tvm_ffi_<entry>` symbol. A code generator that emits that symbol
+  directly works equally well;
+- `tvm.Executable.export_library`, which embeds a module blob rather than a
+  plain symbol. Unpacking one needs the loader the TVM CUDA runtime registers,
+  so it requires a server with tvm installed.
+
+The function takes DLPack-compatible tensors, and its device code must be built
+for the architecture `GET /health` reports. Building for another one fails later,
+at launch, with `cudaErrorNoKernelImageForDevice`.
+
+The exported entry has this shape — the body does not matter, only the interface.
+Exporting it from C++:
+
+```c++
+#include <tvm/ffi/container/tensor.h>
+
+void add_one(tvm::ffi::TensorView x, tvm::ffi::TensorView y) { /* launch a kernel */ }
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(add_one, add_one);
+```
+
+Exporting the same interface from TIRx, where the function's own name becomes
+`entry` and naming the target explicitly is what lets a client build without a GPU
+of its own:
+
+```python
+from tvm.script import tirx as T
+
+@T.prim_func
+def add_one(A: T.Buffer((256,), "float32"), B: T.Buffer((256,), "float32")):
+    ...  # kernel body
+
+target = tvm.target.Target({"kind": "cuda", "arch": "sm_100a"})
+with target:  # the tirx pipeline reads the arch from Target.current()
+    executable = tvm.compile(
+        tvm.IRModule({"add_one": add_one}), target=target, tir_pipeline="tirx"
+    )
+executable.export_library("add_one.so")
+```
+
+Either route leaves a file on disk, and the upload carries its bytes: `blob` is
+their SHA-256 and the bytes themselves travel as the matching `blob:<sha256>`
+part, exactly as a tensor's do.
+
+```python
+data = pathlib.Path("add_one.so").read_bytes()
+upload = {"op": "upload", "id": "kernel", "kind": "library",
+          "blob": hashlib.sha256(data).hexdigest(), "entry": "add_one"}
+```
+
+Nothing then stands between the upload and the call: the handle is already the
+callable, so no compile instruction appears.
+
+```json
+{"op": "run", "id": "invoke", "fn": {"$ref": "kernel"},
+ "args": [{"$ref": "x"}, {"$ref": "y"}]}
+```
+
 ### Fields
 
 A field is accepted exactly for the kinds it lists, and is rejected for the
 others: a `module` upload carries `source` and an optional `entry` and
-`language` and no tensor fields, a `tensor` upload carries `blob`, `dtype`, and
-`shape` and no `source`.
+`language`, a `tensor` upload carries `blob`, `dtype`, and `shape`, and a
+`library` upload carries `blob` and `entry`.
 
 | Field | Kinds | Required for | Notes |
 |---|---|---|---|
 | `op` | all | all | `"upload"` |
 | `id` | all | all | Unique handle name |
-| `kind` | all | all | `"module"` or `"tensor"` |
+| `kind` | all | all | `"module"`, `"tensor"`, or `"library"` |
 | `source` | module | module | UTF-8 source defining the entry object |
-| `entry` | module | `cuda` modules | Identifier naming the entry object in `source` |
+| `entry` | module, library | `cuda` modules, library | Identifier naming the entry object |
 | `language` | module | — | `"python"` (default) or `"cuda"` |
-| `blob` | tensor | tensor | SHA-256 of raw tensor bytes |
+| `blob` | tensor, library | tensor, library | SHA-256 of the raw bytes |
 | `dtype` | tensor | tensor | Tensor data type |
 | `shape` | tensor | tensor | Tensor shape |
 
-### Tensor blob cache
+### Blob cache
 
 The server verifies supplied blobs against their part names and caches them by
-hash. A tensor may reference a cached blob without supplying its multipart part.
-If any blob is missing, the program does not run:
+hash. A tensor or library may reference a cached blob without supplying its
+multipart part, so a library is uploaded once and later requests cost only its
+hash. If any blob is missing, the program does not run:
 
 ```json
 {

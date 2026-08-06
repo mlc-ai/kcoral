@@ -41,7 +41,7 @@ def test_parse_complete_program():
     assert program.instructions[2].args == [1]
     assert program.instructions[3].value == Ref("result")
     assert program.options == {"timeout_seconds": 12.0, "output_limit_bytes": 0}
-    assert program.tensor_uploads()[0].blob == TENSOR_HASH
+    assert program.blob_uploads()[0].blob == TENSOR_HASH
 
 
 def test_parse_cuda_module_upload():
@@ -61,6 +61,26 @@ def test_parse_cuda_module_upload():
     )
     assert program.instructions[0].language == "cuda"
     assert program.instructions[0].entry == "add"
+
+
+def test_parse_library_upload():
+    program = parse_program(
+        {
+            "instructions": [
+                {
+                    "op": "upload",
+                    "id": "kernel",
+                    "kind": "library",
+                    "blob": TENSOR_HASH,
+                    "entry": "add_one",
+                }
+            ]
+        }
+    )
+    upload = program.instructions[0]
+    assert upload.kind == "library" and upload.entry == "add_one"
+    # blob-backed, so it joins tensors in the cache-admission path
+    assert program.blob_uploads() == [upload]
 
 
 @pytest.mark.parametrize(
@@ -99,6 +119,10 @@ def test_parse_cuda_module_upload():
         (
             {"op": "upload", "id": "x", "kind": "module", "source": "", "language": "rust"},
             "unsupported language",
+        ),
+        (
+            {"op": "upload", "id": "x", "kind": "library", "blob": TENSOR_HASH},
+            "missing field",
         ),
         (
             {"op": "upload", "id": "x", "kind": "module", "source": "", "language": "cuda"},

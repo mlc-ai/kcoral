@@ -65,6 +65,15 @@ class FakeRuntime:
             raise ExecutionError("parse", f"{type(exc).__name__}: {exc}") from exc
         return resolve_entry(namespace, source, entry)
 
+    def target(self) -> dict[str, str]:
+        return {"arch": "fake"}
+
+    def versions(self) -> dict[str, str]:
+        return {}
+
+    def load_library(self, data: bytes, entry: str) -> Any:
+        raise ExecutionError("unavailable", "the fake runtime cannot load a library")
+
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> _FakeTensor:
         return _FakeTensor(data=data, dtype=dtype, shape=shape)
 

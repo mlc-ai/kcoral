@@ -3,11 +3,17 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import Any
 
 from ..errors import ExecutionError
 from ._common import short
 from ._registry import register_builtin
+
+# Compiling dominates a TIRx request and nothing below this builtin caches it.
+# Bounded because each entry holds a loaded GPU module.
+_COMPILED: OrderedDict[int, Any] = OrderedDict()
+_COMPILED_LIMIT = 32
 
 
 @register_builtin("compile_tirx")
@@ -43,10 +49,22 @@ def compile_tirx(fn: Any, bindings: Any = None) -> Any:
         raise ExecutionError(
             "compile", "compile_tirx expects a @T.jit or @T.prim_func kernel handle"
         )
+    # Specializing is free and hashing costs microseconds; codegen is the 500ms.
+    import tvm_ffi
+
+    key = tvm_ffi.structural_hash(pf)
+    cached = _COMPILED.get(key)
+    if cached is not None:
+        _COMPILED.move_to_end(key)
+        return cached
     try:
         mod = tvm.IRModule({"main": pf})
-        return tvm.compile(mod, target=tvm.target.Target("cuda"), tir_pipeline="tirx")
+        executable = tvm.compile(mod, target=tvm.target.Target("cuda"), tir_pipeline="tirx")
     except tvm.error.InternalError as exc:  # lowering
         raise ExecutionError("compile", short(exc)) from exc
     except RuntimeError as exc:  # codegen (nvcc/nvrtc)
         raise ExecutionError("compile", short(exc)) from exc
+    _COMPILED[key] = executable
+    if len(_COMPILED) > _COMPILED_LIMIT:
+        _COMPILED.popitem(last=False)
+    return executable
