@@ -1,5 +1,6 @@
 """GPU integration tests for the runtime and the TIRx and CUDA C builtins."""
 
+import importlib.util
 import os
 import pathlib
 
@@ -105,6 +106,59 @@ def build_tirx_library(tmp_path):
     path = tmp_path / "tirx_add_one.so"
     executable.export_library(str(path))
     return path.read_bytes()
+
+
+CUTEDSL_KERNEL = """import cutlass.cute as cute
+
+@cute.kernel
+def add_one_kernel(src: cute.Tensor, dst: cute.Tensor):
+    tidx, _, _ = cute.arch.thread_idx()
+    bidx, _, _ = cute.arch.block_idx()
+    i = bidx * 256 + tidx
+    if i < cute.size(src):
+        dst[i] = src[i] + 1.0
+
+@cute.jit
+def add_one(src: cute.Tensor, dst: cute.Tensor):
+    n = cute.size(src)
+    add_one_kernel(src, dst).launch(grid=((n + 255) // 256, 1, 1), block=(256, 1, 1))
+"""
+
+
+CUTEDSL_BUILD = """import pathlib, subprocess, sys
+import torch, tvm_ffi.libinfo
+from cutlass.cute import compile as cute_compile
+from cutlass.cute.export.aot_config import get_libdir
+from cutlass.cute.runtime import from_dlpack
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from cute_add_one import add_one
+
+operand = from_dlpack(torch.zeros(256, dtype=torch.float32, device="cuda"))
+compiled = cute_compile(add_one, operand, operand, options="--enable-tvm-ffi")
+compiled.export_to_c("cute_add_one.o", "add_one", export_only_tvm_ffi_symbols=True)
+subprocess.run(
+    # --no-undefined: the static runtime archive links clean but fails at load.
+    ["g++", "-shared", "-o", "cute_add_one.so", "cute_add_one.o"]
+    + [f"-L{get_libdir()}", "-lcute_dsl_runtime"]
+    + [f"-L{pathlib.Path(tvm_ffi.libinfo.find_libtvm_ffi()).parent}", "-ltvm_ffi"]
+    + ["-Wl,--no-undefined"],
+    check=True,
+)
+"""
+
+
+def build_cutedsl_library(tmp_path):
+    """Compile CuTeDSL the way a client would. In a subprocess, because importing
+    cutlass here would load the runtime and mask the worker's own preload. The
+    kernel needs a real file: the DSL re-reads its source with ``inspect``."""
+    import subprocess
+    import sys
+
+    (tmp_path / "cute_add_one.py").write_text(CUTEDSL_KERNEL)
+    (tmp_path / "build.py").write_text(CUTEDSL_BUILD)
+    subprocess.run([sys.executable, "build.py"], cwd=tmp_path, check=True)
+    return (tmp_path / "cute_add_one.so").read_bytes()
 
 
 def ref(handle):
@@ -260,6 +314,31 @@ def test_prebuilt_tirx_library_runs(tmp_path):
     """An export_library artifact carries its device code as an embedded blob, so
     this is the path that needs the TVM CUDA runtime loader registered."""
     data = build_tirx_library(tmp_path)
+    digest = compute_blob_hash(data)
+    program = Program(
+        [
+            Upload("kernel", "library", blob=digest, entry="add_one"),
+            Upload("reference", "module", source=REF),
+            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            Run("invoke", ref("kernel"), [ref("input"), ref("output")]),
+            Run("expected", ref("reference"), [ref("input")]),
+            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
+            Return("check", ref("check")),
+        ],
+        blob_bytes={digest: data},
+    )
+    outcome = execute(program, runtime())
+    assert outcome.status == "COMPLETED", outcome.error
+    assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
+
+
+def test_prebuilt_cutedsl_library_runs(tmp_path):
+    """CuTeDSL exports the same __tvm_ffi_<entry> symbol as CUDA C, but its object
+    is not self-contained: it loads only because the worker preloads the runtime."""
+    if importlib.util.find_spec("cutlass") is None:  # not importorskip: see the helper
+        pytest.skip("CuTeDSL export requires cutlass")
+    data = build_cutedsl_library(tmp_path)
     digest = compute_blob_hash(data)
     program = Program(
         [

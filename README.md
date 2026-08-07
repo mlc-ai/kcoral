@@ -24,6 +24,7 @@ depends on which builtins the programs use:
 | any program | PyTorch and TVM FFI |
 | `compile_tirx` | TVM as well |
 | `compile_cuda` | `nvcc`, a host C++ compiler, and `ninja` as well |
+| a CuTeDSL library upload | `nvidia-cutlass-dsl` as well, for its runtime library |
 
 A builtin whose requirement is absent answers `unavailable` and the rest of the
 server is unaffected, so a partial environment is a usable deployment.
@@ -40,8 +41,8 @@ uv sync
 
 ### Running GPU programs
 
-The `gpu` group adds PyTorch, TVM, and TVM FFI, which together cover every
-builtin:
+The `gpu` group adds PyTorch, TVM, TVM FFI, and CuTeDSL, which together cover
+every builtin and every kind of library upload:
 
 ```bash
 uv sync --group gpu

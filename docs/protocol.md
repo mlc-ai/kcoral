@@ -20,7 +20,8 @@ for, and the `versions` a client may want to match:
   "queue_length": 0,
   "target": {"arch": "sm_100a"},
   "versions": {"torch": "2.13.0+cu130", "cuda": "13.0",
-               "tvm": "0.26.0rc0", "tvm_ffi": "0.1.13.post2"},
+               "tvm": "0.26.0rc0", "tvm_ffi": "0.1.13.post2",
+               "cutlass": "4.7.0"},
   "workers": [{"gpu_id": 0, "status": "idle", "uptime_seconds": 12.4}]
 }
 ```
@@ -208,14 +209,18 @@ nothing:
 server loads it with `tvm_ffi.load_module` and checks that it exports `entry`;
 one that cannot be loaded, or that has no such function, fails the upload with a
 `compile` error. Nothing else about the object is inspected, so any producer TVM
-FFI can load is accepted. Two are usual:
+FFI can load is accepted. Three are usual:
 
 - `TVM_FFI_DLL_EXPORT_TYPED_FUNC`, which `tvm_ffi.cpp.build` applies for you,
   emitting a `__tvm_ffi_<entry>` symbol. A code generator that emits that symbol
   directly works equally well;
 - `tvm.Executable.export_library`, which embeds a module blob rather than a
   plain symbol. Unpacking one needs the loader the TVM CUDA runtime registers,
-  so it requires a server with tvm installed.
+  so it requires a server with tvm installed;
+- CuTeDSL's `--enable-tvm-ffi` export, which emits the same `__tvm_ffi_<entry>`
+  symbol but leaves the object linked against `libcute_dsl_runtime.so`, so it
+  requires a server whose `versions` reports `cutlass`. An object built against a
+  newer cutlass than the server's fails to load, naming the symbol it wanted.
 
 The function takes DLPack-compatible tensors, and its device code must be built
 for the architecture `GET /health` reports. Building for another one fails later,
@@ -250,7 +255,26 @@ with target:  # the tirx pipeline reads the arch from Target.current()
 executable.export_library("add_one.so")
 ```
 
-Either route leaves a file on disk, and the upload carries its bytes: `blob` is
+CuTeDSL exports a relocatable object rather than a shared one, so it is the one
+route with a link step. `cute.compile` specializes on the tensors it is handed,
+so they must have the shape and dtype the kernel will be called with:
+
+```python
+compiled = cute.compile(add_one, src, dst, options="--enable-tvm-ffi")
+compiled.export_to_c("add_one.o", "add_one", export_only_tvm_ffi_symbols=True)
+```
+
+`aot_config` reports the link flags. `--no-undefined` is worth passing because
+the alternative — linking the static runtime archive instead — succeeds while
+leaving symbols that only fail later, at load:
+
+```bash
+g++ -shared -o add_one.so add_one.o -Wl,--no-undefined \
+    $(tvm-ffi-config --ldflags) \
+    $(python -m cutlass.cute.export.aot_config --ldflags --libs --with-tvm-ffi)
+```
+
+Every route leaves a file on disk, and the upload carries its bytes: `blob` is
 their SHA-256 and the bytes themselves travel as the matching `blob:<sha256>`
 part, exactly as a tensor's do.
 

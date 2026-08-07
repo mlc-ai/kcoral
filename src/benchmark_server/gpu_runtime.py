@@ -9,7 +9,9 @@ module touches no GPU.
 from __future__ import annotations
 
 import ast
+import ctypes
 import hashlib
+import importlib.metadata
 import linecache
 import tempfile
 from collections.abc import Callable
@@ -197,6 +199,10 @@ def describe_versions() -> dict[str, str]:
             versions[name] = __import__(name).__version__
         except Exception:  # optional, or no version attribute
             pass
+    try:
+        versions["cutlass"] = importlib.metadata.version("nvidia-cutlass-dsl")
+    except Exception:
+        pass
     return versions
 
 
@@ -225,7 +231,8 @@ def _materialize_library(data: bytes, entry: str) -> Any:
 
 def _register_library_loaders() -> None:
     """Unpacking an ``export_library`` blob needs the loader the TVM CUDA runtime
-    registers, and nothing else in a library-only program imports tvm."""
+    registers. Both this and the CuTe DSL preload cost an import, so they happen on
+    the first library upload rather than at startup."""
     global _LOADERS_READY
     if _LOADERS_READY:
         return
@@ -233,7 +240,22 @@ def _register_library_loaders() -> None:
         import tvm  # noqa: F401
     except Exception:
         pass  # tvm is optional; only embedded-blob libraries depend on it
+    _preload_cute_dsl_runtime()
     _LOADERS_READY = True
+
+
+def _preload_cute_dsl_runtime() -> None:
+    """A CuTeDSL export needs ``libcute_dsl_runtime.so``, which no loader search
+    path covers. Loading it by absolute path is enough: dlopen then resolves the
+    dependency against the loaded SONAME."""
+    try:
+        from cutlass.runtime import find_runtime_libraries
+
+        for path in find_runtime_libraries(enable_tvm_ffi=False):
+            if Path(path).exists():
+                ctypes.CDLL(path)
+    except Exception:
+        pass  # cutlass is optional; only CuTeDSL exports depend on it
 
 
 def _library_dir() -> Path:
