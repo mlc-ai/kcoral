@@ -14,6 +14,7 @@ dependencies = [
   "httpx>=0.27",
   "numpy>=1.24",
   "ml_dtypes>=0.5", # the bfloat16 and float8 scalar types numpy lacks
+  "pydantic>=2.0",
 ]
 
 [project.scripts]
@@ -44,7 +45,7 @@ torch = { index = "pytorch-cu130" }
 
 [tool.setuptools.packages.find]
 where = ["python"]
-include = ["benchmark_server*"]
+include = ["benchmark_server*", "flashinfer_bench*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["python"]
