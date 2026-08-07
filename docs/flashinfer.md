@@ -12,13 +12,12 @@ processing unit (GPU) workers, executes instructions, and returns structured
 results. The client owns the remaining responsibilities:
 
 1. `TraceSet` loads definitions, solutions, workloads, and existing evaluations.
-2. `FlashInferBenchmark` prepares each workload once and shares those inputs
-   across its solutions.
-3. `FlashInferProgramBuilder` creates one `/execute` program for each solution
-   and workload pair. The program contains the reference, candidate solution,
-   output checks, and repeated timing.
-4. The client submits programs concurrently. The benchmark-server worker pool
-   handles GPU assignment and queueing.
+2. The caller selects one explicit `Definition` and one explicit `Solution`.
+3. `FlashInferBenchmark.run` prepares the supplied workloads and creates one
+   `/execute` program for each workload. Every program contains the same selected
+   definition and solution, plus the reference, output checks, and repeated timing.
+4. The client submits the workload programs concurrently. The benchmark-server
+   worker pool handles GPU assignment and queueing.
 5. `FlashInferResultMapper` converts correctness and timing results into bundled
    `Evaluation` and `Trace` objects.
 
@@ -30,7 +29,8 @@ Install the ordinary package in the client and server environments:
 pip install benchmark-server
 ```
 
-Start benchmark-server, load a Trace directory, and run the remote benchmark:
+Start benchmark-server, load a Trace directory, select one definition-solution
+pair, and run its workloads remotely:
 
 ```python
 from flashinfer_bench import (
@@ -43,16 +43,26 @@ trace_set = TraceSet.from_path("Example-FlashInfer-Trace")
 config = BenchmarkConfig(iterations=50, num_trials=3)
 
 with FlashInferBenchmark(
-    trace_set,
     "http://127.0.0.1:8000",
     config,
 ) as benchmark:
-    result = benchmark.run_all(dump_traces=True, resume=True)
+    definition = trace_set.definitions["add_one"]
+    solution = trace_set.get_solution("python_add_one")
+    workloads = [item.workload for item in trace_set.workloads[definition.name]]
+    traces = benchmark.run(
+        definition,
+        solution,
+        workloads,
+        trace_set_root=trace_set.root,
+    )
+
+trace_set.add_traces(traces)
 ```
 
-`run_all` returns a `TraceSet` containing status, correctness, performance,
-environment, and log records. With `dump_traces=True`, `TraceSet.add_traces`
-also appends each result to the established directory layout:
+`run` returns one `Trace` per workload containing status, correctness,
+performance, environment, and log records. Dataset-wide selection, resume
+policy, and persistence stay with the caller. `TraceSet.add_traces` appends
+results to the established directory layout:
 `traces/<author>/<op_type>/<definition>.jsonl`.
 
 ## Trace data model
@@ -66,7 +76,7 @@ The `flashinfer_bench` API covers the remote benchmark workflow:
   `Trace`;
 - execution settings: `BenchmarkConfig`, `EvalConfig`, and
   `ResolvedEvalConfig`;
-- directory loading, JSONL result persistence, resume state, and summary counts
+- directory loading, JSONL result persistence, existing traces, and summary counts
   through `TraceSet`.
 
 Unknown JSON fields are ignored so datasets may contain metadata outside this
@@ -106,10 +116,11 @@ sends the program and keys without binary data:
 - a missing key produces `CACHE_MISS` with the exact missing-key set;
 - the client retries once with only those binary objects.
 
-The client uses stable random seeds and prepares each workload only once.
-Different solution requests for the same workload therefore share content keys.
-Safetensors inputs use the same byte cache. The client reads the documented
-safetensors layout directly and needs no additional package for that format.
+The client uses stable random seeds derived from the workload identity. Separate
+pair calls for different solutions therefore produce the same content keys for
+the same workload and reuse cached tensors. Safetensors inputs use the same byte
+cache. The client reads the documented safetensors layout directly and needs no
+additional package for that format.
 
 ## Supported scope and extension points
 

@@ -398,10 +398,8 @@ class ResolvedEvalConfig(TraceModel):
 
 
 class BenchmarkConfig(TraceModel):
-    """Client-side benchmark selection, timeout, and evaluator settings."""
+    """Client-side timeout and evaluator settings for one benchmark pair."""
 
-    definitions: list[str] | None = None
-    solutions: list[str] | None = None
     timeout_seconds: int = Field(default=300, gt=0)
     profile_baseline: bool = True
     warmup_runs: int | None = Field(default=None, ge=0)

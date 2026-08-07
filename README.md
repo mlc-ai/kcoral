@@ -144,22 +144,23 @@ torch.from_numpy(value.view(np.uint8)).view(torch.bfloat16)
 
 The distribution includes a separate `flashinfer_bench` Python package containing
 the self-contained FlashInfer Trace data model and all benchmark orchestration.
-It loads a `TraceSet`, generates one general server program per solution and
-workload pair, submits programs concurrently, and returns `Trace` evaluation
-objects. The `benchmark_server` package receives no FlashInfer-specific API or
-scheduler.
+Its public benchmark call accepts one explicit definition-solution pair,
+generates one general server program per supplied workload, submits those
+programs concurrently, and returns `Trace` evaluation objects. The
+`benchmark_server` package receives no FlashInfer-specific API or scheduler.
 
 ```bash
 pip install benchmark-server
-python examples/flashinfer_client.py Example-FlashInfer-Trace
+python examples/flashinfer_client.py Example-FlashInfer-Trace add_one python_add_one
 ```
 
 The bundled package has no dependency on the external `flashinfer-bench` project.
 Every tensor uses the existing content-addressed upload flow: a request first
 sends only the SHA-256 content key, then sends only missing blobs after
-`CACHE_MISS`. Inputs are prepared once per workload, so solution requests reuse
-cached data. See the [FlashInfer client guide](docs/flashinfer.md) for the
-supported scope and extension points.
+`CACHE_MISS`. Stable workload inputs retain the same content key across separate
+solution calls, so they reuse cached data. See the
+[FlashInfer client guide](docs/flashinfer.md) for the supported scope and
+extension points.
 
 ## Protocol summary
 

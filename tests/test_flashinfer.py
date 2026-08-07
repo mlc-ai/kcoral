@@ -359,8 +359,6 @@ class _RecordingClient:
 
 
 class _Config:
-    definitions = None
-    solutions = None
     timeout_seconds = 30
 
     @staticmethod
@@ -407,20 +405,47 @@ def _bundled_trace_set(tmp_path, solution_names=("one", "two")):
     return definition, solutions, workload, trace_set
 
 
-def test_high_level_client_reuses_workload_inputs_across_solution_tasks(tmp_path):
-    _definition, _solutions, _workload, trace_set = _bundled_trace_set(tmp_path)
+def test_high_level_client_runs_one_definition_solution_pair(tmp_path):
+    definition, solutions, workload, _trace_set = _bundled_trace_set(tmp_path)
+    workloads = [workload, workload.model_copy(update={"uuid": "workload-2"})]
     inputs = _InputProvider()
     client = _RecordingClient()
     benchmark = flashinfer.FlashInferBenchmark(
-        trace_set,
         client,
         _Config(),
         input_provider=inputs,
     )
 
-    result = benchmark.run_all(dump_traces=False)
+    traces = benchmark.run(
+        definition,
+        solutions[0],
+        workloads,
+        trace_set_root=tmp_path,
+    )
 
-    assert inputs.calls == 1
+    assert not hasattr(benchmark, "run_all")
+    assert inputs.calls == 2
+    assert len(client.programs) == 2
+    assert [trace.workload.uuid for trace in traces] == ["workload-1", "workload-2"]
+    assert [trace.solution for trace in traces] == ["one", "one"]
+
+
+def test_pair_calls_reuse_tensor_keys_and_leave_persistence_to_caller(tmp_path):
+    definition, solutions, workload, trace_set = _bundled_trace_set(tmp_path)
+    client = _RecordingClient()
+    benchmark = flashinfer.FlashInferBenchmark(
+        client,
+        _Config(),
+        input_provider=_InputProvider(),
+        max_workers=1,
+    )
+
+    traces = []
+    for solution in solutions:
+        traces.extend(
+            benchmark.run(definition, solution, [workload], trace_set_root=trace_set.root)
+        )
+
     assert len(client.programs) == 2
     input_blobs = []
     for program in client.programs:
@@ -432,45 +457,25 @@ def test_high_level_client_reuses_workload_inputs_across_solution_tasks(tmp_path
         input_blobs.append(upload["blob"])
         assert upload["blob"] in program._blobs
     assert input_blobs[0] == input_blobs[1]
-    assert [trace.solution for trace in result.traces["add_one"]] == ["one", "two"]
+    assert [trace.solution for trace in traces] == ["one", "two"]
     assert trace_set.traces == {}
 
+    trace_set.add_traces(traces)
 
-def test_high_level_client_preserves_resume_and_dump_trace_semantics(tmp_path):
-    definition, _solutions, workload, trace_set = _bundled_trace_set(tmp_path)
-    existing = flashinfer.Trace(
-        definition="add_one",
-        workload=workload,
-        solution="one",
-        evaluation=flashinfer.Evaluation(
-            status="PASSED",
-            environment=flashinfer.Environment(hardware="test"),
-            timestamp="2026-08-06T00:00:00+00:00",
-            correctness=flashinfer.Correctness(),
-            performance=flashinfer.Performance(
-                latency_ms=1.0,
-                reference_latency_ms=2.0,
-                speedup_factor=2.0,
-            ),
-        ),
-    )
-    trace_set.traces = {definition.name: [existing]}
-    client = _RecordingClient()
-
-    result = flashinfer.FlashInferBenchmark(
-        trace_set,
-        client,
-        _Config(),
-        input_provider=_InputProvider(),
-        max_workers=1,
-    ).run_all(dump_traces=True, resume=True)
-
-    assert len(client.programs) == 1
-    assert [trace.solution for trace in result.traces["add_one"]] == ["two"]
     assert [trace.solution for trace in trace_set.traces["add_one"]] == ["one", "two"]
     persisted = tmp_path / "traces" / "test" / "elementwise" / "add_one.jsonl"
     assert persisted.exists()
+    assert '"solution":"one"' in persisted.read_text(encoding="utf-8")
     assert '"solution":"two"' in persisted.read_text(encoding="utf-8")
+
+
+def test_high_level_client_rejects_a_solution_for_another_definition(tmp_path):
+    definition, solutions, workload, _trace_set = _bundled_trace_set(tmp_path)
+    other = definition.model_copy(update={"name": "other"})
+    benchmark = flashinfer.FlashInferBenchmark(_RecordingClient(), _Config())
+
+    with pytest.raises(ValueError, match="targets definition"):
+        benchmark.run(other, solutions[0], [workload], trace_set_root=tmp_path)
 
 
 def test_bundled_trace_objects_round_trip_without_external_package(tmp_path):
@@ -513,15 +518,14 @@ def test_bundled_trace_objects_round_trip_without_external_package(tmp_path):
         profile_baseline=True,
     )
 
-    result = flashinfer.FlashInferBenchmark(
-        trace_set,
+    traces = flashinfer.FlashInferBenchmark(
         _RecordingClient(),
         config,
         input_provider=_InputProvider(),
         max_workers=1,
-    ).run_all(dump_traces=False)
+    ).run(definition, solution, [workload], trace_set_root=trace_set.root)
 
-    trace = result.traces[definition.name][0]
+    trace = traces[0]
     assert isinstance(trace, flashinfer.Trace)
     assert trace.solution == solution.name
     assert trace.evaluation.status == flashinfer.EvaluationStatus.PASSED
@@ -609,15 +613,6 @@ void add_one(tvm::ffi::TensorView x, tvm::ffi::TensorView y) {
     workload = flashinfer.Workload(
         axes={}, inputs={"a": flashinfer.RandomInput()}, uuid="gpu-cache-workload"
     )
-    trace_set = flashinfer.TraceSet(
-        root=tmp_path,
-        definitions={definition.name: definition},
-        solutions={definition.name: solutions},
-        workloads={
-            definition.name: [flashinfer.Trace(definition=definition.name, workload=workload)]
-        },
-        traces={},
-    )
     config = flashinfer.BenchmarkConfig(
         warmup_runs=1,
         iterations=3,
@@ -648,17 +643,26 @@ void add_one(tvm::ffi::TensorView x, tvm::ffi::TensorView y) {
                 return original_post(program, options, include_blobs)
 
             client._post_program = record_post
-            result = flashinfer.FlashInferBenchmark(
-                trace_set,
+            benchmark = flashinfer.FlashInferBenchmark(
                 client,
                 config,
                 max_workers=1,
-            ).run_all(dump_traces=False)
+            )
+            traces = []
+            for solution in solutions:
+                traces.extend(
+                    benchmark.run(
+                        definition,
+                        solution,
+                        [workload],
+                        trace_set_root=tmp_path,
+                    )
+                )
     finally:
         server.should_exit = True
         thread.join(timeout=10)
 
-    assert [trace.evaluation.status for trace in result.traces[definition.name]] == [
+    assert [trace.evaluation.status for trace in traces] == [
         flashinfer.EvaluationStatus.PASSED,
         flashinfer.EvaluationStatus.PASSED,
         flashinfer.EvaluationStatus.PASSED,

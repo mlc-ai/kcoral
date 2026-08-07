@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import math
 import struct
 from concurrent.futures import ThreadPoolExecutor
@@ -66,8 +65,6 @@ from .models import (
     TraceSetSummary,
     Workload,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class UnsupportedFlashInferFeature(ValueError):
@@ -580,17 +577,17 @@ class FlashInferResultMapper:
 
 
 class FlashInferBenchmark:
-    """Run a FlashInfer ``TraceSet`` through a remote benchmark-server.
+    """Benchmark one explicit definition-solution pair remotely.
 
-    Construct it with the bundled trace set and config, call :meth:`run_all`,
-    optionally write traces back to the data set, and call :meth:`close`.  One
-    HTTP request is created per solution-workload pair.  Requests are submitted
-    concurrently while the server owns GPU assignment and queueing.
+    Each call to :meth:`run` accepts one definition, one solution, and its
+    workloads.  It creates one HTTP request per workload and submits those
+    requests concurrently while benchmark-server owns GPU assignment and
+    queueing.  Dataset-wide selection, persistence, and resume policy remain
+    outside this client.
     """
 
     def __init__(
         self,
-        trace_set: TraceSet,
         server: str | ProgramExecutor,
         config: BenchmarkConfig | None = None,
         *,
@@ -601,7 +598,6 @@ class FlashInferBenchmark:
     ) -> None:
         if max_workers is not None and max_workers <= 0:
             raise ValueError("max_workers must be positive")
-        self._trace_set = trace_set
         self._config = config if config is not None else BenchmarkConfig.default()
         self._client: ProgramExecutor = Client(server) if isinstance(server, str) else server
         self._owns_client = isinstance(server, str)
@@ -617,60 +613,82 @@ class FlashInferBenchmark:
     def __exit__(self, *_args: Any) -> None:
         self.close()
 
-    def get_trace_set(self) -> TraceSet:
-        return self._trace_set
+    def run(
+        self,
+        definition: Definition,
+        solution: Solution,
+        workloads: list[Workload],
+        *,
+        trace_set_root: str | Path | None = None,
+    ) -> list[Trace]:
+        """Benchmark one solution for every supplied workload.
 
-    def run_all(self, dump_traces: bool = True, resume: bool = False) -> TraceSet:
-        existing = self._existing_pairs() if resume else set()
-        jobs: list[BenchmarkJob] = []
-        immediate_traces: list[Trace] = []
+        Parameters
+        ----------
+        definition:
+            The kernel contract and reference implementation.
+        solution:
+            The single candidate implementation to evaluate.
+        workloads:
+            Concrete workload descriptors.  Each workload becomes one server
+            request containing all correctness trials and repeated timings.
+        trace_set_root:
+            Optional base directory used to resolve relative safetensors input
+            paths.
 
-        for definition_name, definition in self._selected_definitions():
-            solutions = self._selected_solutions(definition_name)
-            if not solutions:
-                logger.warning(
-                    "No solutions found for def=%s, skipping definition", definition_name
+        Returns
+        -------
+        list[Trace]
+            One evaluation trace per supplied workload.  The caller decides
+            whether and where to persist these traces.
+        """
+
+        if solution.definition != definition.name:
+            raise ValueError(
+                f"solution {solution.name!r} targets definition {solution.definition!r}, "
+                f"not {definition.name!r}"
+            )
+
+        root = Path(trace_set_root) if trace_set_root is not None else None
+        jobs: list[tuple[int, BenchmarkJob]] = []
+        traces: list[Trace | None] = [None] * len(workloads)
+
+        try:
+            if self._uses_default_program_builder and _requires_specialized_evaluator(definition):
+                raise UnsupportedFlashInferFeature(
+                    f"definition {definition.name!r} needs a specialized evaluator; "
+                    "provide a custom FlashInferProgramBuilder"
                 )
+            eval_config = _resolve_eval_config(self._config, definition)
+            if (
+                self._uses_default_program_builder
+                and eval_config.required_matched_ratio is not None
+            ):
+                raise UnsupportedFlashInferFeature(
+                    "required_matched_ratio needs a custom program builder"
+                )
+        except Exception as exc:
+            data = _exception_data(exc, stage="benchmark configuration")
+            return [
+                self._make_trace(definition.name, workload, solution, data)
+                for workload in workloads
+            ]
+
+        for workload_index, workload in enumerate(workloads):
+            try:
+                trials = self._inputs.prepare(
+                    definition,
+                    workload,
+                    num_trials=eval_config.num_trials,
+                    trace_set_root=root,
+                )
+            except Exception as exc:
+                data = _exception_data(exc, stage="input preparation")
+                traces[workload_index] = self._make_trace(definition.name, workload, solution, data)
                 continue
-            for workload_trace in self._trace_set.workloads.get(definition_name, []):
-                workload = workload_trace.workload
-                pending = [
-                    solution
-                    for solution in solutions
-                    if (definition_name, workload.uuid, solution.name) not in existing
-                ]
-                if not pending:
-                    continue
-                try:
-                    if self._uses_default_program_builder and _requires_specialized_evaluator(
-                        definition
-                    ):
-                        raise UnsupportedFlashInferFeature(
-                            f"definition {definition.name!r} needs a specialized evaluator; "
-                            "provide a custom FlashInferProgramBuilder"
-                        )
-                    eval_config = _resolve_eval_config(self._config, definition)
-                    if (
-                        self._uses_default_program_builder
-                        and eval_config.required_matched_ratio is not None
-                    ):
-                        raise UnsupportedFlashInferFeature(
-                            "required_matched_ratio needs a custom program builder"
-                        )
-                    trials = self._inputs.prepare(
-                        definition,
-                        workload,
-                        num_trials=eval_config.num_trials,
-                        trace_set_root=self._trace_set.root,
-                    )
-                except Exception as exc:
-                    data = _exception_data(exc, stage="input preparation")
-                    immediate_traces.extend(
-                        self._make_trace(definition_name, workload, solution, data)
-                        for solution in pending
-                    )
-                    continue
-                jobs.extend(
+            jobs.append(
+                (
+                    workload_index,
                     BenchmarkJob(
                         definition=definition,
                         solution=solution,
@@ -678,28 +696,17 @@ class FlashInferBenchmark:
                         trials=trials,
                         eval_config=eval_config,
                         timeout_seconds=float(self._config.timeout_seconds),
-                    )
-                    for solution in pending
+                    ),
                 )
+            )
 
-        traces = list(immediate_traces)
         if jobs:
             worker_count = self._max_workers or self._server_worker_count()
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                traces.extend(executor.map(self._execute_job, jobs))
-
-        if dump_traces and traces:
-            self._trace_set.add_traces(traces)
-        traces_by_definition: dict[str, list[Trace]] = {}
-        for trace in traces:
-            traces_by_definition.setdefault(trace.definition, []).append(trace)
-        return TraceSet(
-            root=self._trace_set.root,
-            definitions=self._trace_set.definitions.copy(),
-            solutions=self._trace_set.solutions.copy(),
-            workloads=self._trace_set.workloads.copy(),
-            traces=traces_by_definition,
-        )
+                completed = executor.map(self._execute_job, (job for _, job in jobs))
+                for (workload_index, _), trace in zip(jobs, completed):
+                    traces[workload_index] = trace
+        return [trace for trace in traces if trace is not None]
 
     def close(self) -> None:
         if self._owns_client:
@@ -754,24 +761,6 @@ class FlashInferBenchmark:
         if isinstance(gpu_count, bool) or not isinstance(gpu_count, int) or gpu_count <= 0:
             raise ValueError("benchmark-server health response has no positive gpu_count")
         return gpu_count
-
-    def _selected_definitions(self) -> list[tuple[str, Any]]:
-        items = list(self._trace_set.definitions.items())
-        selected = self._config.definitions
-        return items if selected is None else [item for item in items if item[0] in selected]
-
-    def _selected_solutions(self, definition_name: str) -> list[Any]:
-        solutions = list(self._trace_set.solutions.get(definition_name, []))
-        selected = self._config.solutions
-        return solutions if selected is None else [s for s in solutions if s.name in selected]
-
-    def _existing_pairs(self) -> set[tuple[str, str, str]]:
-        return {
-            (definition_name, trace.workload.uuid, trace.solution)
-            for definition_name, traces in self._trace_set.traces.items()
-            for trace in traces
-            if trace.solution is not None and trace.evaluation is not None
-        }
 
 
 def _exception_data(exc: Exception, *, stage: str) -> EvaluationData:
