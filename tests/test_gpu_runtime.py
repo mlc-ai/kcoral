@@ -9,6 +9,7 @@ import pytest
 from benchmark_server.engine import execute
 from benchmark_server.keys import compute_blob_hash
 from benchmark_server.schemas import Program, Ref, Return, Run, Upload
+from benchmark_server.testing import UNSHARED_GPU
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("BENCH_GPU_TEST") != "1",
@@ -202,7 +203,7 @@ def test_compile_correctness_and_benchmark():
             Return("timing", ref("timing")),
         ]
     )
-    outcome = execute(program, runtime())
+    outcome = execute(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED"
     check = decode_structural(outcome.results["check"])
     timing = decode_structural(outcome.results["timing"])
@@ -230,7 +231,7 @@ def test_cuda_c_compile_correctness_and_benchmark():
             Return("timing", ref("timing")),
         ]
     )
-    outcome = execute(program, runtime())
+    outcome = execute(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     check = decode_structural(outcome.results["check"])
     timing = decode_structural(outcome.results["timing"])
@@ -248,6 +249,7 @@ def test_cuda_c_nvcc_error_is_compile_failure_and_names_the_mistake():
             ]
         ),
         runtime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "FAILED" and outcome.error["kind"] == "compile"
     assert "undeclared_symbol" in outcome.error["message"]
@@ -274,6 +276,7 @@ def test_cuda_c_runs_on_the_arch_specific_target():
             ]
         ),
         runtime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "COMPLETED", outcome.error
     np.testing.assert_array_equal(
@@ -304,7 +307,7 @@ def test_prebuilt_library_runs_and_benchmarks(tmp_path):
         ],
         blob_bytes={digest: data},
     )
-    outcome = execute(program, runtime())
+    outcome = execute(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
     assert decode_structural(outcome.results["timing"])["latency_ms_median"] > 0
@@ -328,7 +331,7 @@ def test_prebuilt_tirx_library_runs(tmp_path):
         ],
         blob_bytes={digest: data},
     )
-    outcome = execute(program, runtime())
+    outcome = execute(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
 
@@ -353,7 +356,7 @@ def test_prebuilt_cutedsl_library_runs(tmp_path):
         ],
         blob_bytes={digest: data},
     )
-    outcome = execute(program, runtime())
+    outcome = execute(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
 
@@ -367,6 +370,7 @@ def test_library_with_a_wrong_entry_fails_to_compile(tmp_path):
             blob_bytes={digest: data},
         ),
         runtime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "FAILED" and outcome.error["kind"] == "compile"
     assert "not_there" in outcome.error["message"]
@@ -391,7 +395,7 @@ def test_library_cache_is_only_a_memoization(tmp_path):
             ],
             blob_bytes={digest: data},
         )
-        return execute(program, runtime())
+        return execute(program, runtime(), UNSHARED_GPU)
 
     gpu_runtime._LOADED_LIBRARIES.clear()
     cold = run_once()
@@ -435,7 +439,7 @@ def test_benchmark_budget_counts_and_no_flush():
             Return("timing", ref("timing")),
         ]
     )
-    outcome = execute(program, runtime())
+    outcome = execute(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED"
     timing = decode_structural(outcome.results["timing"])
     assert timing["latency_ms_median"] > 0 and timing["flush_l2"] is False
@@ -444,7 +448,9 @@ def test_benchmark_budget_counts_and_no_flush():
 
 def test_python_syntax_error_is_parse_failure():
     outcome = execute(
-        Program([Upload("kernel", "module", source="def bad(:\n    pass\n")]), runtime()
+        Program([Upload("kernel", "module", source="def bad(:\n    pass\n")]),
+        runtime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "FAILED" and outcome.error["kind"] == "parse"
     assert outcome.error["instruction_index"] == 0
@@ -460,6 +466,7 @@ def test_tirx_error_is_parse_failure():
             ]
         ),
         runtime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "FAILED" and outcome.error["kind"] == "parse"
     assert outcome.error["instruction_index"] == 1
@@ -474,6 +481,7 @@ def test_compile_on_non_kernel_is_compile_failure():
             ]
         ),
         runtime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "FAILED" and outcome.error["kind"] == "compile"
     assert outcome.error["instruction_index"] == 1
@@ -491,6 +499,7 @@ def test_prim_func_kernel_compiles_directly():
             ]
         ),
         runtime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "COMPLETED"
 
@@ -504,6 +513,7 @@ def test_prim_func_with_bindings_is_compile_failure():
             ]
         ),
         runtime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "FAILED" and outcome.error["kind"] == "compile"
     assert outcome.error["instruction_index"] == 1
@@ -518,6 +528,7 @@ def test_bad_binding_name_is_compile_failure():
             ]
         ),
         runtime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "FAILED" and outcome.error["kind"] == "compile"
     assert outcome.error["instruction_index"] == 1
@@ -538,7 +549,7 @@ def test_assert_close_failure_stops_without_results():
             Return("output", ref("output")),
         ]
     )
-    outcome = execute(program, runtime())
+    outcome = execute(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "FAILED" and outcome.results == {}
     assert outcome.error["kind"] == "correctness" and outcome.error["instruction_index"] == 7
     assert outcome.error["instruction_op"] == "run" and outcome.error["instruction_id"] == "check"
@@ -565,7 +576,7 @@ def test_timing_returned_before_a_correctness_failure_is_kept():
             Return("output", ref("output")),
         ]
     )
-    outcome = execute(program, runtime())
+    outcome = execute(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "FAILED"
     assert set(outcome.results) == {"timing"}
     assert decode_structural(outcome.results["timing"])["latency_ms_median"] > 0
@@ -585,8 +596,29 @@ def test_uploaded_and_returned_tensor_bytes():
         ],
         blob_bytes={digest: raw},
     )
-    outcome = execute(program, runtime())
+    outcome = execute(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED"
     np.testing.assert_array_equal(
         np.frombuffer(outcome.binary_parts["return:0"], dtype=np.float32), array
     )
+
+
+def test_benchmark_budgets_survive_the_l2_flush():
+    """The iteration estimate must not include the first touch of the flush
+    buffer: freshly allocated and 2x L2, it costs ~16x a warm one and would
+    silently shrink both budgets by that factor."""
+    import torch
+
+    from benchmark_server.builtin_ops import resolve
+
+    x = torch.randn(4096, dtype=torch.float32, device="cuda")
+    y = torch.empty_like(x)
+
+    def add_one(src, dst):
+        torch.add(src, 1.0, out=dst)
+
+    result = resolve("builtin.benchmark")(add_one, x, y, {})
+    # A microsecond kernel against a 25/100 ms budget: hundreds and thousands,
+    # not the tens an inflated estimate produced.
+    assert result["latency_ms_median"] < 0.1
+    assert result["warmup"] > 100 and result["repeat"] > 500

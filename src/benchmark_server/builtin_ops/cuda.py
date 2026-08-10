@@ -23,7 +23,7 @@ class CUDASource:
     entry: str
 
 
-@register_builtin("compile_cuda")
+@register_builtin("compile_cuda", cpu_only=True)
 def compile_cuda(src: Any, cfg: Any = None) -> Any:
     """Build a CUDA C upload into its exported function, caching the build on
     disk. cfg: ``extra_cuda_cflags``."""

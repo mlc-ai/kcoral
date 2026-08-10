@@ -42,6 +42,7 @@ class GPURuntime:
     def __init__(self) -> None:
         _require_torch_and_ffi()
         self._seeded_fnames: list[str] = []  # linecache keys to clear on reset
+        _warm_up()
 
     def load_module(self, source: str, entry: str | None = None, language: str = "python") -> Any:
         if language == "cuda":
@@ -80,6 +81,19 @@ class GPURuntime:
         if fn is None:
             raise ExecutionError("runtime", f"unknown function: {name!r}")
         return fn
+
+    def is_cpu_only(self, name: str) -> bool:
+        return builtin_ops.is_cpu_only(name)
+
+    def synchronize(self) -> None:
+        """Drain the GPU, so no kernel of this request is still running when the
+        lease is given up and another worker starts measuring."""
+        import torch
+
+        try:
+            torch.cuda.synchronize()
+        except Exception:
+            pass  # a poisoned CUDA context is handled at the worker level
 
     def reset(self) -> None:
         import torch
@@ -152,6 +166,27 @@ def _top_level_definitions(source: str) -> list[str]:
             if node.name not in names:
                 names.append(node.name)
     return names
+
+
+def _warm_up() -> None:
+    """Pay the once-per-worker costs here rather than inside the first request,
+    which would hold the GPU throughout: creating the CUDA context alone takes
+    about two seconds. Best-effort, since the optional deps may be absent."""
+    try:
+        import torch
+
+        torch.cuda.synchronize()  # creates this process's CUDA context
+    except Exception:
+        pass
+    _register_library_loaders()  # imports tvm and preloads the CuTe DSL runtime
+    try:
+        # tvm reuses the context torch just made, but still opens its own CUDA
+        # device API on first use.
+        import tvm
+
+        tvm.runtime.empty((1,), "float32", tvm.cuda(0))
+    except Exception:
+        pass  # tvm is optional
 
 
 def _require_torch_and_ffi() -> None:

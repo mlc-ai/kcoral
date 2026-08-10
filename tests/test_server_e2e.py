@@ -552,3 +552,38 @@ def test_cuda_c_kernel_end_to_end():
     assert result["status"] == "COMPLETED", result.get("error")
     returned = np.frombuffer(binary["return:0"], dtype=np.float32)
     np.testing.assert_allclose(returned, np.arange(256, dtype=np.float32) * 3.0)
+
+
+@pytest.mark.skipif(
+    os.environ.get("BENCH_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
+)
+def test_compiling_does_not_hold_the_gpu():
+    """The point of the lease, against the real toolchain: `compile_tirx` is the
+    bulk of this request, and the GPU is free throughout it."""
+
+    def compiling(source):
+        return {
+            "instructions": [
+                {"op": "upload", "id": "kernel", "kind": "module", "source": source},
+                {
+                    "op": "run",
+                    "id": "compiled",
+                    "fn": "builtin.compile_tirx",
+                    "args": [{"$ref": "kernel"}, {"N": 256}],
+                },
+                {"op": "return", "key": "ok", "value": {"$ref": "compiled"}},
+            ],
+            "options": {"timeout_seconds": 120},
+        }
+
+    gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
+    gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0
+    app = create_app(ServerConfig(gpus=[gpu_id]), runtime_factory=gpu_runtime_factory)
+    with TestClient(app) as client:
+        response = post_program(client, compiling(KERNEL), {})
+    result, _ = response_parts(response)
+    # Returning the executable is not serializable, so the program fails at the
+    # return - after the compile, which is all this measures.
+    assert result["elapsed_ms"] > 100
+    assert result["lease_held_ms"] < 50

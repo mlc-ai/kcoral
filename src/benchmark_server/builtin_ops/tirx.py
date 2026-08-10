@@ -16,7 +16,7 @@ _COMPILED: OrderedDict[int, Any] = OrderedDict()
 _COMPILED_LIMIT = 32
 
 
-@register_builtin("compile_tirx")
+@register_builtin("compile_tirx", cpu_only=True)
 def compile_tirx(fn: Any, bindings: Any = None) -> Any:
     """Compile a ``@T.jit`` or ``@T.prim_func`` kernel handle. ``bindings`` supplies
     the ``T.constexpr`` values a ``@T.jit`` kernel is specialized on."""

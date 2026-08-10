@@ -3,7 +3,7 @@ import pytest
 from benchmark_server.engine import execute
 from benchmark_server.keys import compute_blob_hash
 from benchmark_server.schemas import Program, Ref, Return, Run, Upload
-from benchmark_server.testing import FakeRuntime
+from benchmark_server.testing import UNSHARED_GPU, FakeRuntime
 
 
 def ref(handle):
@@ -21,6 +21,7 @@ def call_module(source, entry=None):
             ]
         ),
         FakeRuntime(),
+        UNSHARED_GPU,
     )
 
 
@@ -34,6 +35,7 @@ def test_module_run_and_explicit_return():
             ]
         ),
         FakeRuntime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "COMPLETED"
     assert outcome.results == {"value": {"type": "integer", "value": 42}}
@@ -79,7 +81,7 @@ def test_unresolvable_module_entry_fails_the_upload(source, entry, message):
 
 
 def test_unreturned_values_are_not_serialized():
-    outcome = execute(Program([Run("opaque", "builtin.opaque", [])]), FakeRuntime())
+    outcome = execute(Program([Run("opaque", "builtin.opaque", [])]), FakeRuntime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED" and outcome.results == {}
 
 
@@ -94,6 +96,7 @@ def test_recursive_values_and_depth_first_binary_parts():
             ]
         ),
         FakeRuntime(),
+        UNSHARED_GPU,
     )
     encoded = outcome.results["nested"]
     assert encoded["type"] == "array"
@@ -112,7 +115,7 @@ def test_tensor_return_has_metadata_hash_and_binary_part():
         ],
         blob_bytes={digest: raw},
     )
-    outcome = execute(program, FakeRuntime())
+    outcome = execute(program, FakeRuntime(), UNSHARED_GPU)
     assert outcome.results["tensor"] == {
         "type": "tensor",
         "dtype": "float32",
@@ -133,6 +136,7 @@ def test_instruction_failure_stops_and_describes_the_instruction():
             ]
         ),
         FakeRuntime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "FAILED" and outcome.results == {}
     error = outcome.error
@@ -152,6 +156,7 @@ def test_returns_that_ran_survive_a_later_failure():
             ]
         ),
         FakeRuntime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "FAILED"
     assert set(outcome.results) == {"early"}
@@ -172,6 +177,7 @@ def test_failed_return_rolls_back_only_its_own_binary_parts():
             ]
         ),
         FakeRuntime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "FAILED"
     assert set(outcome.results) == {"kept"}
@@ -186,6 +192,7 @@ def test_unsupported_return_is_serialization_failure():
     outcome = execute(
         Program([Run("opaque", "builtin.opaque", []), Return("value", ref("opaque"))]),
         FakeRuntime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "FAILED" and outcome.error["kind"] == "serialization"
     assert outcome.error["instruction_index"] == 1
@@ -199,6 +206,7 @@ def test_invalid_exported_tensor_is_serialization_failure():
     outcome = execute(
         Program([Run("opaque", "builtin.opaque", []), Return("value", ref("opaque"))]),
         InvalidTensorRuntime(),
+        UNSHARED_GPU,
     )
     assert outcome.status == "FAILED" and outcome.error["kind"] == "serialization"
 
@@ -221,6 +229,7 @@ def test_stdout_and_stderr_are_captured_for_the_request():
             ]
         ),
         FakeRuntime(),
+        UNSHARED_GPU,
     )
     assert outcome.stdout == "module loaded\nfd output\n"
     assert outcome.stderr == "error output\n"
@@ -234,5 +243,5 @@ def test_output_limit_is_shared_across_the_request():
         ],
         options={"output_limit_bytes": 7},
     )
-    outcome = execute(program, FakeRuntime())
+    outcome = execute(program, FakeRuntime(), UNSHARED_GPU)
     assert outcome.stdout == "12345\n6" and outcome.stdout_truncated

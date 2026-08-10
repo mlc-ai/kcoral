@@ -12,6 +12,22 @@ from .errors import ExecutionError
 from .gpu_runtime import resolve_entry  # shared so the double cannot drift; touches no GPU
 
 
+class _UnsharedGPU:
+    """A lease over a GPU nothing else can reach, for calling ``execute`` with no
+    worker around it. Acquiring and releasing are nothing."""
+
+    held = False
+
+    def acquire(self) -> None:
+        pass
+
+    def release(self) -> None:
+        pass
+
+
+UNSHARED_GPU = _UnsharedGPU()
+
+
 class _Opaque:
     pass
 
@@ -50,6 +66,7 @@ _BUILTINS: dict[str, Callable] = {
     "builtin.binary": _binary,
     "builtin.crash": _crash,
     "builtin.sleep": _sleep,
+    "builtin.cpu_sleep": _sleep,  # same work, declared not to need the GPU
 }
 
 
@@ -87,6 +104,12 @@ class FakeRuntime:
         if fn is None:
             raise ExecutionError("runtime", f"unknown function: {name!r}")
         return fn
+
+    def is_cpu_only(self, name: str) -> bool:
+        return name == "builtin.cpu_sleep"
+
+    def synchronize(self) -> None:
+        pass
 
     def reset(self) -> None:
         pass

@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable
 
 from .engine import execute
+from .lease import GPULeases, LeaseClient
 
 
 def worker_main(gpu_id: int, conn, runtime_factory: Callable) -> None:
@@ -37,6 +38,7 @@ def worker_main(gpu_id: int, conn, runtime_factory: Callable) -> None:
         return
     # Only this process sees the GPU, so only it can describe the target.
     conn.send({"__ready__": described})
+    lease = LeaseClient(conn)
     while True:
         try:
             program = conn.recv()
@@ -44,7 +46,7 @@ def worker_main(gpu_id: int, conn, runtime_factory: Callable) -> None:
             return
         if program is None:  # shutdown signal
             return
-        conn.send(execute(program, runtime))
+        conn.send(execute(program, runtime, lease=lease))
 
 
 class WorkerCrashed(Exception):
@@ -97,17 +99,53 @@ class Worker:
         self.target: dict[str, str] = described["target"]
         self.versions: dict[str, str] = described["versions"]
 
-    def run(self, program, timeout: float):
-        """Run a program; kill+respawn on timeout or crash, then re-raise."""
+    def run(self, program, timeout: float, leases: GPULeases) -> tuple:
+        """Run a program, servicing its lease requests; kill+respawn on timeout or
+        crash, then re-raise. Returns ``(outcome, lease_wait_ms, lease_held_ms)``.
+
+        The deadline covers only the worker's own work - time blocked on a lease
+        another worker holds is not counted, or ``timeout_seconds`` would mean
+        different things at different loads.
+        """
         self._conn.send(program)
-        if not self._conn.poll(timeout):  # no answer by the deadline -> hung
-            self._kill_and_respawn()
-            raise WorkerTimeout(f"program exceeded {timeout}s on GPU {self.gpu_id}")
-        try:
-            return self._conn.recv()
-        except EOFError:  # child died mid-run
-            self._kill_and_respawn()
-            raise WorkerCrashed(f"worker on GPU {self.gpu_id} crashed")
+        remaining = timeout
+        lease_wait_ms = 0.0
+        lease_held_ms = 0.0
+        held_since: float | None = None
+        while True:
+            waited_from = time.monotonic()
+            if not self._conn.poll(remaining):  # no answer by the deadline -> hung
+                self._abandon_and_respawn(leases)
+                raise WorkerTimeout(f"program exceeded {timeout}s on GPU {self.gpu_id}")
+            remaining -= time.monotonic() - waited_from
+            try:
+                message = self._conn.recv()
+            except EOFError:  # child died mid-run
+                self._abandon_and_respawn(leases)
+                raise WorkerCrashed(f"worker on GPU {self.gpu_id} crashed")
+            if not (isinstance(message, dict) and "__lease__" in message):
+                # Anything that is not a lease message is the program's outcome.
+                if held_since is not None:
+                    lease_held_ms += (time.monotonic() - held_since) * 1000
+                leases.release(self.gpu_id, self)  # no-op if the engine already did
+                return message, lease_wait_ms, lease_held_ms
+            if message["__lease__"] == "acquire":
+                # The child is blocked until we answer, so this may wait freely.
+                lease_wait_ms += leases.acquire(self.gpu_id, self)
+                held_since = time.monotonic()
+                self._conn.send({"__lease__": "granted"})
+            else:
+                # A release; the child did not wait for an answer and has moved on.
+                if held_since is not None:
+                    lease_held_ms += (time.monotonic() - held_since) * 1000
+                    held_since = None
+                leases.release(self.gpu_id, self)
+
+    def _abandon_and_respawn(self, leases: GPULeases) -> None:
+        """Free the GPU before respawning: the dead worker cannot do it itself,
+        and a lease left held would strand every other worker on that GPU."""
+        leases.abandon(self.gpu_id, self)
+        self._kill_and_respawn()
 
     def _kill(self) -> None:
         try:

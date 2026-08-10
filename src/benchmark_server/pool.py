@@ -1,24 +1,89 @@
-"""Worker pool: one worker per GPU, idle-worker assignment, backpressure.
+"""Worker pool: several workers per GPU, least-loaded assignment, backpressure.
 
 `submit` blocks (call it from a thread), acquires an idle worker, runs the
 program, and returns a :class:`SubmitOutcome` - the execution outcome, the GPU
-that ran the program, and the queue/execution timings. The worker returns to the
-idle set respawned already if it crashed or timed out; the raised
+that ran the program, and the queue/execution/lease timings. The worker returns
+to the idle set respawned already if it crashed or timed out; the raised
 :class:`WorkerTimeout` / :class:`WorkerCrashed` carries the same attribution
 (``gpu_id``, ``queue_ms``, ``elapsed_ms``). When no worker becomes free within
 ``worker_wait_timeout`` it raises :class:`PoolBusy` (the front-end maps that to
 HTTP 503).
+
+More workers than GPUs is the point: while one compiles, another can measure on
+the GPU it is not using. They take turns through a per-GPU lease, so no two ever
+run on one GPU at once - see :mod:`benchmark_server.lease`.
 """
 
 from __future__ import annotations
 
-import queue
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .lease import GPULeases, Ticket
 from .worker import Worker, WorkerCrashed, WorkerTimeout
+
+
+class IdleWorkers:
+    """The idle set, handing out a worker from the least-loaded GPU.
+
+    A request takes a free worker from whichever GPU has fewest out; when it
+    finishes the worker goes back, handed straight to the longest waiter if
+    there is one. One flat FIFO queue would be GPU-blind, landing two requests
+    on one GPU's workers while another GPU sits idle.
+    """
+
+    def __init__(self, workers: list[Worker]) -> None:
+        self._lock = threading.Lock()
+        self._idle: dict[int, list[Worker]] = {}  # gpu id -> its free workers
+        self._assigned: dict[int, int] = {}  # gpu id -> how many are out
+        for worker in workers:
+            self._idle.setdefault(worker.gpu_id, []).append(worker)
+            self._assigned.setdefault(worker.gpu_id, 0)
+        self._waiters: deque[Ticket] = deque()  # requests with no worker yet
+
+    def acquire(self, timeout: float) -> Worker | None:
+        """A worker from the least-loaded GPU, or None if none frees up in time."""
+        with self._lock:
+            worker = self._claim_least_loaded()
+            if worker is not None:
+                return worker
+            if timeout <= 0:
+                return None
+            ticket = Ticket()
+            self._waiters.append(ticket)
+        if not ticket.event.wait(timeout):
+            with self._lock:
+                if ticket.value is None:  # nothing arrived while we timed out
+                    self._waiters.remove(ticket)
+                    return None
+        return ticket.value
+
+    def release(self, worker: Worker) -> None:
+        with self._lock:
+            self._assigned[worker.gpu_id] -= 1
+            self._idle[worker.gpu_id].append(worker)
+            if self._waiters:
+                ticket = self._waiters.popleft()
+                ticket.value = self._claim_least_loaded()  # never None: one just returned
+                ticket.event.set()
+
+    def _claim_least_loaded(self) -> Worker | None:
+        """A free worker from the GPU with fewest out, marked out. Needs ``_lock``."""
+        with_a_free_worker = [gpu for gpu, workers in self._idle.items() if workers]
+        if not with_a_free_worker:
+            return None
+        gpu_id = min(with_a_free_worker, key=lambda gpu: self._assigned[gpu])
+        self._assigned[gpu_id] += 1
+        return self._idle[gpu_id].pop()
+
+    def snapshot(self) -> tuple[set[int], int]:
+        """``id()`` of every idle worker, and the number of requests waiting."""
+        with self._lock:
+            idle = {id(w) for workers in self._idle.values() for w in workers}
+            return idle, len(self._waiters)
 
 
 class MixedTargets(Exception):
@@ -37,6 +102,8 @@ class SubmitOutcome:
     gpu_id: int
     queue_ms: float
     elapsed_ms: float
+    lease_wait_ms: float = 0.0
+    lease_held_ms: float = 0.0
 
 
 class WorkerPool:
@@ -45,51 +112,43 @@ class WorkerPool:
         gpus: list[int],
         runtime_factory: Callable,
         termination_grace_seconds: float = 5.0,
+        workers_per_gpu: int = 1,
     ) -> None:
         self._workers = [
             Worker(g, runtime_factory, termination_grace_seconds=termination_grace_seconds)
             for g in gpus
+            for _ in range(max(1, workers_per_gpu))
         ]
         self._require_one_target()
-        self._idle: queue.Queue[Worker] = queue.Queue()
-        for w in self._workers:
-            self._idle.put(w)
-        self._busy_gpu_ids: set[int] = set()
-        self._waiting = 0
-        self._state_lock = threading.Lock()
+        self._gpus = list(dict.fromkeys(gpus))
+        self._idle = IdleWorkers(self._workers)
+        self._leases = GPULeases(self._gpus)
 
     def submit(self, program, timeout: float, worker_wait_timeout: float = 0.0) -> SubmitOutcome:
         queue_started = time.monotonic()
-        with self._state_lock:
-            self._waiting += 1
-        try:
-            if worker_wait_timeout > 0:
-                worker = self._idle.get(timeout=worker_wait_timeout)
-            else:
-                worker = self._idle.get_nowait()
-        except queue.Empty:
-            queue_ms = (time.monotonic() - queue_started) * 1000
-            raise PoolBusy("all workers busy", queue_ms=queue_ms) from None
-        finally:
-            with self._state_lock:
-                self._waiting -= 1
+        worker = self._idle.acquire(worker_wait_timeout)
         queue_ms = (time.monotonic() - queue_started) * 1000
-        with self._state_lock:
-            self._busy_gpu_ids.add(worker.gpu_id)
+        if worker is None:
+            raise PoolBusy("all workers busy", queue_ms=queue_ms)
         run_started = time.monotonic()
         try:
-            execution = worker.run(program, timeout)
-            elapsed_ms = (time.monotonic() - run_started) * 1000
-            return SubmitOutcome(execution, worker.gpu_id, queue_ms, elapsed_ms)
+            execution, lease_wait_ms, lease_held_ms = worker.run(program, timeout, self._leases)
+            return SubmitOutcome(
+                execution,
+                worker.gpu_id,
+                queue_ms,
+                (time.monotonic() - run_started) * 1000,
+                lease_wait_ms,
+                lease_held_ms,
+            )
         except (WorkerTimeout, WorkerCrashed) as exc:
             exc.gpu_id = worker.gpu_id
             exc.queue_ms = queue_ms
             exc.elapsed_ms = (time.monotonic() - run_started) * 1000
             raise
         finally:
-            with self._state_lock:
-                self._busy_gpu_ids.discard(worker.gpu_id)
-            self._idle.put(worker)  # worker was respawned in-place on crash/timeout
+            self._leases.abandon(worker.gpu_id, worker)  # no-op unless it still holds
+            self._idle.release(worker)  # worker was respawned in-place on crash/timeout
 
     def _require_one_target(self) -> None:
         """One pool serves one target, so a client builds one library that any
@@ -100,23 +159,23 @@ class WorkerPool:
         if len(by_target) > 1:
             self.shutdown()
             grouped = "; ".join(
-                f"GPU(s) {gpus} are {dict(target)['arch']}" for target, gpus in by_target.items()
+                f"GPU(s) {sorted(set(gpus))} are {dict(target)['arch']}"
+                for target, gpus in by_target.items()
             )
             raise MixedTargets(f"a pool serves one target, but {grouped}")
 
     def health(self) -> dict:
-        with self._state_lock:
-            busy_gpu_ids = set(self._busy_gpu_ids)
-            waiting = self._waiting
+        idle_ids, waiting = self._idle.snapshot()
         now = time.monotonic()
         return {
             "queue_length": waiting,
             "target": self.target(),
             "versions": self.versions(),
+            "gpus": [{"gpu_id": gpu, "lease_depth": self._leases.depth(gpu)} for gpu in self._gpus],
             "workers": [
                 {
                     "gpu_id": w.gpu_id,
-                    "status": "busy" if w.gpu_id in busy_gpu_ids else "idle",
+                    "status": "idle" if id(w) in idle_ids else "busy",
                     "uptime_seconds": max(0.0, now - w.started_at),
                 }
                 for w in self._workers

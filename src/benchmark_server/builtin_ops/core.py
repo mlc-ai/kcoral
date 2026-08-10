@@ -139,6 +139,10 @@ def _iteration_counts(call: Callable, cfg: dict, flush: Any) -> tuple[int, int]:
     if warmup is not None and repeat is not None:
         return max(int(warmup), 1), max(int(repeat), 1)
     call()  # exclude one-time init from the estimate
+    if flush is not None:
+        # The buffer is freshly allocated and twice L2 (253 MiB on B200), so its
+        # first touch costs ~16x a warm one and would swamp a 5-sample estimate.
+        flush.zero_()
     torch.cuda.synchronize()
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)

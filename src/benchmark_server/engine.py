@@ -14,6 +14,7 @@ from typing import IO, Any, Protocol
 
 from .errors import ExecutionError
 from .keys import compute_blob_hash
+from .lease import Lease
 from .schemas import (
     DTYPE_ITEM_SIZES,
     Instruction,
@@ -38,11 +39,18 @@ class Runtime(Protocol):
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any: ...
     def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None: ...
     def builtin(self, name: str) -> Callable: ...
+    def is_cpu_only(self, name: str) -> bool: ...
+    def synchronize(self) -> None: ...
     def reset(self) -> None: ...
 
 
-def execute(program: Program, runtime: Runtime) -> ProgramOutcome:
-    """Run a program and serialize only values selected by return instructions."""
+def execute(program: Program, runtime: Runtime, lease: Lease) -> ProgramOutcome:
+    """Run a program and serialize only values selected by return instructions.
+
+    The GPU is claimed on the first instruction that needs it and given up around
+    each CPU-only builtin, so a worker compiling does not keep a GPU that another
+    worker could be measuring on.
+    """
     env: dict[str, Any] = {}
     results: dict[str, dict[str, Any]] = {}
     encoder = _ValueEncoder(runtime)
@@ -55,6 +63,7 @@ def execute(program: Program, runtime: Runtime) -> ProgramOutcome:
             try:
                 for current_index, instruction in enumerate(program.instructions):
                     current = instruction
+                    _place(instruction, runtime, lease)
                     if isinstance(instruction, Upload):
                         if instruction.kind == "module":
                             assert instruction.source is not None
@@ -103,6 +112,7 @@ def execute(program: Program, runtime: Runtime) -> ProgramOutcome:
                     "engine", f"{type(exc).__name__}: {exc}", current_index, current
                 )
     finally:
+        _drop_gpu(runtime, lease)
         runtime.reset()
 
     # A failure stops the program but keeps the returns that already ran.
@@ -116,6 +126,28 @@ def execute(program: Program, runtime: Runtime) -> ProgramOutcome:
         stdout_truncated=captured.stdout_truncated,
         stderr_truncated=captured.stderr_truncated,
     )
+
+
+def _place(instruction: Instruction, runtime: Runtime, lease: Lease) -> None:
+    """Hold or drop the GPU for the instruction about to run.
+
+    Only the CPU-only *builtins* drop it: a module upload is CPU work too, but
+    sub-millisecond, so handing the GPU over costs more in requeueing than it
+    frees. Anything else, an uploaded function included, is assumed to need it.
+    """
+    if isinstance(instruction, Run) and isinstance(instruction.fn, str):
+        if runtime.is_cpu_only(instruction.fn):
+            _drop_gpu(runtime, lease)
+            return
+    lease.acquire()
+
+
+def _drop_gpu(runtime: Runtime, lease: Lease) -> None:
+    """Give the GPU up, draining it first. Guarded on ``held`` so a run of
+    CPU-only instructions pays for one drain rather than one each."""
+    if lease.held:
+        runtime.synchronize()
+        lease.release()
 
 
 def _instruction_error(

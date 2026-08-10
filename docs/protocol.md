@@ -22,12 +22,20 @@ for, and the `versions` a client may want to match:
   "versions": {"torch": "2.13.0+cu130", "cuda": "13.0",
                "tvm": "0.26.0rc0", "tvm_ffi": "0.1.13.post2",
                "cutlass": "4.7.0"},
-  "workers": [{"gpu_id": 0, "status": "idle", "uptime_seconds": 12.4}]
+  "gpus": [{"gpu_id": 0, "lease_depth": 1}],
+  "workers": [{"gpu_id": 0, "status": "busy", "uptime_seconds": 12.4},
+              {"gpu_id": 0, "status": "idle", "uptime_seconds": 12.4}]
 }
 ```
 
 Every worker in a pool shares one target — a server whose GPUs disagree refuses
 to start, so run one server per GPU model.
+
+Several workers share each GPU (`--workers-per-gpu`), so one can compile while
+another measures on the GPU it is not using. They take turns through a per-GPU
+lease and never run on it at once, so a measurement is unaffected by what else
+the server is doing. `lease_depth` is how many workers hold or are queued for
+that GPU.
 
 ## Request envelope
 
@@ -373,6 +381,13 @@ values are passed as literals.
 `check_close` and `assert_close` return `passed`, `max_abs_err`, `max_rel_err`,
 `rtol`, and `atol`.
 
+The two `compile_*` builtins are registered `cpu_only`, so a worker drops its GPU
+lease while they run and another worker measures meanwhile. A new builtin should
+declare it only when both hold: it touches no GPU at all, and it is slow enough
+that a run is worth waiting to reacquire the lease afterwards — currently that
+means compilation. The default is the safe answer, and a builtin wrongly declared
+`cpu_only` corrupts whatever a neighbouring worker is timing.
+
 ---
 
 ## `return`
@@ -422,6 +437,8 @@ For a successful program, HTTP status is `200`:
   "request_id": "7f61b94e-034a-4e80-b67d-eca52bb952cc",
   "queue_ms": 0.4,
   "elapsed_ms": 812.6,
+  "lease_wait_ms": 0.0,
+  "lease_held_ms": 1.4,
   "results": {
     "timing": {
       "type": "object",
@@ -438,8 +455,14 @@ For a successful program, HTTP status is `200`:
 ```
 
 `results` contains only values selected by `return`. `request_id` is also sent
-in the `X-Request-ID` header. `queue_ms` is worker wait time; `elapsed_ms` is
-worker execution and result serialization time.
+in the `X-Request-ID` header.
+
+The four timings decompose a request: `queue_ms` waiting for a worker, then
+`elapsed_ms` of execution, of which `lease_wait_ms` was spent waiting for the GPU
+and `lease_held_ms` holding it. What is left,
+`elapsed_ms - lease_wait_ms - lease_held_ms`, is work done off the GPU. Only
+`lease_held_ms` is GPU time, so it, not `elapsed_ms`, is what a caller should
+divide by to cost a benchmark in GPU-seconds.
 
 ### Fields
 
@@ -452,6 +475,8 @@ body described under [Errors](#errors) instead.
 | `request_id` | string | always | Also sent as `X-Request-ID` |
 | `queue_ms` | number | run | Worker wait time |
 | `elapsed_ms` | number | run | Worker execution and serialization time |
+| `lease_wait_ms` | number | run | Waiting for the GPU another worker held |
+| `lease_held_ms` | number | run | Holding the GPU — the request's GPU time |
 | `results` | object | run | Entries for every `return` that ran; may be empty |
 | `error` | object | `FAILED` | See [Errors](#errors) |
 | `missing_blobs` | array | `CACHE_MISS` | Blob hashes the server does not hold |

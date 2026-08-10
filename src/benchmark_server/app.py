@@ -45,7 +45,10 @@ def create_app(
     async def lifespan(app: FastAPI):
         app.state.cache = ByteCache(config.cache_capacity_bytes)
         app.state.pool = WorkerPool(
-            config.gpus, runtime_factory, config.worker_termination_grace_seconds
+            config.gpus,
+            runtime_factory,
+            config.worker_termination_grace_seconds,
+            config.workers_per_gpu,
         )
         app.state.events = EventLogger(config.log_dir)
         app.state.events.emit("server_started", gpus=list(config.gpus))
@@ -61,7 +64,7 @@ def create_app(
     @app.get("/health")
     async def health(request: Request) -> dict[str, object]:
         pool_health = request.app.state.pool.health()
-        return {"status": "ok", "gpu_count": len(pool_health["workers"]), **pool_health}
+        return {"status": "ok", "gpu_count": len(pool_health["gpus"]), **pool_health}
 
     @app.post("/execute")
     async def execute_request(request: Request):
@@ -166,6 +169,8 @@ def create_app(
             "request_id": request_id,
             "queue_ms": outcome.queue_ms,
             "elapsed_ms": outcome.elapsed_ms,
+            "lease_wait_ms": outcome.lease_wait_ms,
+            "lease_held_ms": outcome.lease_held_ms,
             "stdout": execution.stdout,
             "stderr": execution.stderr,
             "stdout_truncated": execution.stdout_truncated,
@@ -184,6 +189,7 @@ def create_app(
                 gpu_id=outcome.gpu_id,
                 queue_ms=outcome.queue_ms,
                 elapsed_ms=outcome.elapsed_ms,
+                lease_held_ms=outcome.lease_held_ms,
             )
             return _error_response(
                 500,
@@ -198,6 +204,8 @@ def create_app(
             gpu_id=outcome.gpu_id,
             queue_ms=outcome.queue_ms,
             elapsed_ms=outcome.elapsed_ms,
+            lease_wait_ms=outcome.lease_wait_ms,
+            lease_held_ms=outcome.lease_held_ms,
         )
         response_headers = {**headers, "Content-Type": content_type}
         return Response(content=response_body, status_code=200, headers=response_headers)

@@ -59,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="how long a request waits for a free GPU worker before 503",
     )
     parser.add_argument(
+        "--workers-per-gpu",
+        type=int,
+        default=_DEFAULTS.workers_per_gpu,
+        help="workers sharing each GPU, so one can compile while another measures",
+    )
+    parser.add_argument(
         "--worker-termination-grace-seconds",
         type=float,
         default=_DEFAULTS.worker_termination_grace_seconds,
@@ -91,6 +97,7 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         default_timeout_seconds=args.default_timeout_seconds,
         max_timeout_seconds=args.max_timeout_seconds,
         worker_wait_timeout_seconds=args.worker_wait_timeout_seconds,
+        workers_per_gpu=args.workers_per_gpu,
         worker_termination_grace_seconds=args.worker_termination_grace_seconds,
         max_request_bytes=args.max_request_bytes,
         max_response_bytes=args.max_response_bytes,

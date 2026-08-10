@@ -61,6 +61,7 @@ Useful options include:
 
 ```text
 --gpus 0,1                  CUDA devices exposed to workers
+--workers-per-gpu 4               Workers sharing each GPU
 --worker-wait-timeout-seconds 30  Queue wait before HTTP 503 responses
 --default-timeout-seconds 300     Default execution timeout
 --output-limit-bytes 1048576      Request-level stdout/stderr capture limit
@@ -70,6 +71,11 @@ Useful options include:
 Check readiness with `GET /health`, which also reports the `target` an uploaded
 library must be built for and the `versions` the worker runs. Submit programs with `POST /execute` using
 `multipart/form-data`.
+
+Several workers share each GPU, so one can compile while another measures on the
+GPU it is not using; they take turns through a per-GPU lease and never run on it
+at once. Raising `--workers-per-gpu` keeps the GPUs busier at the cost of dividing
+their memory among more concurrent benchmarks.
 
 ## Python client
 
