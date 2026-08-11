@@ -245,3 +245,43 @@ def test_output_limit_is_shared_across_the_request():
     )
     outcome = execute(program, FakeRuntime(), UNSHARED_GPU)
     assert outcome.stdout == "12345\n6" and outcome.stdout_truncated
+
+
+class RecordingLease:
+    def __init__(self) -> None:
+        self.held = False
+        self.acquires = 0
+
+    def acquire(self) -> None:
+        if not self.held:
+            self.acquires += 1
+        self.held = True
+
+    def release(self) -> None:
+        self.held = False
+
+
+class CudaAwareRuntime(FakeRuntime):
+    """The fake runtime has no compiler; the real one binds CUDA source text."""
+
+    def load_module(self, source, entry=None, language="python"):
+        if language == "cuda":
+            return object()
+        return super().load_module(source, entry, language)
+
+
+@pytest.mark.parametrize(
+    "language,source,entry,acquires",
+    [
+        # A CUDA upload runs nothing, so it never waits for a GPU.
+        ("cuda", "void go() {}", "go", 0),
+        # A Python upload execs the client's source, which could touch one.
+        ("python", "def main(x):\n    return x\n", None, 1),
+    ],
+)
+def test_which_module_uploads_take_the_gpu(language, source, entry, acquires):
+    lease = RecordingLease()
+    program = Program([Upload("k", "module", source=source, entry=entry, language=language)])
+    outcome = execute(program, CudaAwareRuntime(), lease)
+    assert outcome.status == "COMPLETED"
+    assert lease.acquires == acquires

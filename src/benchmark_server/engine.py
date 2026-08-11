@@ -129,15 +129,16 @@ def execute(program: Program, runtime: Runtime, lease: Lease) -> ProgramOutcome:
 
 
 def _place(instruction: Instruction, runtime: Runtime, lease: Lease) -> None:
-    """Hold or drop the GPU for the instruction about to run.
-
-    Only the CPU-only *builtins* drop it: a module upload is CPU work too, but
-    sub-millisecond, so handing the GPU over costs more in requeueing than it
-    frees. Anything else, an uploaded function included, is assumed to need it.
-    """
+    """Hold or drop the GPU for the instruction about to run."""
     if isinstance(instruction, Run) and isinstance(instruction.fn, str):
+        # A compile: hand the GPU over so another worker can measure on it.
         if runtime.is_cpu_only(instruction.fn):
             _drop_gpu(runtime, lease)
+            return
+    if isinstance(instruction, Upload) and instruction.kind == "module":
+        # Binding CUDA source runs nothing, and is far too brief to be worth
+        # dropping the lease over; exec'ing Python could touch the GPU.
+        if instruction.language == "cuda":
             return
     lease.acquire()
 

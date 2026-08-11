@@ -318,6 +318,8 @@ def test_client_rejects_malformed_execution_responses():
         "request_id": "request",
         "queue_ms": 0,
         "elapsed_ms": 1,
+        "lease_wait_ms": 0,
+        "lease_held_ms": 1,
         "stdout": "",
         "stderr": "",
     }
@@ -395,7 +397,10 @@ def test_tensor_round_trip_on_gpu():
 
     gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
     gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0
-    app = create_app(ServerConfig(gpus=[gpu_id]), runtime_factory=gpu_runtime_factory)
+    # One worker: spawning the default eight outlasts _start_server's deadline.
+    app = create_app(
+        ServerConfig(gpus=[gpu_id], workers_per_gpu=1), runtime_factory=gpu_runtime_factory
+    )
     server, thread, url = _start_server(app)
     try:
         value = np.arange(64, dtype=np.float32)

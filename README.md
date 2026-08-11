@@ -61,7 +61,7 @@ Useful options include:
 
 ```text
 --gpus 0,1                  CUDA devices exposed to workers
---workers-per-gpu 4               Workers sharing each GPU
+--workers-per-gpu 8               Workers sharing each GPU
 --worker-wait-timeout-seconds 30  Queue wait before HTTP 503 responses
 --default-timeout-seconds 300     Default execution timeout
 --output-limit-bytes 1048576      Request-level stdout/stderr capture limit

@@ -361,6 +361,55 @@ def test_prebuilt_cutedsl_library_runs(tmp_path):
     assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
 
 
+def test_cutedsl_source_compiles_on_the_server():
+    """The other CuTeDSL route: upload the kernel as text, so the client needs no
+    CUDA toolchain of its own."""
+    if importlib.util.find_spec("cutlass") is None:
+        pytest.skip("CuTeDSL compilation requires cutlass")
+    program = Program(
+        [
+            Upload("kernel", "module", source=CUTEDSL_KERNEL, entry="add_one"),
+            Upload("reference", "module", source=REF),
+            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            # Compiling specializes on these tensors; the result takes torch ones.
+            Run(
+                "compiled",
+                "builtin.compile_cutedsl",
+                [ref("kernel"), ref("input"), ref("output")],
+            ),
+            Run("invoke", ref("compiled"), [ref("input"), ref("output")]),
+            Run("expected", ref("reference"), [ref("input")]),
+            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
+            Return("check", ref("check")),
+        ]
+    )
+    outcome = execute(program, runtime(), UNSHARED_GPU)
+    assert outcome.status == "COMPLETED", outcome.error
+    assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
+
+
+def test_compile_cutedsl_reports_an_undecorated_kernel():
+    """CuTeDSL writes colour into its diagnostics; the client gets it stripped."""
+    if importlib.util.find_spec("cutlass") is None:
+        pytest.skip("CuTeDSL compilation requires cutlass")
+    outcome = execute(
+        Program(
+            [
+                Upload("kernel", "module", source="def main(src, dst):\n    pass\n"),
+                Run("input", "builtin.randn", [{"shape": [8], "dtype": "float32"}]),
+                Run("compiled", "builtin.compile_cutedsl", [ref("kernel"), ref("input")]),
+            ]
+        ),
+        runtime(),
+        UNSHARED_GPU,
+    )
+    assert outcome.status == "FAILED"
+    assert outcome.error["kind"] == "compile"
+    assert "@cute.jit" in outcome.error["message"]
+    assert "\x1b[" not in outcome.error["message"]
+
+
 def test_library_with_a_wrong_entry_fails_to_compile(tmp_path):
     data = build_library(CUDA_KERNEL, "add_one", tmp_path)
     digest = compute_blob_hash(data)

@@ -174,6 +174,9 @@ class ProgramResult:
     request_id: str
     queue_ms: float
     elapsed_ms: float
+    # Of `elapsed_ms`: waiting for the GPU, then holding it.
+    lease_wait_ms: float
+    lease_held_ms: float
     results: dict[str, Any]
     stdout: str
     stderr: str
@@ -429,14 +432,17 @@ def _parse_program_result(body: dict[str, Any], binary_parts: dict[str, bytes]) 
         request_id = body["request_id"]
         queue_ms = body["queue_ms"]
         elapsed_ms = body["elapsed_ms"]
+        lease_wait_ms = body["lease_wait_ms"]
+        lease_held_ms = body["lease_held_ms"]
         stdout = body["stdout"]
         stderr = body["stderr"]
         stdout_truncated = body.get("stdout_truncated", False)
         stderr_truncated = body.get("stderr_truncated", False)
         if not isinstance(request_id, str) or not request_id:
             raise ValueError("request_id must be a non-empty string")
-        if not _is_number(queue_ms) or not _is_number(elapsed_ms):
-            raise ValueError("queue_ms and elapsed_ms must be finite numbers")
+        timings = (queue_ms, elapsed_ms, lease_wait_ms, lease_held_ms)
+        if not all(_is_number(value) for value in timings):
+            raise ValueError("the reported timings must be finite numbers")
         if not isinstance(stdout, str) or not isinstance(stderr, str):
             raise ValueError("stdout and stderr must be strings")
         if not isinstance(stdout_truncated, bool) or not isinstance(stderr_truncated, bool):
@@ -471,6 +477,8 @@ def _parse_program_result(body: dict[str, Any], binary_parts: dict[str, bytes]) 
         request_id=request_id,
         queue_ms=float(queue_ms),
         elapsed_ms=float(elapsed_ms),
+        lease_wait_ms=float(lease_wait_ms),
+        lease_held_ms=float(lease_held_ms),
         results=results,
         stdout=stdout,
         stderr=stderr,

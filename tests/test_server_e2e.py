@@ -20,6 +20,17 @@ def make_client(config=None):
     return TestClient(create_app(config, runtime_factory=fake_runtime_factory))
 
 
+def gpu_app(**overrides):
+    """An app on the visible GPU, with one worker: these tests exercise the request
+    path rather than GPU sharing, and spawning the default eight costs ~40s."""
+    gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
+    gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0
+    return create_app(
+        ServerConfig(gpus=[gpu_id], workers_per_gpu=1, **overrides),
+        runtime_factory=gpu_runtime_factory,
+    )
+
+
 def post_program(client, program, blobs=None, *, raw_program=None):
     program_data = raw_program if raw_program is not None else json.dumps(program)
     files = [("program", (None, program_data, "application/json"))]
@@ -399,9 +410,7 @@ def test_real_kernel_end_to_end():
         ],
         "options": {"timeout_seconds": 120},
     }
-    gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
-    gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0
-    app = create_app(ServerConfig(gpus=[gpu_id]), runtime_factory=gpu_runtime_factory)
+    app = gpu_app()
     with TestClient(app) as client:
         response = post_program(client, program, {digest: raw})
     result, binary = response_parts(response)
@@ -472,9 +481,7 @@ def test_prebuilt_library_is_cached_like_a_tensor(tmp_path):
         ],
         "options": {"timeout_seconds": 300},
     }
-    gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
-    gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0
-    app = create_app(ServerConfig(gpus=[gpu_id]), runtime_factory=gpu_runtime_factory)
+    app = gpu_app()
     with TestClient(app) as client:
         # the server advertises what the library had to be built for
         assert client.get("/health").json()["target"]["arch"].startswith("sm_")
@@ -543,9 +550,7 @@ def test_cuda_c_kernel_end_to_end():
         ],
         "options": {"timeout_seconds": 300},
     }
-    gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
-    gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0
-    app = create_app(ServerConfig(gpus=[gpu_id]), runtime_factory=gpu_runtime_factory)
+    app = gpu_app()
     with TestClient(app) as client:
         response = post_program(client, program, {digest: raw})
     result, binary = response_parts(response)
@@ -577,9 +582,7 @@ def test_compiling_does_not_hold_the_gpu():
             "options": {"timeout_seconds": 120},
         }
 
-    gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
-    gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0
-    app = create_app(ServerConfig(gpus=[gpu_id]), runtime_factory=gpu_runtime_factory)
+    app = gpu_app()
     with TestClient(app) as client:
         response = post_program(client, compiling(KERNEL), {})
     result, _ = response_parts(response)

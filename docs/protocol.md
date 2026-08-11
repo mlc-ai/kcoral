@@ -182,6 +182,38 @@ Blackwell, `sm_90a` on Hopper), so instructions gated behind those targets —
 tcgen05, wgmma — are available. Set `TVM_FFI_CUDA_ARCH_LIST` on the server to
 override. Builds are cached on disk by source and flags.
 
+#### CuTeDSL modules
+
+CuTeDSL needs no `language` of its own: a `@cute.jit` kernel is ordinary Python,
+so it uploads as one and `builtin.compile_cutedsl` compiles it. Name the
+`@cute.jit` entry `main` or set `entry` — a kernel and its launcher are two
+top-level definitions, which is otherwise ambiguous.
+
+```json
+{
+  "op": "upload",
+  "id": "kernel",
+  "kind": "module",
+  "source": "import cutlass.cute as cute\n\n@cute.kernel\ndef add_kernel(...):\n    ...\n\n@cute.jit\ndef add(...):\n    ...\n",
+  "entry": "add"
+}
+```
+
+CuTeDSL specializes on the tensors it is compiled against, so `compile_cutedsl`
+takes them alongside the handle and they must be the ones the kernel will run
+on. What comes back is callable with plain tensors:
+
+```json
+{"op": "run", "id": "compiled", "fn": "builtin.compile_cutedsl",
+ "args": [{"$ref": "kernel"}, {"$ref": "x"}, {"$ref": "y"}]}
+{"op": "run", "id": "invoke", "fn": {"$ref": "compiled"},
+ "args": [{"$ref": "x"}, {"$ref": "y"}]}
+```
+
+Nothing is cached, so resubmitting a kernel recompiles it. Uploading a prebuilt
+library instead skips the server-side compile entirely — see
+[Library](#library).
+
 ### Tensor
 
 ```json
@@ -371,6 +403,7 @@ values are passed as literals.
 | `builtin.zeros` | `spec = {shape, dtype}` | a zero tensor |
 | `builtin.compile_tirx` | `(kernel, bindings?)` — `bindings` binds `T.constexpr` dimensions | a compiled module |
 | `builtin.compile_cuda` | `(source, cfg?)` — `cfg = {extra_cuda_cflags?}` | the module's exported function |
+| `builtin.compile_cutedsl` | `(kernel, *tensors, cfg?)` — the tensors it specializes on; `cfg = {options?}` | a compiled kernel |
 | `builtin.benchmark` | `(mod, *tensors, cfg?)` — `cfg = {warmup_ms?, repeat_ms?, warmup?, repeat?, flush_l2?}` | timing statistics |
 | `builtin.check_close` | `(actual, expected, cfg?)` — `cfg = {atol?, rtol?}` | comparison statistics |
 | `builtin.assert_close` | same as `check_close` | comparison statistics; fails on mismatch |
@@ -381,7 +414,7 @@ values are passed as literals.
 `check_close` and `assert_close` return `passed`, `max_abs_err`, `max_rel_err`,
 `rtol`, and `atol`.
 
-The two `compile_*` builtins are registered `cpu_only`, so a worker drops its GPU
+The three `compile_*` builtins are registered `cpu_only`, so a worker drops its GPU
 lease while they run and another worker measures meanwhile. A new builtin should
 declare it only when both hold: it touches no GPU at all, and it is slow enough
 that a run is worth waiting to reacquire the lease afterwards — currently that
