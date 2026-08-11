@@ -162,6 +162,17 @@ def build_cutedsl_library(tmp_path):
     return (tmp_path / "cute_add_one.so").read_bytes()
 
 
+TRITON_KERNEL = """import triton
+import triton.language as tl
+
+@triton.jit
+def add_one(x_ptr, y_ptr, n, BLOCK: tl.constexpr):
+    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    tl.store(y_ptr + offs, tl.load(x_ptr + offs, mask=mask) + 1.0, mask=mask)
+"""
+
+
 def ref(handle):
     return Ref(handle)
 
@@ -408,6 +419,41 @@ def test_compile_cutedsl_reports_an_undecorated_kernel():
     assert outcome.error["kind"] == "compile"
     assert "@cute.jit" in outcome.error["message"]
     assert "\x1b[" not in outcome.error["message"]
+
+
+def test_triton_source_compiles_on_the_server():
+    """A Triton kernel is uploaded and launched without the client writing a
+    launcher: the grid travels as data and ``compile_triton`` binds it."""
+    if importlib.util.find_spec("triton") is None:
+        pytest.skip("Triton compilation requires triton")
+    n = 4096
+    program = Program(
+        [
+            Upload("kernel", "module", source=TRITON_KERNEL, entry="add_one"),
+            Upload("reference", "module", source=REF),
+            Run("input", "builtin.randn", [{"shape": [n], "dtype": "float32", "seed": 0}]),
+            Run("output", "builtin.empty", [{"shape": [n], "dtype": "float32"}]),
+            Run(
+                "compiled",
+                "builtin.compile_triton",
+                [ref("kernel"), ref("input"), ref("output"), n, 256, {"grid": [n // 256]}],
+            ),
+            Run("invoke", ref("compiled"), [ref("input"), ref("output"), n, 256]),
+            Run("expected", ref("reference"), [ref("input")]),
+            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
+            Run(
+                "timing",
+                "builtin.benchmark",
+                [ref("compiled"), ref("input"), ref("output"), n, 256, {"repeat": 20}],
+            ),
+            Return("check", ref("check")),
+            Return("timing", ref("timing")),
+        ]
+    )
+    outcome = execute(program, runtime(), UNSHARED_GPU)
+    assert outcome.status == "COMPLETED", outcome.error
+    assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
+    assert decode_structural(outcome.results["timing"])["latency_ms_median"] > 0
 
 
 def test_library_with_a_wrong_entry_fails_to_compile(tmp_path):

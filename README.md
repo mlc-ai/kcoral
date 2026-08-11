@@ -24,7 +24,8 @@ depends on which builtins the programs use:
 | any program | PyTorch and TVM FFI |
 | `compile_tirx` | TVM as well |
 | `compile_cuda` | `nvcc`, a host C++ compiler, and `ninja` as well |
-| a CuTeDSL library upload | `nvidia-cutlass-dsl` as well, for its runtime library |
+| `compile_cutedsl`, or a CuTeDSL library upload | `nvidia-cutlass-dsl` as well |
+| `compile_triton` | `triton`, which the CUDA PyTorch wheels already carry |
 
 A builtin whose requirement is absent answers `unavailable` and the rest of the
 server is unaffected, so a partial environment is a usable deployment.

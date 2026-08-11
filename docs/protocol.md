@@ -214,6 +214,33 @@ Nothing is cached, so resubmitting a kernel recompiles it. Uploading a prebuilt
 library instead skips the server-side compile entirely — see
 [Library](#library).
 
+#### Triton modules
+
+A `@triton.jit` kernel is ordinary Python too, and `builtin.compile_triton`
+compiles it. What Triton needs beyond the other languages is a launch grid: it is
+normally computed by the caller at `kernel[grid](...)`, and the server will not
+evaluate a client expression to get one, so it travels as `cfg.grid` — one to
+three positive ints.
+
+```json
+{"op": "run", "id": "compiled", "fn": "builtin.compile_triton",
+ "args": [{"$ref": "kernel"}, {"$ref": "x"}, {"$ref": "y"}, 4096, 256,
+          {"grid": [16], "num_warps": 4}]}
+{"op": "run", "id": "invoke", "fn": {"$ref": "compiled"},
+ "args": [{"$ref": "x"}, {"$ref": "y"}, 4096, 256]}
+```
+
+Triton specializes on the arguments — dtypes, `tl.constexpr` values, pointer
+alignment — so compiling takes the ones the kernel will be launched on, with
+scalars and constexprs positional alongside the tensors. Every other `cfg` key is
+a launch keyword: `num_warps`, `num_stages`, or a constexpr by name. The compiled
+callable replays them, because Triton keys its cache on them and a launch that
+differs recompiles — back on the GPU's time. The grid is not part of that key;
+the callable carries it because a launch has nowhere else to get one.
+
+The server caches nothing, but Triton's own on-disk cache makes a resubmitted
+kernel much cheaper.
+
 ### Tensor
 
 ```json
@@ -404,6 +431,7 @@ values are passed as literals.
 | `builtin.compile_tirx` | `(kernel, bindings?)` — `bindings` binds `T.constexpr` dimensions | a compiled module |
 | `builtin.compile_cuda` | `(source, cfg?)` — `cfg = {extra_cuda_cflags?}` | the module's exported function |
 | `builtin.compile_cutedsl` | `(kernel, *tensors, cfg?)` — the tensors it specializes on; `cfg = {options?}` | a compiled kernel |
+| `builtin.compile_triton` | `(kernel, *args, cfg)` — the args it specializes on; `cfg = {grid, **launch keywords}` | a callable bound to that grid |
 | `builtin.benchmark` | `(mod, *tensors, cfg?)` — `cfg = {warmup_ms?, repeat_ms?, warmup?, repeat?, flush_l2?}` | timing statistics |
 | `builtin.check_close` | `(actual, expected, cfg?)` — `cfg = {atol?, rtol?}` | comparison statistics |
 | `builtin.assert_close` | same as `check_close` | comparison statistics; fails on mismatch |
@@ -414,7 +442,7 @@ values are passed as literals.
 `check_close` and `assert_close` return `passed`, `max_abs_err`, `max_rel_err`,
 `rtol`, and `atol`.
 
-The three `compile_*` builtins are registered `cpu_only`, so a worker drops its GPU
+The four `compile_*` builtins are registered `cpu_only`, so a worker drops its GPU
 lease while they run and another worker measures meanwhile. A new builtin should
 declare it only when both hold: it touches no GPU at all, and it is slow enough
 that a run is worth waiting to reacquire the lease afterwards — currently that

@@ -1,6 +1,6 @@
-"""Compile a kernel on the server, in TIRx, CuTeDSL and CUDA C.
+"""Compile a kernel on the server, in TIRx, CuTeDSL, CUDA C and Triton.
 
-All three programs have the same shape — upload the kernel as text, compile it
+All four programs have the same shape — upload the kernel as text, compile it
 with a builtin, run and time the result — so the only difference is the language
 and which `compile_*` builtin reads it. None needs a CUDA toolchain on the
 client, and the compile runs off the GPU lease, leaving the card to another
@@ -70,6 +70,19 @@ void add_one(tvm::ffi::TensorView x, tvm::ffi::TensorView y) {
 """
 
 
+TRITON_KERNEL = r"""
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def add_one(x_ptr, y_ptr, n, BLOCK: tl.constexpr):
+    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    tl.store(y_ptr + offs, tl.load(x_ptr + offs, mask=mask) + 1.0, mask=mask)
+"""
+
+
 def tirx_program() -> Program:
     program = Program()
     kernel = program.upload(id="kernel", kind="module", source=TIRX_KERNEL)
@@ -135,6 +148,31 @@ def cuda_program() -> Program:
     return program
 
 
+def triton_program() -> Program:
+    program = Program()
+    kernel = program.upload(id="kernel", kind="module", source=TRITON_KERNEL, entry="add_one")
+    src = program.upload(id="src", kind="tensor", value=np.arange(N, dtype=np.float32))
+    dst = program.run(id="dst", fn="builtin.empty", args=[{"shape": [N], "dtype": "float32"}])
+
+    # A Triton kernel computes its grid at launch, so the grid travels as data
+    # rather than as a launcher the client writes. Every other `cfg` key is a
+    # launch keyword — num_warps, num_stages, a constexpr by name.
+    compiled = program.run(
+        id="compiled",
+        fn="builtin.compile_triton",
+        args=[kernel, src, dst, N, 256, {"grid": [1], "num_warps": 4}],
+    )
+    program.run(id="invoke", fn=compiled, args=[src, dst, N, 256])
+    timing = program.run(
+        id="timing",
+        fn="builtin.benchmark",
+        args=[compiled, src, dst, N, 256, {"warmup_ms": 25, "repeat_ms": 100}],
+    )
+    program.return_(key="timing", value=timing)
+    program.return_(key="dst", value=dst)
+    return program
+
+
 def main() -> None:
     expected = np.arange(N, dtype=np.float32) + 1.0
     with Client(os.environ.get("BENCH_URL", "http://localhost:8000")) as client:
@@ -142,6 +180,7 @@ def main() -> None:
             ("TIRx", tirx_program()),
             ("CuTeDSL", cutedsl_program()),
             ("CUDA C", cuda_program()),
+            ("Triton", triton_program()),
         )
         for language, program in programs:
             result = client.execute(program, timeout_seconds=120)

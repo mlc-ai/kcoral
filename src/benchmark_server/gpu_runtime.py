@@ -229,7 +229,7 @@ def describe_versions() -> dict[str, str]:
     versions = {"torch": torch.__version__}
     if torch.version.cuda:
         versions["cuda"] = torch.version.cuda
-    for name in ("tvm", "tvm_ffi"):
+    for name in ("tvm", "tvm_ffi", "triton"):
         try:
             versions[name] = __import__(name).__version__
         except Exception:  # optional, or no version attribute

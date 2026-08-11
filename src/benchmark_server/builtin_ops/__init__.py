@@ -13,7 +13,7 @@ correctness, or unavailable.
 from __future__ import annotations
 
 # Imported for their registrations: a builtin exists only once its module runs.
-from . import core, cuda, cutedsl, tirx
+from . import core, cuda, cutedsl, tirx, triton
 from ._common import torch_dtype
 from ._registry import is_cpu_only, register_builtin, resolve
 from .cuda import CUDASource
