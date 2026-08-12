@@ -28,7 +28,7 @@ COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project --group gpu --group test
 
-COPY src ./src
+COPY python ./python
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --group gpu --group test
 

@@ -14,6 +14,10 @@ __pycache__/
 *.egg-info/
 venv/
 
+# Build artifacts
+build/
+dist/
+
 # Misc
 *.log
 tmp/

@@ -167,8 +167,8 @@ and `return:<index>` parts contain raw bytes in depth-first traversal order.
 ```bash
 uv sync --group test             # or --group test --group gpu
 pytest -q
-ruff check src tests
-ruff format --check src tests
+ruff check python tests
+ruff format --check python tests
 ```
 
 The GPU integration tests are opt-in, and need the GPU environment:

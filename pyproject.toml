@@ -43,16 +43,18 @@ explicit = true
 torch = { index = "pytorch-cu130" }
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["python"]
 include = ["benchmark_server*"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["python"]
 testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# First-party detection for import sorting; ruff's default is [".", "src"].
+src = [".", "python"]
 
 [tool.ruff.lint]
 select = [
