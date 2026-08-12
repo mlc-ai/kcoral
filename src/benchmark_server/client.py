@@ -239,7 +239,11 @@ class Client:
                 )
             body, binary_parts = self._post_program(program, options, include_blobs=missing)
             if body.get("status") == "CACHE_MISS":
-                raise ProtocolError("server still reports CACHE_MISS after one blob resend")
+                body, binary_parts = self._post_program(
+                    program, options, include_blobs=set(program._blobs)
+                )
+            if body.get("status") == "CACHE_MISS":
+                raise ProtocolError("server still reports CACHE_MISS after a complete blob resend")
         return _parse_program_result(body, binary_parts)
 
     def health(self) -> dict[str, Any]:

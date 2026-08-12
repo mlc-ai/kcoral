@@ -786,8 +786,9 @@ Client.health()
 Client.close() -> None
 ```
 
-For tensors, the client derives `blob`, `dtype`, and `shape` from `value`, retries
-one `CACHE_MISS` with the missing parts, and decodes returned tensors to CPU
-`numpy.ndarray` (`bfloat16` and `float8_*` via `ml_dtypes`). Server errors,
-transport failures, and malformed responses use `BenchmarkServerError`,
-`TransportError`, and `ProtocolError`.
+For tensors, the client derives `blob`, `dtype`, and `shape` from `value`. It
+starts without blob parts, retries a `CACHE_MISS` with the missing parts, and
+falls back to all local blobs if the cache changes between requests. Returned
+tensors decode to CPU `numpy.ndarray` (`bfloat16` and `float8_*` via
+`ml_dtypes`). Server errors, transport failures, and malformed responses use
+`BenchmarkServerError`, `TransportError`, and `ProtocolError`.

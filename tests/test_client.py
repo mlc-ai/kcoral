@@ -86,6 +86,36 @@ def test_tensor_cache_retry_and_numpy_result(server_url):
         np.testing.assert_array_equal(result, value)
 
 
+def test_cache_churn_falls_back_to_all_blobs():
+    app = create_app(
+        ServerConfig(gpus=[0], workers_per_gpu=1, cache_capacity_bytes=16),
+        runtime_factory=fake_runtime_factory,
+    )
+    server, thread, url = _start_server(app)
+    values = [np.array([index], dtype=np.float32) for index in range(5)]
+    try:
+        with Client(url) as client:
+            for index, value in enumerate(values[:4]):
+                program = Program()
+                tensor = program.upload(id=f"tensor_{index}", kind="tensor", value=value)
+                program.return_(key="tensor", value=tensor)
+                assert client.execute(program).completed
+
+            program = Program()
+            tensors = [
+                program.upload(id=f"tensor_{index}", kind="tensor", value=value)
+                for index, value in enumerate(values)
+            ]
+            program.return_(key="tensor", value=tensors[-1])
+            outcome = client.execute(program)
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+    assert outcome.completed
+    np.testing.assert_array_equal(outcome.results["tensor"], values[-1])
+
+
 @pytest.mark.parametrize("name", ML_DTYPE_NAMES)
 def test_ml_dtype_tensor_round_trips_through_the_server(server_url, name):
     """An ml_dtypes array survives upload, return, and decode with its dtype intact."""
