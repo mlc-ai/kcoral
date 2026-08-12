@@ -27,7 +27,7 @@ disagree, that file wins.
 - A reference has the exact form `{"$ref": "<id>"}` and must point to an
   earlier instruction.
 - `GET /health` reports the GPU `target` (e.g. `{"arch": "sm_100a"}`) and the
-  installed `versions` (torch, cuda, tvm, tvm_ffi, cutlass).
+  installed `versions` (torch, cuda, tvm, tvm_ffi, triton, cutlass).
 
 ## Python client
 
@@ -78,19 +78,23 @@ API surface:
 ```python
 Program.upload(id=..., kind="module", source=..., entry=None, language="python") -> Register
 Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
+Program.upload(id=..., kind="bytes", value=...) -> Register
+Program.upload(id=..., kind="library", value=..., entry=...) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
 
 Client(base_url, *, headers=None, connect_timeout_seconds=10)
 Client.execute(program, *, timeout_seconds=None, output_limit_bytes=None) -> ProgramResult
-Client.health()
+Client.health() -> dict
 Client.target() -> dict   # e.g. {"arch": "sm_100a"}
 Client.close() -> None
 ```
 
-The client derives `blob`, `dtype`, and `shape` from a tensor `value`, retries
-one `CACHE_MISS` with the missing parts, and decodes returned tensors to CPU
-`numpy.ndarray` (`bfloat16` and `float8_*` via `ml_dtypes`).
+The client derives `blob`, `dtype`, and `shape` from a tensor `value`. It sends
+no blob parts at first, retries a `CACHE_MISS` with the missing parts, and falls
+back to resending every local blob if the cache changes between the two
+requests. Returned tensors decode to CPU `numpy.ndarray` (`bfloat16` and
+`float8_*` via `ml_dtypes`).
 
 ## Instructions
 
@@ -101,11 +105,11 @@ A field is accepted exactly for the kinds it lists:
 | Field | Kinds | Required for | Notes |
 |---|---|---|---|
 | `id` | all | all | Unique handle name |
-| `kind` | all | all | `"module"`, `"tensor"`, or `"library"` |
+| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, or `"library"` |
 | `source` | module | module | UTF-8 source defining the entry object |
 | `entry` | module, library | `cuda` modules, library | Identifier naming the entry object |
 | `language` | module | — | `"python"` (default) or `"cuda"` |
-| `blob` | tensor, library | tensor, library | SHA-256 of the raw bytes |
+| `blob` | tensor, bytes, library | tensor, bytes, library | SHA-256 of the raw bytes |
 | `dtype` | tensor | tensor | Tensor data type |
 | `shape` | tensor | tensor | Tensor shape |
 
@@ -114,6 +118,10 @@ if set, otherwise `main`, otherwise the source's single top-level `def` or
 `class`. Two top-level definitions with no `main` and no `entry` fail as
 ambiguous. An uploaded module is ordinary Python executed on the worker (torch
 included), so a plain function works as a reference baseline.
+
+A `bytes` upload binds the blob's bytes unchanged. They stay in CPU memory and
+can be passed to uploaded Python code, which suits files and other binary
+formats the server should parse.
 
 A `library` upload is a prebuilt ELF shared object loaded with
 `tvm_ffi.load_module`; the handle is directly callable, no compile step.
@@ -187,14 +195,20 @@ A missing toolchain fails that builtin with an `unavailable` error;
   avoids shipping outputs back. Defaults are `rtol=1e-2`, `atol=1e-3`.
   `check_close` reports a mismatch as data; `assert_close` stops the program
   with a `correctness` failure.
-- `builtin.benchmark` reports per-iteration GPU kernel time measured by CUPTI,
-  not wall time. Defaults: `warmup_ms=25`, `repeat_ms=100`, `flush_l2=true`.
-  The millisecond budgets adapt the iteration count to the kernel; explicit
-  `warmup`/`repeat` counts are for runs that must be comparable.
+- `builtin.benchmark` reports the per-iteration GPU activity span measured by
+  CUPTI, not wall time: from the start of the first kernel, copy, or memset a
+  call launches to the end of the last. The L2 flush and host work outside those
+  endpoints stay out, but host time *between* two activities does not. Defaults:
+  `warmup_ms=25`, `repeat_ms=100`, `flush_l2=true`. The millisecond budgets
+  adapt the iteration count to the kernel; explicit `warmup`/`repeat` counts are
+  for runs that must be comparable.
 - `flush_l2=true` gives each call a cold cache; off, a small kernel reads its
   input from L2 and reports an unrealistic latency.
 - Returns `latency_ms_median`, `latency_ms_mean`, `latency_ms_min`,
-  `latency_ms_max`, plus the `flush_l2`, `warmup`, `repeat` used.
+  `latency_ms_max`, `activities_stable`, plus the `flush_l2`, `warmup`, `repeat`
+  used. `activities_stable` is `false` when the timed iterations did not all
+  launch the same activities, so the stats describe a mixture rather than one
+  kernel.
 - The request's GPU time is `lease_held_ms`, not `elapsed_ms`; the remainder
   is queueing (`queue_ms`, `lease_wait_ms`) and off-GPU work such as compiles.
 
@@ -218,12 +232,13 @@ A missing toolchain fails that builtin with an `unavailable` error;
 
 The wire format is `multipart/form-data` with a `program` part
 (`application/json`) plus one `blob:<sha256>` part
-(`application/octet-stream`) per tensor or library blob, where `<sha256>` is
-the lowercase hex SHA-256 of the part bytes. Blobs are cached by hash: on
-`status: CACHE_MISS`, resend the program with the parts listed in
-`missing_blobs`. Responses containing tensors or bytes are multipart with a
-`result` JSON part and `return:<index>` binary parts. The typed value
-encoding, blob-cache rules, and full error table are in `docs/protocol.md`.
+(`application/octet-stream`) per tensor, bytes, or library blob, where
+`<sha256>` is the lowercase hex SHA-256 of the part bytes. Blobs are cached by
+hash: on `status: CACHE_MISS`, resend the program with the parts listed in
+`missing_blobs`, and resend every blob if that retry misses again. Responses
+containing tensors or bytes are multipart with a `result` JSON part and
+`return:<index>` binary parts. The typed value encoding, blob-cache rules, and
+full error table are in `docs/protocol.md`.
 
 ## References
 
