@@ -82,9 +82,10 @@ their memory among more concurrent benchmarks.
 
 ## Python client
 
-The client builds the protocol JSON and binary tensor parts. Tensor uploads can
-use NumPy arrays, PyTorch tensors, objects implementing the DLPack protocol, or
-raw bytes accompanied by `dtype` and `shape`.
+The client builds the protocol JSON and binary parts. Byte uploads preserve
+files and other binary data unchanged. Tensor uploads can use NumPy arrays,
+PyTorch tensors, objects implementing the DLPack protocol, or raw bytes
+accompanied by `dtype` and `shape`.
 
 ```python
 from benchmark_server import Client, Program
@@ -141,10 +142,10 @@ torch.from_numpy(value.view(np.uint8)).view(torch.bfloat16)
 ## Protocol summary
 
 A request contains one `program` JSON part and zero or more binary parts named
-`blob:<sha256>`. The SHA-256 digest is calculated over the raw tensor bytes.
+`blob:<sha256>`. The SHA-256 digest is calculated over the raw bytes.
 Programs contain three instruction types:
 
-- `upload`: register a module source string or a tensor blob.
+- `upload`: register module source, raw bytes, a tensor, or a library.
 - `run`: call a registered function with recursively encoded arguments.
 - `return`: expose a previously computed value under a result key.
 

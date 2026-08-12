@@ -90,3 +90,15 @@ def test_short_keeps_both_ends_of_a_compiler_error():
     short = _common.short(RuntimeError(text))
     assert short.startswith("nvcc -I/long")
     assert short.endswith("error: 'x' was not declared")
+
+
+def test_builtin_module_exposes_the_registry():
+    from benchmark_server import builtin
+    from benchmark_server.builtin_ops import resolve
+
+    assert builtin.check_close is resolve("builtin.check_close")
+    assert builtin.compile_cuda is resolve("builtin.compile_cuda")
+    assert "randn" in dir(builtin) and "benchmark" in dir(builtin)
+    with pytest.raises(AttributeError) as exc:
+        builtin.no_such_builtin
+    assert "no_such_builtin" in str(exc.value)

@@ -83,6 +83,24 @@ def test_parse_library_upload():
     assert program.blob_uploads() == [upload]
 
 
+def test_parse_bytes_upload():
+    program = parse_program(
+        {
+            "instructions": [
+                {
+                    "op": "upload",
+                    "id": "file",
+                    "kind": "bytes",
+                    "blob": TENSOR_HASH,
+                }
+            ]
+        }
+    )
+    upload = program.instructions[0]
+    assert upload.kind == "bytes" and upload.blob == TENSOR_HASH
+    assert program.blob_uploads() == [upload]
+
+
 @pytest.mark.parametrize(
     "instruction,match",
     [
@@ -123,6 +141,10 @@ def test_parse_library_upload():
         (
             {"op": "upload", "id": "x", "kind": "library", "blob": TENSOR_HASH},
             "missing field",
+        ),
+        (
+            {"op": "upload", "id": "x", "kind": "bytes", "blob": "sha256:old"},
+            "lowercase SHA-256",
         ),
         (
             {"op": "upload", "id": "x", "kind": "module", "source": "", "language": "cuda"},

@@ -72,6 +72,9 @@ def execute(program: Program, runtime: Runtime, lease: Lease) -> ProgramOutcome:
                                 entry=instruction.entry,
                                 language=instruction.language,
                             )
+                        elif instruction.kind == "bytes":
+                            assert instruction.blob is not None
+                            env[instruction.id] = program.blob_bytes[instruction.blob]
                         elif instruction.kind == "library":
                             assert instruction.blob is not None and instruction.entry is not None
                             env[instruction.id] = runtime.load_library(
@@ -135,6 +138,8 @@ def _place(instruction: Instruction, runtime: Runtime, lease: Lease) -> None:
         if runtime.is_cpu_only(instruction.fn):
             _drop_gpu(runtime, lease)
             return
+    if isinstance(instruction, Upload) and instruction.kind == "bytes":
+        return
     if isinstance(instruction, Upload) and instruction.kind == "module":
         # Binding CUDA source runs nothing, and is far too brief to be worth
         # dropping the lease over; exec'ing Python could touch the GPU.

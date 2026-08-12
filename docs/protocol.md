@@ -41,14 +41,14 @@ that GPU.
 
 `multipart/form-data` is an HTTP body format containing multiple named parts,
 each with its own content type. A boundary string separates the parts. Here it
-combines the JSON program and raw tensor bytes in one request.
+combines the JSON program and binary blobs in one request.
 
 The request contains:
 
 | Part | Content type | Required | Notes |
 |---|---|---:|---|
 | `program` | `application/json` | yes | Instructions and options |
-| `blob:<sha256>` | `application/octet-stream` | no | Raw tensor bytes |
+| `blob:<sha256>` | `application/octet-stream` | no | Tensor, byte, or library data |
 
 `<sha256>` is the lowercase 64-character SHA-256 of the part bytes.
 
@@ -117,7 +117,7 @@ Each `upload` and `run` has a unique string `id`. A reference has the exact form
 
 ## `upload`
 
-Uploads a module or tensor and binds it to a handle.
+Uploads a module, tensor, byte string, or library and binds it to a handle.
 
 ### Module
 
@@ -257,6 +257,21 @@ kernel much cheaper.
 `blob` names raw contiguous row-major bytes. Their length must equal
 `product(shape) * dtype.itemsize`. The tensor is copied to the assigned GPU.
 
+### Bytes
+
+```json
+{
+  "op": "upload",
+  "id": "file",
+  "kind": "bytes",
+  "blob": "<sha256>"
+}
+```
+
+The handle binds the blob's bytes unchanged. They stay in CPU memory and can be
+passed to uploaded Python code, which makes this kind suitable for files and
+other binary formats that the server should parse.
+
 ### Library
 
 A library is a shared object the client already built, so the server compiles
@@ -363,27 +378,27 @@ callable, so no compile instruction appears.
 
 A field is accepted exactly for the kinds it lists, and is rejected for the
 others: a `module` upload carries `source` and an optional `entry` and
-`language`, a `tensor` upload carries `blob`, `dtype`, and `shape`, and a
-`library` upload carries `blob` and `entry`.
+`language`, a `tensor` upload carries `blob`, `dtype`, and `shape`, a `bytes`
+upload carries `blob`, and a `library` upload carries `blob` and `entry`.
 
 | Field | Kinds | Required for | Notes |
 |---|---|---|---|
 | `op` | all | all | `"upload"` |
 | `id` | all | all | Unique handle name |
-| `kind` | all | all | `"module"`, `"tensor"`, or `"library"` |
+| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, or `"library"` |
 | `source` | module | module | UTF-8 source defining the entry object |
 | `entry` | module, library | `cuda` modules, library | Identifier naming the entry object |
 | `language` | module | — | `"python"` (default) or `"cuda"` |
-| `blob` | tensor, library | tensor, library | SHA-256 of the raw bytes |
+| `blob` | tensor, bytes, library | tensor, bytes, library | SHA-256 of the raw bytes |
 | `dtype` | tensor | tensor | Tensor data type |
 | `shape` | tensor | tensor | Tensor shape |
 
 ### Blob cache
 
 The server verifies supplied blobs against their part names and caches them by
-hash. A tensor or library may reference a cached blob without supplying its
-multipart part, so a library is uploaded once and later requests cost only its
-hash. If any blob is missing, the program does not run:
+hash. A tensor, byte string, or library may reference a cached blob without
+supplying its multipart part, so unchanged data is uploaded once and later
+requests cost only its hash. If any blob is missing, the program does not run:
 
 ```json
 {
@@ -777,6 +792,7 @@ print(result.stdout, result.stderr)
 ```python
 Program.upload(id=..., kind="module", source=..., entry=None, language="python") -> Register
 Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
+Program.upload(id=..., kind="bytes", value=...) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
 

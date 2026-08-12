@@ -698,6 +698,32 @@ def test_uploaded_and_returned_tensor_bytes():
     )
 
 
+BUILTIN_CALLER = """from benchmark_server import builtin
+
+def main(x):
+    y = builtin.randn({"shape": [256], "dtype": "float32", "seed": 0})
+    return builtin.check_close(x, y)
+"""
+
+
+def test_uploaded_code_calls_builtins_directly():
+    """The same seed on both sides must produce identical tensors, which proves
+    ``benchmark_server.builtin`` hands uploaded code the very functions the run
+    instructions name."""
+    program = Program(
+        [
+            Upload("caller", "module", source=BUILTIN_CALLER),
+            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+            Run("check", ref("caller"), [ref("input")]),
+            Return("check", ref("check")),
+        ]
+    )
+    outcome = execute(program, runtime(), UNSHARED_GPU)
+    assert outcome.status == "COMPLETED", outcome.error
+    check = decode_structural(outcome.results["check"])
+    assert check["passed"] and check["max_abs_err"] == 0
+
+
 def test_benchmark_budgets_survive_the_l2_flush():
     """The iteration estimate must not include the first touch of the flush
     buffer: freshly allocated and 2x L2, it costs ~16x a warm one and would
