@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,6 @@ from benchmark_server.client import (
     TransportError,
 )
 
-from .dataset import TraceSet
 from .schema import (
     BenchmarkConfig,
     Definition,
@@ -30,7 +30,7 @@ from .schema import (
 
 
 class FlashInferTraceClient:
-    """Build one server program per workload and preserve result order."""
+    """Evaluate in-memory traces through one server program per workload."""
 
     def __init__(
         self,
@@ -196,37 +196,55 @@ class FlashInferTraceClient:
 
     def evaluate(
         self,
-        trace_set: TraceSet,
-        definition: str | Definition,
-        solution: str | Solution,
+        definition: Definition,
+        solution: Solution,
+        trace: Trace,
+        *,
+        resource_root: str | Path | None = None,
+    ) -> Trace:
+        """Evaluate one in-memory workload trace and return a completed trace."""
+
+        return self.evaluate_many(
+            definition,
+            solution,
+            [trace],
+            resource_root=resource_root,
+        )[0]
+
+    def evaluate_many(
+        self,
+        definition: Definition,
+        solution: Solution,
+        traces: Sequence[Trace],
+        *,
+        resource_root: str | Path | None = None,
     ) -> list[Trace]:
-        """Evaluate every declared workload concurrently and keep declaration order."""
+        """Evaluate in-memory workload traces concurrently and preserve their order."""
 
-        resolved_definition = (
-            trace_set.definitions[definition] if isinstance(definition, str) else definition
-        )
-        resolved_solution = (
-            trace_set.get_solution(solution) if isinstance(solution, str) else solution
-        )
-        if resolved_solution is None:
-            raise ValueError(f"unknown solution: {solution!r}")
-        if resolved_solution.definition != resolved_definition.name:
+        if solution.definition != definition.name:
             raise ValueError(
-                f"solution {resolved_solution.name!r} targets "
-                f"{resolved_solution.definition!r}, expected {resolved_definition.name!r}"
+                f"solution {solution.name!r} targets "
+                f"{solution.definition!r}, expected {definition.name!r}"
             )
+        workload_traces = list(traces)
+        for trace in workload_traces:
+            if trace.definition != definition.name:
+                raise ValueError(
+                    f"trace targets definition {trace.definition!r}, expected {definition.name!r}"
+                )
+            if not trace.is_workload_trace():
+                raise ValueError("input traces must not contain a solution or evaluation")
 
-        workloads = trace_set.workloads.get(resolved_definition.name, [])
-        resolved_config = self.config.resolve_eval_config(resolved_definition)
+        resolved_config = self.config.resolve_eval_config(definition)
         programs = [
             self.build_program(
-                resolved_definition,
-                resolved_solution,
+                definition,
+                solution,
                 trace.workload,
                 resolved_config,
-                resource_root=trace_set.root,
+                resource_root=resource_root,
             )
-            for trace in workloads
+            for trace in workload_traces
         ]
         if not programs:
             return []
@@ -236,26 +254,26 @@ class FlashInferTraceClient:
             workload_trace, program = item
             evaluation = self._execute(program, fallback_environment)
             return Trace(
-                definition=resolved_definition.name,
+                definition=definition.name,
                 workload=workload_trace.workload,
-                solution=resolved_solution.name,
+                solution=solution.name,
                 evaluation=evaluation,
             )
 
         worker_count = self.max_workers or min(32, len(programs))
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            return list(executor.map(submit, zip(workloads, programs, strict=True)))
+            return list(executor.map(submit, zip(workload_traces, programs, strict=True)))
 
     def _read_resource(self, resource_path: str, resource_root: str | Path | None) -> bytes:
         relative_path = Path(resource_path)
         if relative_path.is_absolute() or ".." in relative_path.parts:
-            raise ValueError(f"resource path must stay inside the trace set: {resource_path!r}")
+            raise ValueError(f"resource path must stay inside the resource root: {resource_path!r}")
         if resource_root is None:
-            raise ValueError("a trace set root is required for safetensors resources")
+            raise ValueError("a resource root is required for safetensors resources")
         root = Path(resource_root).resolve()
         resolved_path = (root / relative_path).resolve()
         if not resolved_path.is_relative_to(root):
-            raise ValueError(f"resource path escapes the trace set: {resource_path!r}")
+            raise ValueError(f"resource path escapes the resource root: {resource_path!r}")
         if not resolved_path.is_file():
             raise ValueError(f"safetensors resource does not exist: {resource_path!r}")
         return resolved_path.read_bytes()

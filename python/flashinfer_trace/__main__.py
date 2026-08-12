@@ -21,11 +21,19 @@ def main() -> None:
     trace_set = TraceSet.from_path(arguments.trace_set)
     if arguments.definition not in trace_set.definitions:
         parser.error(f"unknown definition: {arguments.definition!r}")
-    if trace_set.get_solution(arguments.solution) is None:
+    solution = trace_set.get_solution(arguments.solution)
+    if solution is None:
         parser.error(f"unknown solution: {arguments.solution!r}")
+    definition = trace_set.definitions[arguments.definition]
+    workload_traces = trace_set.workloads.get(definition.name, [])
 
     with FlashInferTraceClient(arguments.server_url) as client:
-        traces = client.evaluate(trace_set, arguments.definition, arguments.solution)
+        traces = client.evaluate_many(
+            definition,
+            solution,
+            workload_traces,
+            resource_root=trace_set.root,
+        )
     trace_set.add_traces(traces)
 
     passed = sum(trace.is_successful() for trace in traces)
