@@ -29,7 +29,7 @@ DTYPE_ITEM_SIZES: dict[str, int] = {
 @dataclass
 class Upload:
     id: str
-    kind: Literal["module", "tensor", "library"]
+    kind: Literal["module", "tensor", "bytes", "library"]
     source: str | None = None
     entry: str | None = None
     language: Literal["python", "cuda"] = "python"
@@ -261,6 +261,19 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
                 f"tensor upload {item['id']!r}: 'shape' must be an array of non-negative integers"
             )
         return Upload(id=item["id"], kind="tensor", blob=blob, dtype=dtype, shape=shape)
+    if kind == "bytes":
+        _check_fields(
+            item,
+            {"op", "id", "kind", "blob"},
+            {"op", "id", "kind", "blob"},
+            f"instruction {index}",
+        )
+        blob = item["blob"]
+        if not is_blob_hash(blob):
+            raise ValidationError(
+                f"bytes upload {item['id']!r}: 'blob' must be a lowercase SHA-256 digest"
+            )
+        return Upload(id=item["id"], kind="bytes", blob=blob)
     if kind == "library":
         _check_fields(
             item,

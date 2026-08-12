@@ -108,6 +108,25 @@ class Program:
                 "dtype": tensor_dtype,
                 "shape": tensor_shape,
             }
+        elif kind == "bytes":
+            if source is not None or entry is not None:
+                raise TypeError("bytes upload does not accept module fields")
+            if dtype is not None or shape is not None:
+                raise TypeError("bytes upload does not accept tensor fields")
+            if language != "python":
+                raise TypeError("bytes upload does not accept 'language'")
+            try:
+                raw = value if isinstance(value, bytes) else bytes(memoryview(value))
+            except TypeError as exc:
+                raise TypeError("bytes upload requires a bytes-like 'value'") from exc
+            blob_hash = compute_blob_hash(raw)
+            self._blobs.setdefault(blob_hash, raw)
+            instruction = {
+                "op": "upload",
+                "id": id,
+                "kind": "bytes",
+                "blob": blob_hash,
+            }
         elif kind == "library":
             if source is not None:
                 raise TypeError("library upload does not accept 'source'")
@@ -126,7 +145,7 @@ class Program:
                 "entry": entry,
             }
         else:
-            raise ValueError("upload kind must be 'module', 'tensor', or 'library'")
+            raise ValueError("upload kind must be 'module', 'tensor', 'bytes', or 'library'")
         self._add_id(id)
         self._instructions.append(instruction)
         return Register(id)

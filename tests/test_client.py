@@ -86,6 +86,27 @@ def test_tensor_cache_retry_and_numpy_result(server_url):
         np.testing.assert_array_equal(result, value)
 
 
+def test_bytes_cache_retry_and_result(server_url):
+    value = b"safetensors contents\x00\xff"
+    program = Program()
+    inspect_file = program.upload(
+        id="inspect_file",
+        kind="module",
+        source=(
+            "def main(data):\n    return {'size': len(data), 'format': data[:11].decode('ascii')}\n"
+        ),
+    )
+    file_data = program.upload(id="file", kind="bytes", value=value)
+    result = program.run(id="result", fn=inspect_file, args=[file_data])
+    program.return_(key="file", value=result)
+    with Client(server_url) as client:
+        first = client.execute(program)
+        second = client.execute(program)
+    expected = {"file": {"size": len(value), "format": "safetensors"}}
+    assert first.results == expected
+    assert second.results == expected
+
+
 @pytest.mark.parametrize("name", ML_DTYPE_NAMES)
 def test_ml_dtype_tensor_round_trips_through_the_server(server_url, name):
     """An ml_dtypes array survives upload, return, and decode with its dtype intact."""
@@ -228,6 +249,21 @@ def test_library_builder_hashes_bytes_and_carries_entry():
 
     with pytest.raises(ValueError, match="requires an identifier 'entry'"):
         Program().upload(id="k", kind="library", value=b"x")
+
+
+def test_bytes_builder_hashes_bytes_without_tensor_metadata():
+    value = bytearray(b"file contents")
+    program = Program()
+    program.upload(id="file", kind="bytes", value=value)
+    instruction = program.instructions[0]
+    assert instruction == {
+        "op": "upload",
+        "id": "file",
+        "kind": "bytes",
+        "blob": compute_blob_hash(bytes(value)),
+    }
+    with pytest.raises(TypeError, match="bytes-like"):
+        Program().upload(id="file", kind="bytes", value="text")
 
 
 def test_numpy_tensor_builder_uses_raw_byte_hash():

@@ -126,6 +126,25 @@ def test_tensor_return_has_metadata_hash_and_binary_part():
     assert outcome.binary_parts == {"return:0": raw}
 
 
+def test_bytes_upload_is_available_to_later_instructions_and_returns():
+    raw = b"file contents\x00\xff"
+    digest = compute_blob_hash(raw)
+    program = Program(
+        [
+            Upload("file", "bytes", blob=digest),
+            Return("file", ref("file")),
+        ],
+        blob_bytes={digest: raw},
+    )
+    outcome = execute(program, FakeRuntime(), UNSHARED_GPU)
+    assert outcome.results["file"] == {
+        "type": "bytes",
+        "part": "return:0",
+        "sha256": digest,
+    }
+    assert outcome.binary_parts == {"return:0": raw}
+
+
 def test_instruction_failure_stops_and_describes_the_instruction():
     outcome = execute(
         Program(
