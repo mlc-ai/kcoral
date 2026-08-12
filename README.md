@@ -140,27 +140,37 @@ tensor values are decoded as CPU `numpy.ndarray` objects.
 torch.from_numpy(value.view(np.uint8)).view(torch.bfloat16)
 ```
 
-### FlashInfer Trace client
+## FlashInfer Trace client
 
-The distribution includes a separate `flashinfer_bench` Python package containing
-the self-contained FlashInfer Trace data model and all benchmark orchestration.
-Its public benchmark call accepts one explicit definition-solution pair,
-generates one general server program per supplied workload, submits those
-programs concurrently, and returns `Trace` evaluation objects. The
-`benchmark_server` package receives no FlashInfer-specific API or scheduler.
+The distribution also provides the `flashinfer_trace` package. It loads the
+FlashInfer Trace directory format and evaluates one explicit definition and
+solution across that definition's workloads:
 
-```bash
-pip install benchmark-server
-python examples/flashinfer_client.py Example-FlashInfer-Trace add_one python_add_one
+```python
+from flashinfer_trace import FlashInferTraceClient, TraceSet
+
+trace_set = TraceSet.from_path("Example-FlashInfer-Trace")
+with FlashInferTraceClient("http://localhost:8000") as client:
+    traces = client.evaluate(trace_set, "add_one", "python_add_one")
+trace_set.add_traces(traces)
 ```
 
-The bundled package has no dependency on the external `flashinfer-bench` project.
-Every tensor uses the existing content-addressed upload flow: a request first
-sends only the SHA-256 content key, then sends only missing blobs after
-`CACHE_MISS`. Stable workload inputs retain the same content key across separate
-solution calls, so they reuse cached data. See the
-[FlashInfer client guide](docs/flashinfer.md) for the supported scope and
-extension points.
+The client uploads self-contained validation, input generation, compilation,
+correctness, and timing code with each workload program. Safetensors files use
+the content-addressed byte cache and are parsed inside the GPU worker. Correct
+solutions are measured with CUDA Profiling Tools Interface (CUPTI) kernel
+timing; failed correctness checks return without timing.
+
+The command-line entry point performs the same operation and appends the
+results to the trace directory:
+
+```bash
+python -m flashinfer_trace TRACE_SET DEFINITION SOLUTION [SERVER_URL]
+```
+
+The initial implementation supports single-file Python and Triton solutions,
+plus single-file CUDA solutions exported through TVM FFI. Dataset-wide
+selection and resume policy remain with the caller.
 
 ## Protocol summary
 

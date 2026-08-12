@@ -45,7 +45,7 @@ torch = { index = "pytorch-cu130" }
 
 [tool.setuptools.packages.find]
 where = ["python"]
-include = ["benchmark_server*", "flashinfer_bench*"]
+include = ["benchmark_server*", "flashinfer_trace*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["python"]
