@@ -28,6 +28,7 @@ gpu = [
   "apache-tvm==0.26.0rc0",
   "apache-tvm-ffi[cpp]==0.1.13.post2",
   "nvidia-cutlass-dsl[cu13]==4.7.0",
+  "cupti-python>=13.0.1",
 ]
 
 [tool.uv]

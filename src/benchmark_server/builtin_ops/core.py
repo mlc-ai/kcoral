@@ -43,7 +43,7 @@ def zeros(spec: Any) -> Any:
 
 @register_builtin("benchmark")
 def benchmark(mod: Any, *rest: Any) -> dict:
-    """Per-iteration CUPTI kernel timing (via triton's proton profiler). cfg:
+    """Per-iteration GPU activity timing from CUPTI. cfg:
     ``warmup_ms``/``repeat_ms`` budgets convert to iteration counts using a
     5-call estimate, or ``warmup``/``repeat`` set explicit counts; ``flush_l2``
     zeroes a 2x-L2 buffer before every call, outside the timed span."""
@@ -70,7 +70,7 @@ def benchmark(mod: Any, *rest: Any) -> dict:
                 flush.zero_()
             call()
         torch.cuda.synchronize()
-        times = _time_proton(call, repeat, flush)
+        times = _time_cupti(call, repeat, flush)
     except RuntimeError as exc:  # a tvm run error or torch "CUDA error: ..."
         raise ExecutionError("runtime", short(exc)) from exc
     return {
@@ -163,76 +163,138 @@ def _iteration_counts(call: Callable, cfg: dict, flush: Any) -> tuple[int, int]:
     return n_warmup, n_repeat
 
 
-def _time_proton(call: Callable, repeat: int, flush: Any) -> list[float]:
-    """Per-iteration GPU kernel times (ms) from CUPTI, one proton scope per call."""
-    import json
-    import os
-    import tempfile
-    import uuid
+def _time_cupti(call: Callable, repeat: int, flush: Any) -> list[float]:
+    """GPU activity span for each call, measured directly with CUPTI."""
+    import bisect
+    import sys
+    from collections import Counter
 
     import torch
 
     try:
-        import triton.profiler as proton
+        from cupti import cupti
     except ImportError as exc:
         raise ExecutionError(
             "unavailable",
-            "benchmark needs triton's proton profiler (bundled with CUDA torch builds)",
+            "benchmark needs cupti-python in the worker environment",
         ) from exc
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        path = os.path.join(tmpdir, "profile")
-        session = proton.start(path, context="shadow", data="tree")
-        if session is None:
-            raise ExecutionError(
-                "unavailable",
-                "proton could not start a CUPTI session "
-                "(another profiler attached to this process?)",
-            )
-        prefix = f"bench.{uuid.uuid4().hex}."
-        try:  # finalize even on failure, or the leaked session poisons the next one
-            for i in range(repeat):
+    activity_kinds = (
+        cupti.ActivityKind.RUNTIME,
+        cupti.ActivityKind.DRIVER,
+        cupti.ActivityKind.CONCURRENT_KERNEL,
+        cupti.ActivityKind.MEMCPY,
+        cupti.ActivityKind.MEMSET,
+    )
+    launch_records: list[tuple[int, int]] = []
+    gpu_records: list[tuple[int, int, int, tuple]] = []
+    iteration_windows: list[tuple[int, int]] = []
+
+    def request_buffer() -> tuple[int, int]:
+        return 8 * 1024 * 1024, 0
+
+    def complete_buffer(activities: list[Any]) -> None:
+        for activity in activities:
+            if activity.kind in (cupti.ActivityKind.RUNTIME, cupti.ActivityKind.DRIVER):
+                launch_records.append((activity.start, activity.correlation_id))
+            elif activity.kind in (
+                cupti.ActivityKind.CONCURRENT_KERNEL,
+                cupti.ActivityKind.MEMCPY,
+                cupti.ActivityKind.MEMSET,
+            ):
+                identity = (
+                    int(activity.kind),
+                    str(getattr(activity, "name", "")),
+                    int(getattr(activity, "copy_kind", 0)),
+                    int(getattr(activity, "bytes", 0)),
+                    int(getattr(activity, "value", 0)),
+                )
+                gpu_records.append(
+                    (activity.start, activity.end, activity.correlation_id, identity)
+                )
+
+    enabled_kinds = []
+    callbacks_registered = False
+    try:
+        try:
+            for activity_kind in activity_kinds:
+                cupti.activity_enable(activity_kind)
+                enabled_kinds.append(activity_kind)
+            cupti.activity_register_callbacks(request_buffer, complete_buffer)
+            callbacks_registered = True
+            for _ in range(repeat):
                 if flush is not None:
                     flush.zero_()
-                with proton.scope(f"{prefix}{i:08d}"):
-                    call()
-            torch.cuda.synchronize()
+                start = cupti.get_timestamp()
+                call()
+                end = cupti.get_timestamp()
+                torch.cuda.synchronize()
+                iteration_windows.append((start, end))
         finally:
-            proton.finalize(session)
-        with open(path + ".hatchet") as f:
-            tree = json.load(f)
+            active_exception = sys.exc_info()[0] is not None
+            cleanup_errors = []
+            if callbacks_registered:
+                try:
+                    torch.cuda.synchronize()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+                try:
+                    cupti.activity_flush_all(0)
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+            for activity_kind in reversed(enabled_kinds):
+                try:
+                    cupti.activity_disable(activity_kind)
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+            if enabled_kinds:
+                try:
+                    cupti.finalize()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+            if cleanup_errors and not active_exception:
+                raise ExecutionError(
+                    "unavailable", f"CUPTI cleanup failed: {short(cleanup_errors[0])}"
+                )
+    except cupti.cuptiError as exc:
+        raise ExecutionError("unavailable", f"CUPTI activity tracing failed: {short(exc)}") from exc
 
-    times = _proton_scope_times(tree, prefix)
-    if len(times) != repeat or not all(t > 0 for t in times):
-        raise ExecutionError(
-            "unavailable",
-            f"proton attributed kernel time to {len(times)}/{repeat} iterations",
-        )
+    launch_records.sort()
+    launch_starts = [record[0] for record in launch_records]
+    activities_by_correlation: dict[int, list[tuple[int, int, tuple]]] = {}
+    for start, end, correlation_id, identity in gpu_records:
+        activities_by_correlation.setdefault(correlation_id, []).append((start, end, identity))
+
+    times = []
+    expected_activities = None
+    for index, (start, end) in enumerate(iteration_windows):
+        left = bisect.bisect_left(launch_starts, start)
+        right = bisect.bisect_right(launch_starts, end)
+        correlation_ids = {launch_records[position][1] for position in range(left, right)}
+        activities = [
+            activity
+            for correlation_id in correlation_ids
+            for activity in activities_by_correlation.get(correlation_id, ())
+        ]
+        if not activities:
+            raise ExecutionError(
+                "unavailable", f"CUPTI recorded no GPU activity for benchmark iteration {index}"
+            )
+        current_activities = Counter(activity[2] for activity in activities)
+        if expected_activities is None:
+            expected_activities = current_activities
+        elif current_activities != expected_activities:
+            raise ExecutionError("runtime", "GPU activities changed between benchmark iterations")
+        span_ms = (
+            max(activity[1] for activity in activities)
+            - min(activity[0] for activity in activities)
+        ) / 1e6
+        if span_ms <= 0:
+            raise ExecutionError(
+                "unavailable", f"CUPTI recorded no positive time for benchmark iteration {index}"
+            )
+        times.append(span_ms)
     return times
-
-
-def _proton_scope_times(tree: Any, prefix: str) -> list[float]:
-    """Summed GPU kernel ms of every hatchet scope named ``prefix<i>``, in order."""
-    found: list[tuple[str, float]] = []
-
-    def leaf_ms(node: dict) -> float:
-        children = node.get("children", [])
-        if not children:
-            return node.get("metrics", {}).get("time (ns)", 0) / 1e6
-        return sum(leaf_ms(c) for c in children)
-
-    def visit(node: dict) -> None:
-        name = node.get("frame", {}).get("name", "")
-        if name.startswith(prefix):
-            found.append((name, leaf_ms(node)))
-            return
-        for c in node.get("children", []):
-            visit(c)
-
-    for node in tree:
-        if isinstance(node, dict):  # the top level may carry a device_info entry
-            visit(node)
-    return [t for _, t in sorted(found)]  # zero-padded names sort in iteration order
 
 
 def _read_spec(spec: Any) -> tuple[list[int], Any, Any]:

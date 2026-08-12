@@ -541,6 +541,56 @@ def test_benchmark_budget_counts_and_no_flush():
     assert timing["warmup"] >= 1 and timing["repeat"] > 10
 
 
+def test_direct_cupti_benchmarks_multiple_gpu_activities_twice():
+    import torch
+
+    from benchmark_server.builtin_ops import resolve
+
+    source = torch.randn(4096, dtype=torch.float32, device="cuda")
+    output = torch.empty_like(source)
+
+    def two_operations(source, output):
+        torch.add(source, 1.0, out=output)
+        torch.mul(output, 2.0, out=output)
+
+    measure = resolve("builtin.benchmark")
+    config = {"warmup": 1, "repeat": 3, "flush_l2": False}
+    first = measure(two_operations, source, output, config)
+    second = measure(two_operations, source, output, config)
+    assert first["latency_ms_median"] > 0 and first["repeat"] == 3
+    assert second["latency_ms_median"] > 0 and second["repeat"] == 3
+
+
+def test_direct_cupti_cleans_up_after_the_callable_fails():
+    import torch
+
+    from benchmark_server.builtin_ops import resolve
+    from benchmark_server.errors import ExecutionError
+
+    source = torch.randn(4096, dtype=torch.float32, device="cuda")
+    output = torch.empty_like(source)
+    calls = 0
+
+    def fail_during_measurement(source, output):
+        nonlocal calls
+        calls += 1
+        torch.add(source, 1.0, out=output)
+        if calls == 2:  # one warmup call, then fail inside the CUPTI session
+            raise RuntimeError("intentional benchmark failure")
+
+    measure = resolve("builtin.benchmark")
+    config = {"warmup": 1, "repeat": 2, "flush_l2": False}
+    with pytest.raises(ExecutionError) as error:
+        measure(fail_during_measurement, source, output, config)
+    assert error.value.kind == "runtime"
+
+    def add_one(source, output):
+        torch.add(source, 1.0, out=output)
+
+    recovered = measure(add_one, source, output, config)
+    assert recovered["latency_ms_median"] > 0 and recovered["repeat"] == 2
+
+
 def test_python_syntax_error_is_parse_failure():
     outcome = execute(
         Program([Upload("kernel", "module", source="def bad(:\n    pass\n")]),

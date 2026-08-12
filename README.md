@@ -28,6 +28,7 @@ depends on which builtins the programs use:
 | `compile_cuda` | `nvcc`, a host C++ compiler, and `ninja` as well |
 | `compile_cutedsl`, or a CuTeDSL library upload | `nvidia-cutlass-dsl` as well |
 | `compile_triton` | `triton`, which the CUDA PyTorch wheels already carry |
+| `benchmark` | `cupti-python` as well |
 
 A builtin whose requirement is absent answers `unavailable` and the rest of the
 server is unaffected, so a partial environment is a usable deployment.
@@ -44,8 +45,8 @@ uv sync
 
 ### Running GPU programs
 
-The `gpu` group adds PyTorch, TVM, TVM FFI, and CuTeDSL, which together cover
-every builtin and every kind of library upload:
+The `gpu` group adds PyTorch, TVM, TVM FFI, CuTeDSL, and the CUPTI Python
+bindings, which together cover every builtin and every kind of library upload:
 
 ```bash
 uv sync --group gpu

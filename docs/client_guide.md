@@ -131,9 +131,11 @@ available.
 
 ## Measuring
 
-`builtin.benchmark(mod, *tensors, cfg?)` reports **per-iteration GPU kernel time
-measured by CUPTI** (through triton's proton profiler) rather than wall time, so
-launch overhead and host-side work stay out of the number.
+`builtin.benchmark(mod, *tensors, cfg?)` reports the **per-iteration GPU
+activity span measured directly by CUPTI**. It associates the kernels, memory
+copies, and memory sets launched by one call and measures from the first GPU
+activity's start to the last one's end. Host-side work and the optional L2 flush
+stay outside that span.
 
 | `cfg` key | Default | Meaning |
 |---|---|---|

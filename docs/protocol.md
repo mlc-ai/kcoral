@@ -438,6 +438,9 @@ values are passed as literals.
 
 `benchmark` returns `latency_ms_median`, `latency_ms_mean`, `latency_ms_min`,
 `latency_ms_max`, `flush_l2`, `warmup`, and `repeat`.
+Each latency is the CUPTI-recorded span from the earliest to the latest GPU
+activity associated with one call. Kernel, memory-copy, and memory-set
+activities are included; host work and the L2 flush are excluded.
 
 `check_close` and `assert_close` return `passed`, `max_abs_err`, `max_rel_err`,
 `rtol`, and `atol`.

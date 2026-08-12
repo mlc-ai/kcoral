@@ -113,6 +113,7 @@ dependencies = [
 gpu = [
     { name = "apache-tvm", marker = "sys_platform == 'linux'" },
     { name = "apache-tvm-ffi", extra = ["cpp"], marker = "sys_platform == 'linux'" },
+    { name = "cupti-python", marker = "sys_platform == 'linux'" },
     { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "sys_platform == 'linux'" },
     { name = "torch", marker = "sys_platform == 'linux'" },
 ]
@@ -133,6 +134,7 @@ requires-dist = [
 gpu = [
     { name = "apache-tvm", specifier = "==0.26.0rc0" },
     { name = "apache-tvm-ffi", extras = ["cpp"], specifier = "==0.1.13.post2" },
+    { name = "cupti-python", specifier = ">=13.0.1" },
     { name = "nvidia-cutlass-dsl", extras = ["cu13"], specifier = "==4.7.0" },
     { name = "torch", specifier = ">=2.9", index = "https://download.pytorch.org/whl/cu130" },
 ]
@@ -272,6 +274,28 @@ nvrtc = [
 ]
 nvtx = [
     { name = "nvidia-nvtx", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+]
+
+[[package]]
+name = "cupti-python"
+version = "13.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cuda-bindings", marker = "sys_platform == 'linux'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform == 'linux'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' and sys_platform == 'linux'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-cupti", marker = "sys_platform == 'linux'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/17/3e76d40987da6faa74a596f82f360a6a54521fcb20c81ddcd40970fb9775/cupti_python-13.0.1-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:8b05b95fea151002142858e0a67f28e1bec6121793ead70af15402a9a3f0c1a4", size = 887152, upload-time = "2025-12-22T11:28:47.473Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/24/2d3b1152c9a03c66aa53c226e1bc954b505185ed759c89fff9cd1b2d9449/cupti_python-13.0.1-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:9e279a30c2bee3faf45c09b373446cc948cb0c718f6338c1488eb768a50e59d2", size = 941946, upload-time = "2025-12-22T11:28:49.181Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/6b/a2711900fca474cd21739175c858934cfc8e4103927cdc27ef23d77e38c8/cupti_python-13.0.1-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:6ed232b485c7d9ca913398e043bfd5ef8c1052034b2207348ec6f406546e6937", size = 889460, upload-time = "2025-12-22T11:28:51.021Z" },
+    { url = "https://files.pythonhosted.org/packages/78/39/fc8bcd90dce4e6d3e228df1914d640dfe2ffa3559078d6beb0f9b4c23e5e/cupti_python-13.0.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:13fd53521f8f81cfb426411e725e27ac2e8cec56a0eb15f5f5aec5647de1ae72", size = 944283, upload-time = "2025-12-22T11:28:52.68Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/61/77daadc1b9327ce48e15569aa395b20bef55e8b1f9b6df11982f40b6d70d/cupti_python-13.0.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:0881f464a02f7fdd4d4579f808298159cd6cb1530b142dea25b9a1179884440d", size = 835158, upload-time = "2025-12-22T11:28:54.349Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/03/8ac5665795e995ab37e0be132a2ea32088c6a6294da709039b11a9029c25/cupti_python-13.0.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:866900d19ac48b1ea1a24e7399a44db82a6716888a250c94b20d14f2f872b96e", size = 881406, upload-time = "2025-12-22T11:28:56.35Z" },
+    { url = "https://files.pythonhosted.org/packages/53/1d/e2054e46395a92760bc8b7825ed6a06464066da177fee8aa0e2b284642df/cupti_python-13.0.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:a544721d90209bcf4d59d2792f6e4735cfc36ee43cb41bdf34664f36bb448be0", size = 830199, upload-time = "2025-12-22T11:28:58.835Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/12/d2662e781eeefee4838e732d29a6b0d874b95692f28525365d176e9239f5/cupti_python-13.0.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:1bafb462d2d7fb9c360ad3cabbdce23b394258ba235eb4b814c3aaffe61ad8df", size = 869018, upload-time = "2025-12-22T11:29:03.035Z" },
 ]
 
 [[package]]
