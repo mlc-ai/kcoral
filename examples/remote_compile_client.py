@@ -134,8 +134,8 @@ def cuda_program() -> Program:
     src = program.upload(id="src", kind="tensor", value=np.arange(N, dtype=np.float32))
     dst = program.run(id="dst", fn="builtin.empty", args=[{"shape": [N], "dtype": "float32"}])
 
-    # Built for the worker GPU's arch, and cached on disk by source and flags:
-    # ~2.5s the first time, near-free after. `cfg` takes extra_cuda_cflags.
+    # Built for the worker GPU's arch, and cached on disk by source and flags, so
+    # recompiling the same source is much cheaper. `cfg` takes extra_cuda_cflags.
     compiled = program.run(id="compiled", fn="builtin.compile_cuda", args=[kernel])
     program.run(id="invoke", fn=compiled, args=[src, dst])
     timing = program.run(

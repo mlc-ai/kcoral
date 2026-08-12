@@ -4,8 +4,10 @@
 modules and tensors, runs registered functions, and explicitly returns selected
 values.
 
-The wire format and validation rules are defined in
-[`docs/protocol.md`](docs/protocol.md).
+[`docs/client_guide.md`](docs/client_guide.md) is the guide to writing one, and
+covers where to compile, which language to use, how to measure, and how failures
+arrive. [`docs/protocol.md`](docs/protocol.md) defines the wire format
+and validation rules.
 
 ## Install
 
@@ -104,17 +106,22 @@ print(response.status)
 print(response.results["answer"])
 ```
 
-A kernel compiled elsewhere can be uploaded instead of source, which keeps
-compilation off the benchmark GPU entirely:
+A kernel built elsewhere can be uploaded instead of source, which is the path
+when the build is customized beyond what a `compile_*` builtin expresses:
 
 ```python
-target = client.target()                      # {"arch": "sm_100a"} — build for this
+arch = client.target()["arch"]                # "sm_100a" — build the object for this
+so_bytes = pathlib.Path("add_one.so").read_bytes()
+
+program = Program()
 kernel = program.upload(id="kernel", kind="library", value=so_bytes, entry="add_one")
 program.run(id="invoke", fn=kernel, args=[x, y])   # no compile instruction
 ```
 
 The server builds nothing here; it loads the shared object and calls `entry`. The
-protocol document states what a library must export.
+protocol document states what a library must export, and
+[`examples/library_upload_client.py`](examples/library_upload_client.py) builds
+one end to end.
 
 `Program.upload()` and `Program.run()` return a `Register`, which can be passed
 to later instructions. `Program.return_()` adds an explicit result; run values
