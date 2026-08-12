@@ -212,6 +212,33 @@ types carried by `ml_dtypes`. To hand one to torch, reinterpret the raw bytes:
 torch.from_numpy(value.view(np.uint8)).view(torch.bfloat16)
 ```
 
+## Calling builtins from uploaded code
+
+An uploaded module executes in the worker process, where the server package
+itself is importable, so builtins can also be called directly rather than
+through `run` instructions:
+
+```python
+SOURCE = r"""
+from benchmark_server import builtin
+
+def main(x):
+    y = builtin.randn({"shape": [256], "dtype": "float32", "seed": 0})
+    return builtin.check_close(x, y)
+"""
+```
+
+`benchmark_server.builtin` resolves attributes through the same registry a
+`run` instruction uses, so `builtin.check_close` above is exactly the function
+`"builtin.check_close"` names on the wire — same behaviour, same error kinds.
+`dir()` on the module lists every registered name.
+
+One caveat: the `compile_*` builtins give the GPU up only when they run as
+their own instruction. Called from inside uploaded code, a compile runs while
+the worker holds the GPU, so its time counts against `lease_held_ms` and
+blocks other workers' measurements. Create tensors, compare, and time freely
+from code; keep compiles at the instruction level.
+
 ## Handling failures
 
 A submission ends in one of three ways, and the difference between them matters:
