@@ -437,10 +437,11 @@ values are passed as literals.
 | `builtin.assert_close` | same as `check_close` | comparison statistics; fails on mismatch |
 
 `benchmark` returns `latency_ms_median`, `latency_ms_mean`, `latency_ms_min`,
-`latency_ms_max`, `flush_l2`, `warmup`, and `repeat`.
-Each latency is the CUPTI-recorded span from the earliest to the latest GPU
-activity associated with one call. Kernel, memory-copy, and memory-set
-activities are included; host work and the L2 flush are excluded.
+`latency_ms_max`, `activities_stable`, `flush_l2`, `warmup`, and `repeat`.
+Each latency is the CUPTI span from the earliest to the latest GPU activity of
+one call — kernels, copies, and memsets, plus host time between them; the flush
+and host work outside those endpoints are excluded. `activities_stable` is
+`false` when the iterations did not all launch the same activities.
 
 `check_close` and `assert_close` return `passed`, `max_abs_err`, `max_rel_err`,
 `rtol`, and `atol`.

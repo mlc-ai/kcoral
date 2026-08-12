@@ -70,7 +70,7 @@ def benchmark(mod: Any, *rest: Any) -> dict:
                 flush.zero_()
             call()
         torch.cuda.synchronize()
-        times = _time_cupti(call, repeat, flush)
+        times, activities_stable = _time_cupti(call, repeat, flush)
     except RuntimeError as exc:  # a tvm run error or torch "CUDA error: ..."
         raise ExecutionError("runtime", short(exc)) from exc
     return {
@@ -78,6 +78,8 @@ def benchmark(mod: Any, *rest: Any) -> dict:
         "latency_ms_mean": statistics.mean(times),
         "latency_ms_min": min(times),
         "latency_ms_max": max(times),
+        # False when iterations covered differing work, so the stats mix kernels.
+        "activities_stable": activities_stable,
         "flush_l2": flush_l2,
         "warmup": warmup,
         "repeat": repeat,
@@ -163,8 +165,12 @@ def _iteration_counts(call: Callable, cfg: dict, flush: Any) -> tuple[int, int]:
     return n_warmup, n_repeat
 
 
-def _time_cupti(call: Callable, repeat: int, flush: Any) -> list[float]:
-    """GPU activity span for each call, measured directly with CUPTI."""
+def _time_cupti(call: Callable, repeat: int, flush: Any) -> tuple[list[float], bool]:
+    """Per-call GPU activity spans (ms), and whether every call launched the same
+    activities. Iterations are drained, so a span times one isolated call. Adopted
+    from flashinfer's ``bench_gpu_time_with_cupti``:
+    https://github.com/flashinfer-ai/flashinfer/blob/0659712/flashinfer/testing/utils.py
+    """
     import bisect
     import sys
     from collections import Counter
@@ -202,6 +208,7 @@ def _time_cupti(call: Callable, repeat: int, flush: Any) -> list[float]:
                 cupti.ActivityKind.MEMCPY,
                 cupti.ActivityKind.MEMSET,
             ):
+                # What counts as "the same" activity across iterations.
                 identity = (
                     int(activity.kind),
                     str(getattr(activity, "name", "")),
@@ -225,6 +232,7 @@ def _time_cupti(call: Callable, repeat: int, flush: Any) -> list[float]:
             for _ in range(repeat):
                 if flush is not None:
                     flush.zero_()
+                torch.cuda.synchronize()
                 start = cupti.get_timestamp()
                 call()
                 end = cupti.get_timestamp()
@@ -266,6 +274,7 @@ def _time_cupti(call: Callable, repeat: int, flush: Any) -> list[float]:
         activities_by_correlation.setdefault(correlation_id, []).append((start, end, identity))
 
     times = []
+    activities_stable = True
     expected_activities = None
     for index, (start, end) in enumerate(iteration_windows):
         left = bisect.bisect_left(launch_starts, start)
@@ -284,7 +293,7 @@ def _time_cupti(call: Callable, repeat: int, flush: Any) -> list[float]:
         if expected_activities is None:
             expected_activities = current_activities
         elif current_activities != expected_activities:
-            raise ExecutionError("runtime", "GPU activities changed between benchmark iterations")
+            activities_stable = False
         span_ms = (
             max(activity[1] for activity in activities)
             - min(activity[0] for activity in activities)
@@ -294,7 +303,7 @@ def _time_cupti(call: Callable, repeat: int, flush: Any) -> list[float]:
                 "unavailable", f"CUPTI recorded no positive time for benchmark iteration {index}"
             )
         times.append(span_ms)
-    return times
+    return times, activities_stable
 
 
 def _read_spec(spec: Any) -> tuple[list[int], Any, Any]:

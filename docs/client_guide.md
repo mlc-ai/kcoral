@@ -131,11 +131,12 @@ available.
 
 ## Measuring
 
-`builtin.benchmark(mod, *tensors, cfg?)` reports the **per-iteration GPU
-activity span measured directly by CUPTI**. It associates the kernels, memory
-copies, and memory sets launched by one call and measures from the first GPU
-activity's start to the last one's end. Host-side work and the optional L2 flush
-stay outside that span.
+`builtin.benchmark(mod, *tensors, cfg?)` reports the **per-iteration GPU activity
+span measured by CUPTI**: from the start of the first kernel, copy, or memset a
+call launches to the end of the last. The L2 flush and host work outside those
+endpoints stay out, but host time *between* two activities does not — several
+kernels with Python in between measures that too. Iterations are drained like
+flashinfer's `bench_gpu_time_with_cupti`, timing a kernel in isolation.
 
 | `cfg` key | Default | Meaning |
 |---|---|---|
@@ -146,9 +147,12 @@ stay outside that span.
 | `flush_l2` | `true` | Zero a buffer twice the size of L2 before every call, outside the timed span, so each call starts with a cold cache |
 
 It returns `latency_ms_median`, `latency_ms_mean`, `latency_ms_min` and
-`latency_ms_max`, along with the `flush_l2`, `warmup` and `repeat` it actually
-used.
+`latency_ms_max`, along with `activities_stable` and the `flush_l2`, `warmup`
+and `repeat` it actually used.
 
+- **Check `activities_stable`.** It is `false` when the timed iterations did not
+  all launch the same activities — a data-dependent kernel, say — so the stats
+  describe a mixture rather than one kernel.
 - **Prefer the millisecond budgets to explicit counts.** `warmup_ms` and
   `repeat_ms` adapt to the kernel, so a microsecond kernel and a millisecond
   kernel both get a sensible number of iterations. Set `warmup`/`repeat` when

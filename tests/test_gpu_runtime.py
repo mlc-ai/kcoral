@@ -559,6 +559,29 @@ def test_direct_cupti_benchmarks_multiple_gpu_activities_twice():
     second = measure(two_operations, source, output, config)
     assert first["latency_ms_median"] > 0 and first["repeat"] == 3
     assert second["latency_ms_median"] > 0 and second["repeat"] == 3
+    assert first["activities_stable"] and second["activities_stable"]
+
+
+def test_data_dependent_work_is_measured_and_flagged_unstable():
+    import torch
+
+    from benchmark_server.builtin_ops import resolve
+
+    source = torch.randn(4096, dtype=torch.float32, device="cuda")
+    output = torch.empty_like(source)
+    calls = 0
+
+    def sometimes_two_operations(source, output):
+        nonlocal calls
+        calls += 1
+        torch.add(source, 1.0, out=output)
+        if calls % 3 == 0:
+            torch.mul(output, 2.0, out=output)
+
+    measure = resolve("builtin.benchmark")
+    timing = measure(sometimes_two_operations, source, output, {"warmup": 1, "repeat": 9})
+    assert timing["latency_ms_median"] > 0
+    assert timing["activities_stable"] is False
 
 
 def test_direct_cupti_cleans_up_after_the_callable_fails():
