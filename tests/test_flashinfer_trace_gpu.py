@@ -289,18 +289,39 @@ def test_real_python_cuda_safetensors_and_incorrect_solution(
         profile_baseline=True,
         timeout_seconds=300,
     )
+    definition = trace_set.definitions["vector_add"]
+    workload_traces = trace_set.workloads["vector_add"]
+
+    def evaluate_solution(client: FlashInferTraceClient, solution_name: str) -> list[Trace]:
+        solution = trace_set.get_solution(solution_name)
+        assert solution is not None
+        return client.evaluate_many(
+            definition,
+            solution,
+            workload_traces,
+            resource_root=trace_set.root,
+        )
+
     with FlashInferTraceClient(gpu_server_url, config=config, max_workers=2) as client:
-        python_traces = client.evaluate(trace_set, "vector_add", "python_add")
+        python_solution = trace_set.get_solution("python_add")
+        assert python_solution is not None
+        single_python_trace = client.evaluate(
+            definition,
+            python_solution,
+            workload_traces[0],
+            resource_root=trace_set.root,
+        )
+        python_traces = evaluate_solution(client, "python_add")
         assert [trace.workload.uuid for trace in python_traces] == [
             "gpu-workload-0",
             "gpu-workload-1",
         ]
         statuses_after_first_solution = _request_statuses(log_directory)
-        triton_traces = client.evaluate(trace_set, "vector_add", "triton_add")
-        cuda_traces = client.evaluate(trace_set, "vector_add", "cuda_add")
-        incorrect_traces = client.evaluate(trace_set, "vector_add", "incorrect_add")
+        triton_traces = evaluate_solution(client, "triton_add")
+        cuda_traces = evaluate_solution(client, "cuda_add")
+        incorrect_traces = evaluate_solution(client, "incorrect_add")
 
-    for trace in (*python_traces, *triton_traces, *cuda_traces):
+    for trace in (single_python_trace, *python_traces, *triton_traces, *cuda_traces):
         assert trace.evaluation is not None
         assert trace.evaluation.status == EvaluationStatus.PASSED, trace.evaluation.log
         assert trace.evaluation.performance is not None
@@ -312,8 +333,8 @@ def test_real_python_cuda_safetensors_and_incorrect_solution(
         assert trace.evaluation.status == EvaluationStatus.INCORRECT_NUMERICAL
         assert trace.evaluation.performance is None
 
-    assert statuses_after_first_solution.count("CACHE_MISS") in {1, 2}
-    assert statuses_after_first_solution.count("COMPLETED") == 2
+    assert statuses_after_first_solution.count("CACHE_MISS") == 1
+    assert statuses_after_first_solution.count("COMPLETED") == 3
     all_statuses = _request_statuses(log_directory)
-    assert all_statuses.count("CACHE_MISS") == statuses_after_first_solution.count("CACHE_MISS")
-    assert all_statuses.count("COMPLETED") == 8
+    assert all_statuses.count("CACHE_MISS") == 1
+    assert all_statuses.count("COMPLETED") == 9

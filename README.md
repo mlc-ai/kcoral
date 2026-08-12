@@ -140,18 +140,32 @@ torch.from_numpy(value.view(np.uint8)).view(torch.bfloat16)
 
 ## FlashInfer Trace client
 
-The distribution also provides the `flashinfer_trace` package. It loads the
-FlashInfer Trace directory format and evaluates one explicit definition and
-solution across that definition's workloads:
+The distribution also provides the `flashinfer_trace` package. Its primary
+client path accepts an in-memory definition, solution, and workload trace, then
+returns a new in-memory trace containing the evaluation:
 
 ```python
 from flashinfer_trace import FlashInferTraceClient, TraceSet
 
 trace_set = TraceSet.from_path("Example-FlashInfer-Trace")
+definition = trace_set.definitions["add_one"]
+solution = trace_set.get_solution("python_add_one")
+input_trace = trace_set.workloads["add_one"][0]
+
 with FlashInferTraceClient("http://localhost:8000") as client:
-    traces = client.evaluate(trace_set, "add_one", "python_add_one")
-trace_set.add_traces(traces)
+    output_trace = client.evaluate(
+        definition,
+        solution,
+        input_trace,
+        resource_root=trace_set.root,
+    )
+
+trace_set.add_traces([output_trace])
 ```
+
+`evaluate_many()` applies the same in-memory contract concurrently while
+preserving input order. Directory lookup and persistence remain separate in
+`TraceSet`; the command-line entry point composes those operations.
 
 The client uploads self-contained validation, input generation, compilation,
 correctness, and timing code with each workload program. Safetensors files use

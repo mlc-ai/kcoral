@@ -244,6 +244,18 @@ def test_program_reads_changed_safetensors_content(tmp_path: Path) -> None:
     assert second_blob == hashlib.sha256(changed_bytes).hexdigest()
 
 
+def test_in_memory_evaluate_rejects_a_trace_for_another_definition() -> None:
+    definition = _definition()
+    solution = _solution()
+    input_trace = Trace(definition="another_definition", workload=_workload())
+    client = FlashInferTraceClient()
+    try:
+        with pytest.raises(ValueError, match="trace targets definition"):
+            client.evaluate(definition, solution, input_trace)
+    finally:
+        client.close()
+
+
 @pytest.mark.parametrize("resource_path", ["../outside.safetensors", "/tmp/outside.safetensors"])
 def test_program_rejects_resource_paths_outside_trace_set(
     tmp_path: Path, resource_path: str
