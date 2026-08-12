@@ -30,6 +30,8 @@ def test_all_flags_reach_config():
             "34",
             "--worker-wait-timeout-seconds",
             "5",
+            "--workers-per-gpu",
+            "3",
             "--worker-termination-grace-seconds",
             "2",
             "--max-request-bytes",
@@ -48,6 +50,7 @@ def test_all_flags_reach_config():
     assert config.default_timeout_seconds == 12
     assert config.max_timeout_seconds == 34
     assert config.worker_wait_timeout_seconds == 5
+    assert config.workers_per_gpu == 3
     assert config.worker_termination_grace_seconds == 2
     assert config.max_request_bytes == 1000
     assert config.max_response_bytes == 2000

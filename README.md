@@ -64,7 +64,7 @@ benchmark-server --host 0.0.0.0 --port 8000
 Useful options include:
 
 ```text
---gpus 0,1                  CUDA devices exposed to workers
+--gpus 0,1                        CUDA devices exposed to workers
 --workers-per-gpu 8               Workers sharing each GPU
 --worker-wait-timeout-seconds 30  Queue wait before HTTP 503 responses
 --default-timeout-seconds 300     Default execution timeout

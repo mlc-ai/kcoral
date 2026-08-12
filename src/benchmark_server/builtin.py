@@ -1,7 +1,8 @@
 """Builtins as module attributes, for code that runs on the worker.
 
-An uploaded module executes in the server process, so it can call builtins
-directly rather than through ``run`` instructions::
+An uploaded module executes in the worker process, where the server package is
+importable, so it can call builtins directly rather than through ``run``
+instructions::
 
     from benchmark_server import builtin
 

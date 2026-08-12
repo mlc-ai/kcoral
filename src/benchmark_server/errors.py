@@ -1,9 +1,7 @@
 """Shared exception types.
 
-The distinction that matters: a *submitted-code* fault vs an *engine* fault.
-Instructions raise :class:`ExecutionError` when the uploaded code/kernel is at
-fault; the engine reports that as a ``FAILED`` instruction. Anything else is an
-engine fault.
+Instructions raise :class:`ExecutionError` for a submitted-code fault, reported as
+a ``FAILED`` instruction; anything else that escapes one is reported ``engine``.
 """
 
 from __future__ import annotations
@@ -26,7 +24,3 @@ class ExecutionError(Exception):
         super().__init__(message)
         self.kind = kind
         self.message = message
-
-
-class EngineError(Exception):
-    """An engine/infrastructure fault (a server bug, OOM, driver fault)."""

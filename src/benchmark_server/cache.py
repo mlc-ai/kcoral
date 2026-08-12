@@ -48,10 +48,6 @@ class ByteCache:
             self._size += len(data)
             self._evict_locked()
 
-    def missing(self, keys: list[str]) -> list[str]:
-        with self._lock:
-            return [k for k in keys if k not in self._entries]
-
     def pin(self, keys: list[str]) -> None:
         with self._lock:
             for k in keys:
@@ -76,11 +72,6 @@ class ByteCache:
             if e.refcount == 0:
                 del self._entries[key]
                 self._size -= len(e.data)
-
-    # introspection (tests)
-    @property
-    def size_bytes(self) -> int:
-        return self._size
 
     def __contains__(self, key: str) -> bool:
         return key in self._entries

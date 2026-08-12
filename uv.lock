@@ -45,7 +45,7 @@ wheels = [
 
 [[package]]
 name = "apache-tvm"
-version = "0.26.0rc0"
+version = "0.26.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "apache-tvm-ffi", marker = "sys_platform == 'linux'" },
@@ -56,8 +56,8 @@ dependencies = [
     { name = "typing-extensions", marker = "sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/10/0f/d692d1278f9e981a5055de649dcd08c6300b220f1dc0b13d7b6d98391d02/apache_tvm-0.26.0rc0-py3-none-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:11e2ec967c6dbdfca2a5fadbe29e2e9d726ae965d2355ed8e0add7708b649c2e", size = 92679375, upload-time = "2026-08-05T22:13:06.147Z" },
-    { url = "https://files.pythonhosted.org/packages/2a/38/28507c360b9a9b3d7c74d527ef843499cb1a5c8f3c207ba93d2ea75faf12/apache_tvm-0.26.0rc0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:598f3e988151428f03d0e07153049447e8c13bd0f3f774b5edb31ab68ed0b359", size = 99028868, upload-time = "2026-08-05T22:13:13.749Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/53/ff1fd9c8d0f4460cbac998c3b66d26d4b71ed96caf60c6bab854da8ec375/apache_tvm-0.26.0-py3-none-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:72c48f816cda98ee8d09283d52b9e56fdb1daca074d483a18e2817b5dbeac45b", size = 92684605, upload-time = "2026-08-11T02:34:15.382Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/e3/36542e85214811983789c94abfca6ddaf0ef6268c37ef870742c0daf4430/apache_tvm-0.26.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f4b497602e8a6edc0f5cba797ec60388ea0e57d9b9599c6a8af156425e726149", size = 99027487, upload-time = "2026-08-11T02:34:21.326Z" },
 ]
 
 [[package]]
@@ -132,7 +132,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 gpu = [
-    { name = "apache-tvm", specifier = "==0.26.0rc0" },
+    { name = "apache-tvm", specifier = ">=0.26.0" },
     { name = "apache-tvm-ffi", extras = ["cpp"], specifier = "==0.1.13.post2" },
     { name = "cupti-python", specifier = ">=13.0.1" },
     { name = "nvidia-cutlass-dsl", extras = ["cu13"], specifier = "==4.7.0" },

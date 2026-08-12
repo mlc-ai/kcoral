@@ -4,7 +4,8 @@ Launch it where a TIRX-enabled tvm is importable — either pip-installed
 (``pip install apache-tvm``) or a from-source build (put its Python tree on
 ``PYTHONPATH`` and point ``TVM_LIBRARY_PATH`` at the built library directory). The
 front-end process itself touches no GPU; each worker process imports torch/tvm
-and owns one GPU.
+and is pinned to one GPU, which ``--workers-per-gpu`` of them share by taking
+turns through its lease.
 
     benchmark-server --gpus 1,2,3
 
@@ -40,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gpus",
         default=os.environ.get("BENCH_GPUS", "0"),
-        help="comma-separated physical GPU ids, one worker each (default: 0)",
+        help="comma-separated physical GPU ids the workers pin (default: 0)",
     )
     parser.add_argument("--cache-capacity-bytes", type=int, default=_DEFAULTS.cache_capacity_bytes)
     parser.add_argument(

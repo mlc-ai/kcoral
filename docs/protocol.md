@@ -20,8 +20,8 @@ for, and the `versions` a client may want to match:
   "queue_length": 0,
   "target": {"arch": "sm_100a"},
   "versions": {"torch": "2.13.0+cu130", "cuda": "13.0",
-               "tvm": "0.26.0rc0", "tvm_ffi": "0.1.13.post2",
-               "cutlass": "4.7.0"},
+               "tvm": "0.26.0", "tvm_ffi": "0.1.13.post2",
+               "triton": "3.6.0", "cutlass": "4.7.0"},
   "gpus": [{"gpu_id": 0, "lease_depth": 1}],
   "workers": [{"gpu_id": 0, "status": "busy", "uptime_seconds": 12.4},
               {"gpu_id": 0, "status": "idle", "uptime_seconds": 12.4}]
@@ -797,12 +797,14 @@ print(result.stdout, result.stderr)
 Program.upload(id=..., kind="module", source=..., entry=None, language="python") -> Register
 Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
 Program.upload(id=..., kind="bytes", value=...) -> Register
+Program.upload(id=..., kind="library", value=..., entry=...) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
 
 Client(base_url, *, headers=None, connect_timeout_seconds=10)
 Client.execute(program, *, timeout_seconds=None, output_limit_bytes=None) -> ProgramResult
-Client.health()
+Client.health() -> dict
+Client.target() -> dict          # the health response's `target`, e.g. {"arch": "sm_100a"}
 Client.close() -> None
 ```
 
@@ -811,4 +813,5 @@ starts without blob parts, retries a `CACHE_MISS` with the missing parts, and
 falls back to all local blobs if the cache changes between requests. Returned
 tensors decode to CPU `numpy.ndarray` (`bfloat16` and `float8_*` via
 `ml_dtypes`). Server errors, transport failures, and malformed responses use
-`BenchmarkServerError`, `TransportError`, and `ProtocolError`.
+`BenchmarkServerError`, `TransportError`, and `ProtocolError`, which
+`benchmark_server` exports alongside `Client` and `Program`.

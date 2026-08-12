@@ -1,19 +1,11 @@
 from benchmark_server.cache import ByteCache
 
 
-def test_put_get_missing():
-    c = ByteCache(1000)
-    assert c.get("k") is None
-    c.put("k", b"abc")
-    assert c.get("k") == b"abc"
-    assert c.missing(["k", "z"]) == ["z"]
-
-
 def test_lru_eviction_over_budget():
     c = ByteCache(10, max_object_bytes=10)
     c.put("a", b"aaaaa")  # 5
     c.put("b", b"bbbbb")  # 5 -> total 10 (at budget)
-    c.get("a")  # a becomes most-recently-used
+    assert c.get("a") == b"aaaaa"  # and a becomes most-recently-used
     c.put("c", b"ccccc")  # 15 > 10 -> evict LRU unpinned (b)
     assert "a" in c and "c" in c and "b" not in c
 

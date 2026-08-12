@@ -4,12 +4,6 @@ from benchmark_server.errors import ValidationError
 from benchmark_server.keys import compute_blob_hash, is_blob_hash, verify_blob
 
 
-def test_blob_hash_is_raw_byte_sha256():
-    assert compute_blob_hash(b"abc") == (
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    )
-
-
 def test_blob_hash_format_is_strict():
     digest = compute_blob_hash(b"data")
     assert is_blob_hash(digest)

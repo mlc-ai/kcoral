@@ -4,16 +4,27 @@ A request is a program (an instruction sequence). See ``docs/protocol.md``.
 """
 
 from .app import create_app
-from .client import Client, Program, ProgramResult, Register
+from .client import (
+    BenchmarkServerError,
+    Client,
+    Program,
+    ProgramResult,
+    ProtocolError,
+    Register,
+    TransportError,
+)
 from .config import ServerConfig
 from .schemas import parse_program
 
 __all__ = [
+    "BenchmarkServerError",
     "Client",
     "Program",
     "ProgramResult",
+    "ProtocolError",
     "Register",
     "ServerConfig",
+    "TransportError",
     "create_app",
     "parse_program",
 ]

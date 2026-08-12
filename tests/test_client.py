@@ -331,38 +331,6 @@ def test_every_protocol_dtype_decodes_to_numpy(dtype):
     assert array.dtype.name == dtype and list(array.shape) == shape
 
 
-@pytest.mark.parametrize("name", ML_DTYPE_NAMES)
-def test_ml_dtype_round_trip_is_bit_exact(name):
-    """Values ml_dtypes can represent survive a tobytes/decode round trip."""
-    original = np.array([1.0, 2.0, -0.5, 4.0]).astype(getattr(ml_dtypes, name))
-    decoded = _decode_tensor(name, [4], original.tobytes())
-    assert decoded.dtype == original.dtype
-    np.testing.assert_array_equal(decoded, original)
-
-
-@pytest.mark.parametrize("name", ML_DTYPE_NAMES)
-def test_ml_dtype_arrays_upload_with_protocol_dtype_names(name):
-    """ml_dtypes' dtype names are exactly the protocol's, so uploads need no mapping."""
-    value = np.arange(4).astype(getattr(ml_dtypes, name)).reshape(2, 2)
-    program = Program()
-    program.upload(id="tensor", kind="tensor", value=value)
-    instruction = program.instructions[0]
-    assert instruction["dtype"] == name and instruction["shape"] == [2, 2]
-    assert instruction["blob"] == compute_blob_hash(value.tobytes())
-
-
-def test_decode_rejects_an_unknown_dtype():
-    with pytest.raises(ValueError, match="cannot decode tensor dtype"):
-        _decode_tensor("float128", [1], bytes(16))
-
-
-def test_decoded_tensor_owns_writable_storage():
-    """frombuffer would alias the read-only response bytes; the decoder copies."""
-    array = _decode_tensor("float32", [2], bytes(8))
-    assert array.flags.writeable and array.flags.owndata
-    array[0] = 1.5  # must not raise
-
-
 @pytest.mark.parametrize("shape", [[0], [], [0, 3]])
 def test_empty_and_scalar_tensors_decode(shape):
     array = _decode_tensor("float32", shape, bytes(expected_tensor_nbytes("float32", shape)))

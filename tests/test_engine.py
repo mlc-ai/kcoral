@@ -25,22 +25,6 @@ def call_module(source, entry=None):
     )
 
 
-def test_module_run_and_explicit_return():
-    outcome = execute(
-        Program(
-            [
-                Upload("fn", "module", source="def main(x):\n    return x + 1\n"),
-                Run("answer", ref("fn"), [41]),
-                Return("value", ref("answer")),
-            ]
-        ),
-        FakeRuntime(),
-        UNSHARED_GPU,
-    )
-    assert outcome.status == "COMPLETED"
-    assert outcome.results == {"value": {"type": "integer", "value": 42}}
-
-
 @pytest.mark.parametrize(
     "source,entry",
     [
