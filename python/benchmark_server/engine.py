@@ -92,11 +92,7 @@ def execute(program: Program, runtime: Runtime, lease: Lease) -> ProgramOutcome:
                                 instruction.shape,
                             )
                     elif isinstance(instruction, Run):
-                        fn = _resolve_fn(instruction.fn, env, runtime)
-                        args = [
-                            env[arg.id] if isinstance(arg, Ref) else arg for arg in instruction.args
-                        ]
-                        env[instruction.id] = fn(*args)
+                        env[instruction.id] = _invoke(instruction, env, runtime)
                     elif isinstance(instruction, Return):
                         # A return that fails mid-encode must leave nothing behind: it
                         # adds no results entry, so a binary part it already registered
@@ -116,6 +112,7 @@ def execute(program: Program, runtime: Runtime, lease: Lease) -> ProgramOutcome:
                 )
     finally:
         _drop_gpu(runtime, lease)
+        env.clear()
         runtime.reset()
 
     # A failure stops the program but keeps the returns that already ran.
@@ -129,6 +126,15 @@ def execute(program: Program, runtime: Runtime, lease: Lease) -> ProgramOutcome:
         stdout_truncated=captured.stdout_truncated,
         stderr_truncated=captured.stderr_truncated,
     )
+
+
+def _invoke(instruction: Run, env: dict[str, Any], runtime: Runtime) -> Any:
+    """Call one ``Run``'s target, in its own frame so the handle and arguments die
+    with the instruction. Left in ``execute``'s locals they keep an uploaded
+    module's namespace alive past the ``runtime.reset()`` meant to free it."""
+    fn = _resolve_fn(instruction.fn, env, runtime)
+    args = [env[arg.id] if isinstance(arg, Ref) else arg for arg in instruction.args]
+    return fn(*args)
 
 
 def _place(instruction: Instruction, runtime: Runtime, lease: Lease) -> None:

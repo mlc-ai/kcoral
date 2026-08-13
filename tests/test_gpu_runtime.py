@@ -816,3 +816,96 @@ def test_benchmark_budgets_survive_the_l2_flush():
     # not the tens an inflated estimate produced.
     assert result["latency_ms_median"] < 0.1
     assert result["warmup"] > 100 and result["repeat"] > 500
+
+
+MODULE_SCOPE_ALLOCATION = """import torch
+
+WEIGHTS = torch.empty(1024**3, dtype=torch.int8, device="cuda")  # 1 GiB at module scope
+
+
+def main():
+    return WEIGHTS.sum()
+"""
+
+
+def test_module_scope_allocations_do_not_survive_the_request():
+    """Without the `gc.collect()` in `reset()` this grew by the full 1 GiB per
+    request: the namespace cycle kept the module-scope tensor live."""
+    import torch
+
+    rt = runtime()
+    rt.reset()
+    baseline = torch.cuda.mem_get_info()[0]
+    for _ in range(3):
+        program = Program(
+            [
+                Upload("kernel", "module", source=MODULE_SCOPE_ALLOCATION),
+                Run("total", ref("kernel"), []),
+                Return("total", ref("total")),
+            ]
+        )
+        outcome = execute(program, rt, UNSHARED_GPU)
+        assert outcome.status == "COMPLETED", outcome.error
+    # Generous slack: free memory is shared with co-tenants, and the regression
+    # this guards is 1 GiB per request.
+    leaked = baseline - torch.cuda.mem_get_info()[0]
+    assert leaked < 512 * 1024**2, f"{leaked / 1024**2:.0f} MiB not reclaimed across 3 requests"
+
+
+# How flashinfer-bench-evolve's worker loads a candidate: a uniquely-named module
+# from a temp file, registered in sys.modules and popped in a finally.
+CANDIDATE_HARNESS = '''
+import importlib.util, pathlib, sys, tempfile
+
+CANDIDATE_SOURCE = """
+import torch
+
+STATE = torch.empty(512 * 1024**2, dtype=torch.int8, device="cuda")  # setup state
+
+
+def run():
+    return STATE.sum()
+"""
+
+
+def main(tag):
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".py", prefix=f"candidate_{tag}_", delete=False
+    ) as handle:
+        handle.write(CANDIDATE_SOURCE)
+        path = pathlib.Path(handle.name)
+    name = f"_tirx_candidate_{path.stem}"
+    spec = importlib.util.spec_from_file_location(name, path)
+    loaded = importlib.util.module_from_spec(spec)
+    sys.modules[name] = loaded
+    try:
+        spec.loader.exec_module(loaded)
+        prepare = lambda: loaded.run()  # noqa: E731 - the closure the suite is given
+        return float(prepare())
+    finally:
+        sys.modules.pop(name, None)
+        path.unlink(missing_ok=True)
+'''
+
+
+def test_popped_candidate_modules_do_not_survive_the_request():
+    """The kernel-evolution pattern: one candidate loaded and unregistered per
+    request. Unregistering drops one reference but leaves the namespace cycle, so
+    without the collection every candidate's setup state stayed resident."""
+    import torch
+
+    rt = runtime()
+    rt.reset()
+    baseline = torch.cuda.mem_get_info()[0]
+    for tag in range(4):
+        program = Program(
+            [
+                Upload("harness", "module", source=CANDIDATE_HARNESS),
+                Run("evaluated", ref("harness"), [tag]),
+                Return("evaluated", ref("evaluated")),
+            ]
+        )
+        outcome = execute(program, rt, UNSHARED_GPU)
+        assert outcome.status == "COMPLETED", outcome.error
+    leaked = baseline - torch.cuda.mem_get_info()[0]
+    assert leaked < 512 * 1024**2, f"{leaked / 1024**2:.0f} MiB not reclaimed across 4 candidates"

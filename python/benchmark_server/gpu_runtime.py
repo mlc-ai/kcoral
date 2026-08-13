@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import ast
 import ctypes
+import gc
 import hashlib
 import importlib.metadata
 import linecache
 import tempfile
+from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -25,10 +27,11 @@ from .errors import ExecutionError
 ENTRY_POINT = "main"
 
 # Libraries already dlopened by this worker, keyed by the SHA-256 of their bytes.
-# Purely a memoization — every request carries the bytes it needs. Entries live as
-# long as the worker: a dlopened object cannot be unmapped while values it produced
-# are still reachable.
-_LOADED_LIBRARIES: dict[str, Any] = {}
+# Purely a memoization — every request carries the bytes it needs. Bounded because
+# each entry holds a loaded GPU module; an evicted one stays mapped for as long as
+# the functions it produced are reachable.
+_LOADED_LIBRARIES: OrderedDict[str, Any] = OrderedDict()
+_LOADED_LIBRARIES_LIMIT = 32
 _LIBRARY_DIR: Path | None = None
 _LOADERS_READY = False
 
@@ -101,6 +104,10 @@ class GPURuntime:
         for fname in self._seeded_fnames:
             linecache.cache.pop(fname, None)
         self._seeded_fnames.clear()
+        # An uploaded module's namespace is a reference cycle (its functions'
+        # `__globals__` point back at it), so only a collection frees the
+        # module-scope tensors `empty_cache()` would otherwise find still live.
+        gc.collect()
         try:
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
@@ -187,6 +194,10 @@ def _warm_up() -> None:
         tvm.runtime.empty((1,), "float32", tvm.cuda(0))
     except Exception:
         pass  # tvm is optional
+    # The imports above live as long as the worker; freezing them out of the
+    # collector's reach is what keeps the `gc.collect()` in `reset()` cheap.
+    gc.collect()
+    gc.freeze()
 
 
 def _require_torch_and_ffi() -> None:
@@ -249,7 +260,9 @@ def _materialize_library(data: bytes, entry: str) -> Any:
     _register_library_loaders()
     digest = hashlib.sha256(data).hexdigest()
     cached = _LOADED_LIBRARIES.get(digest)
-    if cached is None:
+    if cached is not None:
+        _LOADED_LIBRARIES.move_to_end(digest)
+    else:
         path = _library_dir() / f"{digest}.so"
         path.write_bytes(data)
         try:
@@ -259,6 +272,8 @@ def _materialize_library(data: bytes, entry: str) -> Any:
         finally:
             path.unlink(missing_ok=True)  # the mapping outlives the file
         _LOADED_LIBRARIES[digest] = cached
+        if len(_LOADED_LIBRARIES) > _LOADED_LIBRARIES_LIMIT:
+            _LOADED_LIBRARIES.popitem(last=False)
     if not cached.implements_function(entry):
         raise ExecutionError("compile", f"the uploaded library exports no function {entry!r}")
     return getattr(cached, entry)
