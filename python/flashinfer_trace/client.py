@@ -45,7 +45,7 @@ class FlashInferTraceClient:
         source_directory = Path(__file__).parent
         self._module_sources = {
             name: (source_directory / f"{name}.py").read_text(encoding="utf-8")
-            for name in ("schema", "data", "compile", "benchmark")
+            for name in ("schema", "workload", "compile", "benchmark")
         }
 
     def __enter__(self) -> FlashInferTraceClient:
@@ -86,10 +86,10 @@ class FlashInferTraceClient:
             source=self._module_sources["schema"],
             entry="normalize_evaluation",
         )
-        data_module = program.upload(
-            id="trace_data",
+        workload_module = program.upload(
+            id="trace_workload",
             kind="module",
-            source=self._module_sources["data"],
+            source=self._module_sources["workload"],
             entry="make_input_generator",
         )
         compile_module = program.upload(
@@ -134,7 +134,7 @@ class FlashInferTraceClient:
         ]
         input_generator = program.run(
             id="input_generator",
-            fn=data_module,
+            fn=workload_module,
             args=[normalized_handle, resource_manifest, *resource_handles],
         )
         reference_source = program.upload(

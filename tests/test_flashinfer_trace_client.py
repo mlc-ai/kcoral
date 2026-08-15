@@ -154,7 +154,7 @@ def test_program_uploads_remote_modules_and_real_safetensors_bytes(tmp_path: Pat
         for instruction in instructions
         if instruction["op"] == "upload" and instruction["kind"] == "module"
     }
-    assert {"trace_schema", "trace_data", "trace_compile", "trace_benchmark"} <= set(modules)
+    assert {"trace_schema", "trace_workload", "trace_compile", "trace_benchmark"} <= set(modules)
     assert all(module.get("entry") for module in modules.values())
 
     bytes_upload = next(
