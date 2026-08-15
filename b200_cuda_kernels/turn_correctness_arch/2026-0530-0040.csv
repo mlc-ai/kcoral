@@ -1,0 +1,25 @@
+trajectory_id,turn,correctness,speedup,arch_tag
+exp_000,0,Kernel Execution Timeout,0.0,
+exp_000,1,Compilation error,,
+exp_000,2,Numerical error,0.0,
+exp_000,3,Numerical error,0.0,
+exp_000,4,Numerical error,0.0,
+exp_000,5,Numerical error,0.0,
+exp_000,6,Numerical error,0.0,
+exp_000,7,Numerical error,0.0,
+exp_001,0,Runtime error,0.0,"H, B"
+exp_001,1,Runtime error,0.0,"H, B"
+exp_001,2,Runtime error,0.0,"H, B"
+exp_001,3,Runtime error,0.0,"H, B"
+exp_001,4,Correct,0.2627271558217414,"H, B"
+exp_001,5,Numerical error,0.0,"H, B"
+exp_001,6,Kernel Execution Timeout,0.0,"H, B"
+exp_001,7,Correct,0.2804289723073381,"H, B"
+exp_002,0,Compilation error,,
+exp_002,1,Numerical error,0.0,
+exp_002,2,Runtime error,0.0,
+exp_002,3,Numerical error,0.0,
+exp_002,4,Numerical error,0.0,
+exp_002,5,Runtime error,0.0,
+exp_002,6,Numerical error,0.0,
+exp_002,7,Numerical error,0.0,

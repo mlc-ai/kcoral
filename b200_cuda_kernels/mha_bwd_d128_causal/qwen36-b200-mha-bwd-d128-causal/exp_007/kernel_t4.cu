@@ -1,0 +1,506 @@
+#include <cuda_runtime.h>
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+#include <device_launch_parameters.h>
+#include <cuda.h>
+#include <cstdint>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <tvm/ffi/tvm_ffi.h>
+#include <tvm/ffi/extra/c_env_api.h>
+
+#define CUDA_CHECK(call) \
+    do {                                                         \
+        cudaError_t e = call;                                    \
+        if (e != cudaSuccess) {                                   \
+            fprintf(stderr, "CUDA error: %s at %s:%d\n",         \
+                    cudaGetErrorString(e), __FILE__, __LINE__);   \
+            exit(1);                                              \
+        }                                                        \
+    } while(0)
+
+namespace mha_bwd_impl {
+
+__device__ __forceinline__ float bf16_to_f32(__nv_bfloat16 x) {
+    return __bfloat162float(x);
+}
+
+__device__ __forceinline__ __nv_bfloat16 f32_to_bf16(float x) {
+    return __float2bfloat16(x);
+}
+
+__device__ __forceinline__ float fast_exp2f(float x) {
+    float y;
+    asm volatile("ex2.approx.ftz.f32 %0, %1;" : "=f"(y) : "f"(x));
+    return y;
+}
+
+__device__ __forceinline__ float fast_expf(float x) {
+    return fast_exp2f(x * 1.4426950408889634f);
+}
+
+// ---- Generic GEMM: C[M,N] = A[M,K] @ B[N,K]^T, BF16->FP32, with optional causal mask ----
+template<int BM, int BN, int BK_TILE, bool APPLY_CAUSAL>
+__global__ void gemm_bf16_to_fp32_kernel(
+    const __nv_bfloat16* __restrict__ A,
+    const __nv_bfloat16* __restrict__ B,
+    float* __restrict__ C,
+    int M, int N, int K, float alpha) {
+
+    extern __shared__ __nv_bfloat16 gemm_smem[];
+    __nv_bfloat16* As = gemm_smem;
+    __nv_bfloat16* Bs = &gemm_smem[BM * BK_TILE];
+
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+
+    int row_global = blockIdx.x * BM + ty;
+    int col_global = blockIdx.y * BN + tx;
+
+    float acc = 0.0f;
+
+    int num_tiles = (K + BK_TILE - 1) / BK_TILE;
+    for (int t = 0; t < num_tiles; t++) {
+        int k_start = t * BK_TILE;
+
+        if (ty < BM && tx < BK_TILE) {
+            int ar = row_global;
+            int ac = k_start + tx;
+            As[ty * BK_TILE + tx] = (ar < M && ac < K) ? A[ar * K + ac] : f32_to_bf16(0.0f);
+        }
+
+        if (tx < BN && ty < BK_TILE) {
+            int br = col_global;
+            int bc = k_start + ty;
+            Bs[tx * BK_TILE + ty] = (br < N && bc < K) ? B[br * K + bc] : f32_to_bf16(0.0f);
+        }
+
+        __syncthreads();
+
+        #pragma unroll
+        for (int k = 0; k < BK_TILE; k++) {
+            acc += bf16_to_f32(As[ty * BK_TILE + k]) * bf16_to_f32(Bs[tx * BK_TILE + k]);
+        }
+
+        __syncthreads();
+    }
+
+    if (row_global < M && col_global < N) {
+        float val = acc * alpha;
+        if (APPLY_CAUSAL && col_global >= row_global) {
+            val = -1e30f;
+        }
+        C[row_global * N + col_global] = val;
+    }
+}
+
+// ---- Softmax kernel: P[i,j] = exp(S[i,j] - L[i]), with causal mask already in S ----
+__global__ void softmax_from_S_and_L_kernel(
+    float* __restrict__ P,
+    const float* __restrict__ L,
+    int S_dim) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (i < S_dim && j < S_dim) {
+        int idx = i * S_dim + j;
+        float s_val = P[idx];
+        float lse = L[i];
+        P[idx] = fast_expf(s_val - lse);
+    }
+}
+
+// ---- Element-wise multiply: C = A * B ----
+__global__ void elemwise_mul_kernel(const float* __restrict__ A, const float* __restrict__ B,
+                                    float* __restrict__ C, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        C[idx] = A[idx] * B[idx];
+    }
+}
+
+// ---- dO @ V^T: dP_raw[S,S] ----
+template<int BM, int BN, int BK_TILE>
+__global__ void compute_dO_VT_kernel(
+    const __nv_bfloat16* __restrict__ dO,
+    const __nv_bfloat16* __restrict__ V,
+    float* __restrict__ out,
+    int S, int d) {
+
+    extern __shared__ __nv_bfloat16 dov_smem[];
+    __nv_bfloat16* dO_smem = dov_smem;
+    __nv_bfloat16* V_smem = &dov_smem[BM * BK_TILE];
+
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+
+    int row_global = blockIdx.x * BM + ty;
+    int col_global = blockIdx.y * BN + tx;
+
+    float acc = 0.0f;
+
+    int num_tiles = (d + BK_TILE - 1) / BK_TILE;
+    for (int t = 0; t < num_tiles; t++) {
+        int k_start = t * BK_TILE;
+
+        if (ty < BM && tx < BK_TILE) {
+            int dr = row_global;
+            int dk = k_start + tx;
+            dO_smem[ty * BK_TILE + tx] = (dr < S && dk < d) ? dO[dr * d + dk] : f32_to_bf16(0.0f);
+        }
+
+        if (tx < BN && ty < BK_TILE) {
+            int vr = col_global;
+            int vk = k_start + ty;
+            V_smem[tx * BK_TILE + ty] = (vr < S && vk < d) ? V[vr * d + vk] : f32_to_bf16(0.0f);
+        }
+
+        __syncthreads();
+
+        #pragma unroll
+        for (int k = 0; k < BK_TILE; k++) {
+            acc += bf16_to_f32(dO_smem[ty * BK_TILE + k]) * bf16_to_f32(V_smem[tx * BK_TILE + k]);
+        }
+
+        __syncthreads();
+    }
+
+    if (row_global < S && col_global < S) {
+        out[row_global * S + col_global] = acc;
+    }
+}
+
+// ---- P^T @ dO for dV ----
+template<int BM, int BN, int BK_TILE>
+__global__ void compute_PT_dO_kernel(
+    const float* __restrict__ P,
+    const __nv_bfloat16* __restrict__ dO,
+    float* __restrict__ out,
+    int S, int d) {
+
+    extern __shared__ char ptdo_smem[];
+    float* P_smem = (float*)ptdo_smem;
+    __nv_bfloat16* dO_smem = reinterpret_cast<__nv_bfloat16*>(
+        (char*)ptdo_smem + BM * BK_TILE * sizeof(float));
+
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+
+    int row_global = blockIdx.x * BM + ty;
+    int col_global = blockIdx.y * BN + tx;
+
+    if (row_global >= S || col_global >= d) return;
+
+    float acc = 0.0f;
+
+    int num_tiles = (S + BK_TILE - 1) / BK_TILE;
+    for (int t = 0; t < num_tiles; t++) {
+        int k_start = t * BK_TILE;
+
+        // P^T[k, row] = P[row, k]
+        if (ty < BM && tx < BK_TILE) {
+            int pk = k_start + tx;
+            if (pk < S) {
+                P_smem[ty * BK_TILE + tx] = P[row_global * S + pk];
+            } else {
+                P_smem[ty * BK_TILE + tx] = 0.0f;
+            }
+        }
+
+        // dO[k, col]
+        if (tx < BN && ty < BK_TILE) {
+            int dok = k_start + ty;
+            if (dok < S) {
+                dO_smem[tx * BK_TILE + ty] = dO[dok * d + col_global];
+            } else {
+                dO_smem[tx * BK_TILE + ty] = f32_to_bf16(0.0f);
+            }
+        }
+
+        __syncthreads();
+
+        #pragma unroll
+        for (int k = 0; k < BK_TILE; k++) {
+            acc += P_smem[ty * BK_TILE + k] * bf16_to_f32(dO_smem[tx * BK_TILE + k]);
+        }
+
+        __syncthreads();
+    }
+
+    if (row_global < S && col_global < d) {
+        out[row_global * d + col_global] = acc;
+    }
+}
+
+// ---- dP^T @ Q for dK ----
+template<int BM, int BN, int BK_TILE>
+__global__ void compute_dPT_Q_kernel(
+    const float* __restrict__ dP,
+    const __nv_bfloat16* __restrict__ Q,
+    float* __restrict__ out,
+    int S, int d) {
+
+    extern __shared__ char dptq_smem[];
+    float* dP_smem = (float*)dptq_smem;
+    __nv_bfloat16* Q_smem = reinterpret_cast<__nv_bfloat16*>((char*)dptq_smem + BM * BK_TILE * sizeof(float));
+
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+
+    int row_global = blockIdx.x * BM + ty;
+    int col_global = blockIdx.y * BN + tx;
+
+    if (row_global >= S || col_global >= d) return;
+
+    float acc = 0.0f;
+
+    int num_tiles = (S + BK_TILE - 1) / BK_TILE;
+    for (int t = 0; t < num_tiles; t++) {
+        int k_start = t * BK_TILE;
+
+        if (ty < BM && tx < BK_TILE) {
+            int dpk = k_start + tx;
+            if (dpk < S) {
+                dP_smem[ty * BK_TILE + tx] = dP[row_global * S + dpk];
+            } else {
+                dP_smem[ty * BK_TILE + tx] = 0.0f;
+            }
+        }
+
+        if (tx < BN && ty < BK_TILE) {
+            int qk = k_start + ty;
+            if (qk < S) {
+                Q_smem[tx * BK_TILE + ty] = Q[qk * d + col_global];
+            } else {
+                Q_smem[tx * BK_TILE + ty] = f32_to_bf16(0.0f);
+            }
+        }
+
+        __syncthreads();
+
+        #pragma unroll
+        for (int k = 0; k < BK_TILE; k++) {
+            acc += dP_smem[ty * BK_TILE + k] * bf16_to_f32(Q_smem[tx * BK_TILE + k]);
+        }
+
+        __syncthreads();
+    }
+
+    if (row_global < S && col_global < d) {
+        out[row_global * d + col_global] = acc;
+    }
+}
+
+// ---- dP @ K for dQ ----
+template<int BM, int BN, int BK_TILE>
+__global__ void compute_dP_K_kernel(
+    const float* __restrict__ dP,
+    const __nv_bfloat16* __restrict__ K,
+    float* __restrict__ out,
+    int S, int d) {
+
+    extern __shared__ char dpk_smem[];
+    float* dP_smem = (float*)dpk_smem;
+    __nv_bfloat16* K_smem = reinterpret_cast<__nv_bfloat16*>((char*)dpk_smem + BM * BK_TILE * sizeof(float));
+
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+
+    int row_global = blockIdx.x * BM + ty;
+    int col_global = blockIdx.y * BN + tx;
+
+    if (row_global >= S || col_global >= d) return;
+
+    float acc = 0.0f;
+
+    int num_tiles = (S + BK_TILE - 1) / BK_TILE;
+    for (int t = 0; t < num_tiles; t++) {
+        int k_start = t * BK_TILE;
+
+        if (ty < BM && tx < BK_TILE) {
+            int dpk = k_start + tx;
+            if (dpk < S) {
+                dP_smem[ty * BK_TILE + tx] = dP[row_global * S + dpk];
+            } else {
+                dP_smem[ty * BK_TILE + tx] = 0.0f;
+            }
+        }
+
+        if (tx < BN && ty < BK_TILE) {
+            int kk = k_start + ty;
+            if (kk < S) {
+                K_smem[tx * BK_TILE + ty] = K[kk * d + col_global];
+            } else {
+                K_smem[tx * BK_TILE + ty] = f32_to_bf16(0.0f);
+            }
+        }
+
+        __syncthreads();
+
+        #pragma unroll
+        for (int k = 0; k < BK_TILE; k++) {
+            acc += dP_smem[ty * BK_TILE + k] * bf16_to_f32(K_smem[tx * BK_TILE + k]);
+        }
+
+        __syncthreads();
+    }
+
+    if (row_global < S && col_global < d) {
+        out[row_global * d + col_global] = acc;
+    }
+}
+
+// ---- Helpers ----
+__global__ void bf16_zero_kernel(__nv_bfloat16* ptr, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) ptr[idx] = f32_to_bf16(0.0f);
+}
+
+__global__ void fp32_to_bf16_copy_kernel(const float* __restrict__ src, __nv_bfloat16* __restrict__ dst, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        dst[idx] = f32_to_bf16(src[idx]);
+    }
+}
+
+// ================================================================
+//                        HOST-SIDE RUN
+// ================================================================
+
+void run(tvm::ffi::TensorView Q, tvm::ffi::TensorView K, tvm::ffi::TensorView V,
+         tvm::ffi::TensorView O, tvm::ffi::TensorView dO, tvm::ffi::TensorView L,
+         tvm::ffi::TensorView dQ, tvm::ffi::TensorView dK, tvm::ffi::TensorView dV) {
+
+    CUDA_CHECK(cudaSetDevice(Q.device().device_id));
+
+    int B = (int)Q.size(0);
+    int H = (int)Q.size(1);
+    int S = (int)Q.size(2);
+    int d = (int)Q.size(3);
+
+    const __nv_bfloat16* Q_d = static_cast<const __nv_bfloat16*>(Q.data_ptr());
+    const __nv_bfloat16* K_d = static_cast<const __nv_bfloat16*>(K.data_ptr());
+    const __nv_bfloat16* V_d = static_cast<const __nv_bfloat16*>(V.data_ptr());
+    const __nv_bfloat16* dO_d = static_cast<const __nv_bfloat16*>(dO.data_ptr());
+    const float* L_d = static_cast<const float*>(L.data_ptr());
+    __nv_bfloat16* dQ_d = static_cast<__nv_bfloat16*>(dQ.data_ptr());
+    __nv_bfloat16* dK_d = static_cast<__nv_bfloat16*>(dK.data_ptr());
+    __nv_bfloat16* dV_d = static_cast<__nv_bfloat16*>(dV.data_ptr());
+
+    cudaStream_t stream = static_cast<cudaStream_t>(
+        TVMFFIEnvGetStream(Q.device().device_type, Q.device().device_id));
+
+    float inv_std = 1.0f / sqrtf((float)d);
+
+    // Workspace for ONE (B,H) pair only
+    int64_t el_S2 = (int64_t)S * S;
+    int64_t el_Sd = (int64_t)S * d;
+    int64_t ws_elems = el_S2 + el_S2 + el_Sd + el_Sd + el_Sd;
+    size_t ws_bytes = (size_t)ws_elems * sizeof(float);
+
+    float* ws = nullptr;
+    CUDA_CHECK(cudaMallocAsync(&ws, ws_bytes, stream));
+
+    float* S_P     = ws;
+    float* dP_buf  = ws + (int64_t)el_S2;
+    float* dV_acc  = ws + 2 * (int64_t)el_S2;
+    float* dK_acc  = ws + 2 * (int64_t)el_S2 + (int64_t)el_Sd;
+    float* dQ_acc  = ws + 2 * (int64_t)el_S2 + 2 * (int64_t)el_Sd;
+
+    constexpr int BM = 16, BN = 16, BK = 32;
+    dim3 blk_s(BN, BM);
+    size_t gemm_smem_bytes = (size_t)(BM + BN) * BK * sizeof(__nv_bfloat16);
+    size_t mixed_smem_bytes = (size_t)BM * BK * sizeof(float) + (size_t)BN * BK * sizeof(__nv_bfloat16);
+
+    dim3 gemm_grid((S + BM - 1) / BM, (S + BN - 1) / BN);
+    dim3 mixed_grid((S + BM - 1) / BM, (d + BN - 1) / BN);
+
+    // Initialize outputs to zero
+    int n_out = B * H * S * d;
+    int conv_blks = (n_out + 255) / 256;
+    bf16_zero_kernel<<<conv_blks, 256, 0, stream>>>(dQ_d, n_out);
+    bf16_zero_kernel<<<conv_blks, 256, 0, stream>>>(dK_d, n_out);
+    bf16_zero_kernel<<<conv_blks, 256, 0, stream>>>(dV_d, n_out);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    for (int bh = 0; bh < B * H; bh++) {
+        const __nv_bfloat16* Q_b = Q_d + bh * S * d;
+        const __nv_bfloat16* K_b = K_d + bh * S * d;
+        const __nv_bfloat16* V_b = V_d + bh * S * d;
+        const __nv_bfloat16* dO_b = dO_d + bh * S * d;
+        const float* L_b = L_d + bh * S;
+
+        __nv_bfloat16* dQ_b = dQ_d + bh * S * d;
+        __nv_bfloat16* dK_b = dK_d + bh * S * d;
+        __nv_bfloat16* dV_b = dV_d + bh * S * d;
+
+        // Zero accumulators
+        CUDA_CHECK(cudaMemsetAsync(dV_acc, 0, (size_t)el_Sd * sizeof(float), stream));
+        CUDA_CHECK(cudaMemsetAsync(dK_acc, 0, (size_t)el_Sd * sizeof(float), stream));
+        CUDA_CHECK(cudaMemsetAsync(dQ_acc, 0, (size_t)el_Sd * sizeof(float), stream));
+
+        // Phase 1: S = QK^T/sqrt(d) with causal mask → softmax → P
+        gemm_bf16_to_fp32_kernel<BM, BN, BK, true><<<gemm_grid, blk_s, gemm_smem_bytes, stream>>>(
+            Q_b, K_b, S_P, S, S, d, inv_std);
+        CUDA_CHECK(cudaGetLastError());
+
+        {
+            dim3 sb(16, 16);
+            dim3 sg((S + 15) / 16, (S + 15) / 16);
+            softmax_from_S_and_L_kernel<<<sg, sb, 0, stream>>>(S_P, L_b, S);
+            CUDA_CHECK(cudaGetLastError());
+        }
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        // Phase 2: dP_raw = dO @ V^T
+        compute_dO_VT_kernel<BM, BN, BK><<<gemm_grid, blk_s, gemm_smem_bytes, stream>>>(
+            dO_b, V_b, dP_buf, S, d);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        // Phase 3: dP = dP_raw * P
+        {
+            int n_elem = S * S;
+            int ew_blks = (n_elem + 255) / 256;
+            elemwise_mul_kernel<<<ew_blks, 256, 0, stream>>>(dP_buf, S_P, dP_buf, n_elem);
+            CUDA_CHECK(cudaGetLastError());
+        }
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        // Phase 4: dV = P^T @ dO
+        compute_PT_dO_kernel<BM, BN, BK><<<mixed_grid, blk_s, mixed_smem_bytes, stream>>>(
+            S_P, dO_b, dV_acc, S, d);
+        CUDA_CHECK(cudaGetLastError());
+
+        // Phase 5: dK = dP^T @ Q
+        compute_dPT_Q_kernel<BM, BN, BK><<<mixed_grid, blk_s, mixed_smem_bytes, stream>>>(
+            dP_buf, Q_b, dK_acc, S, d);
+        CUDA_CHECK(cudaGetLastError());
+
+        // Phase 6: dQ = dP @ K
+        compute_dP_K_kernel<BM, BN, BK><<<mixed_grid, blk_s, mixed_smem_bytes, stream>>>(
+            dP_buf, K_b, dQ_acc, S, d);
+        CUDA_CHECK(cudaGetLastError());
+
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        // Write results back as BF16
+        int n_elem_Sd = S * d;
+        int blks_Sd = (n_elem_Sd + 255) / 256;
+
+        fp32_to_bf16_copy_kernel<<<blks_Sd, 256, 0, stream>>>(dV_acc, dV_b, n_elem_Sd);
+        fp32_to_bf16_copy_kernel<<<blks_Sd, 256, 0, stream>>>(dK_acc, dK_b, n_elem_Sd);
+        fp32_to_bf16_copy_kernel<<<blks_Sd, 256, 0, stream>>>(dQ_acc, dQ_b, n_elem_Sd);
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    CUDA_CHECK(cudaFreeAsync(ws, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+}
+
+}  // namespace mha_bwd_impl
+
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(run, mha_bwd_impl::run);

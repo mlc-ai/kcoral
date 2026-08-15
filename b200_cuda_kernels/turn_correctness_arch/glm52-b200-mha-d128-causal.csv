@@ -1,0 +1,97 @@
+trajectory_id,turn,correctness,speedup,arch_tag
+exp_000,0,Kernel Execution Timeout,0.0,
+exp_000,1,Kernel Execution Timeout,0.0,
+exp_000,2,Compilation error,,
+exp_000,3,Numerical error,0.0,
+exp_000,4,Correct,0.024372826386645337,A
+exp_000,5,Numerical error,0.0,
+exp_000,6,Numerical error,0.0,
+exp_000,7,Correct,0.03673521571867714,A
+exp_001,0,Kernel Execution Timeout,0.0,
+exp_001,1,Kernel Execution Timeout,0.0,
+exp_001,2,Numerical error,0.0,
+exp_001,3,Numerical error,0.0,
+exp_001,4,Numerical error,0.0,
+exp_001,5,Numerical error,0.0,
+exp_001,6,Numerical error,0.0,
+exp_001,7,Numerical error,0.0,
+exp_002,0,Correct,0.007051054835096735,G
+exp_002,1,Numerical error,0.0,
+exp_002,2,Runtime error,0.0,
+exp_002,3,Numerical error,0.0,
+exp_002,4,Numerical error,0.0,
+exp_002,5,Correct,0.014056431934817338,A
+exp_002,6,Correct,0.03160935053850047,A
+exp_002,7,Correct,0.035597206549323156,A
+exp_003,0,Numerical error,0.0,
+exp_003,1,Numerical error,0.0,
+exp_003,2,Numerical error,0.0,
+exp_003,3,Correct,0.01124578442579811,A
+exp_003,4,Numerical error,0.0,
+exp_003,5,Numerical error,0.0,
+exp_003,6,Numerical error,0.0,
+exp_003,7,Correct,0.01471040190339427,A
+exp_004,0,Correct,0.09797692425230956,"H, B"
+exp_004,1,Compilation error,,
+exp_004,2,Numerical error,0.0,
+exp_004,3,Compilation error,,
+exp_004,4,Numerical error,0.0,
+exp_004,5,Numerical error,0.0,
+exp_004,6,Numerical error,0.0,
+exp_004,7,Numerical error,0.0,
+exp_005,0,Kernel Execution Timeout,0.0,
+exp_005,1,Correct,0.006347239512818532,G
+exp_005,2,Runtime error,0.0,
+exp_005,3,Numerical error,0.0,
+exp_005,4,Correct,0.006062509273222404,G
+exp_005,5,Numerical error,0.0,
+exp_005,6,Numerical error,0.0,
+exp_005,7,Numerical error,0.0,
+exp_006,0,Kernel Execution Timeout,0.0,
+exp_006,1,Correct,0.01543528662239246,A
+exp_006,2,Correct,0.016784689289001474,A
+exp_006,3,Correct,0.01715750082966007,A
+exp_006,4,Compilation error,,
+exp_006,5,Numerical error,0.0,
+exp_006,6,Correct,0.017155777160865866,A
+exp_006,7,Numerical error,0.0,
+exp_007,0,Numerical error,0.0,
+exp_007,1,Numerical error,0.0,
+exp_007,2,Correct,0.04049250487199421,A
+exp_007,3,Correct,0.04401593685233659,A
+exp_007,4,Compilation error,,
+exp_007,5,Runtime error,0.0,
+exp_007,6,Numerical error,0.0,
+exp_007,7,Correct,0.04454562967770063,A
+exp_008,0,Correct,0.0058287035896517885,G
+exp_008,1,Compilation error,,
+exp_008,2,Numerical error,0.0,
+exp_008,3,Numerical error,0.0,
+exp_008,4,Numerical error,0.0,
+exp_008,5,Extraction error,,
+exp_008,6,Numerical error,0.0,
+exp_008,7,Runtime error,0.0,
+exp_009,0,Kernel Execution Timeout,0.0,
+exp_009,1,Numerical error,0.0,
+exp_009,2,Numerical error,0.0,
+exp_009,3,Numerical error,0.0,
+exp_009,4,Numerical error,0.0,
+exp_009,5,Numerical error,0.0,
+exp_009,6,Numerical error,0.0,
+exp_009,7,Numerical error,0.0,
+exp_010,0,Numerical error,0.0,
+exp_010,1,Kernel Execution Timeout,0.0,
+exp_010,2,Kernel Execution Timeout,0.0,
+exp_010,3,Extraction error,,
+exp_010,4,Kernel Execution Timeout,0.0,
+exp_010,5,Kernel Execution Timeout,0.0,
+exp_010,6,Kernel Execution Timeout,0.0,
+exp_010,7,Kernel Execution Timeout,0.0,
+exp_011,0,Correct,0.006695222996118439,G
+exp_011,1,Compilation error,,
+exp_011,2,Numerical error,0.0,
+exp_011,3,Numerical error,0.0,
+exp_011,4,Correct,0.012886416445793275,A
+exp_011,5,Correct,0.014211465895127014,A
+exp_011,6,Correct,0.029234574304223604,A
+exp_011,7,Correct,0.06920235562218714,A

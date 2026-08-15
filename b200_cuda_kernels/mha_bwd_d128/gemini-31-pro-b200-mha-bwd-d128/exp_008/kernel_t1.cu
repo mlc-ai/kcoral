@@ -1,0 +1,552 @@
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+#include <cuda.h>
+#include <cstdint>
+#include <stdio.h>
+#include <tvm/ffi/extra/c_env_api.h>
+#include <tvm/ffi/tvm_ffi.h>
+
+#define CUDA_CHECK(call) do {                                      \
+    cudaError_t _e = (call);                                       \
+    if (_e != cudaSuccess) {                                       \
+        fprintf(stderr, "CUDA error %s at %s:%d\n",               \
+                cudaGetErrorString(_e), __FILE__, __LINE__);       \
+        exit(1);                                                   \
+    }                                                              \
+} while(0)
+
+namespace tvm_ffi_mha_bwd {
+
+// -------------------------------------------------------------------------
+// Helper functions (Barriers, TMEM, MMA)
+// -------------------------------------------------------------------------
+
+__device__ __forceinline__ void init_smem_barrier_fn(uint64_t* bar, uint32_t count) {
+    asm volatile("mbarrier.init.shared.b64 [%0], %1;"
+        :: "r"((uint32_t)__cvta_generic_to_shared(&bar[0])), "r"(count));
+}
+
+__device__ __forceinline__ void fence_smem_barrier_init_fn() {
+    asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
+}
+
+__device__ __forceinline__ void mbarrier_arrive_and_expect_tx_fn(uint64_t* bar, uint32_t tx_bytes) {
+    asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;"
+        :: "r"((uint32_t)__cvta_generic_to_shared(&bar[0])), "r"(tx_bytes) : "memory");
+}
+
+__device__ __forceinline__ void mbarrier_wait_fn(uint64_t* bar, uint32_t phase) {
+    asm volatile(
+        "{\n"
+        ".reg .pred P;\n"
+        "WAIT_%=:\n"
+        "mbarrier.try_wait.parity.shared.b64 P, [%0], %1;\n"
+        "@!P bra WAIT_%=;\n"
+        "}\n"
+        :: "r"((uint32_t)__cvta_generic_to_shared(&bar[0])), "r"(phase));
+}
+
+__device__ __forceinline__ void tma_load_5d_fn(const CUtensorMap* d, uint64_t* bar, void* smem, int32_t c0, int32_t c1, int32_t c2, int32_t c3, int32_t c4) {
+    asm volatile(
+        "cp.async.bulk.tensor.5d.shared::cluster.global.mbarrier::complete_tx::bytes [%0], [%1, {%3, %4, %5, %6, %7}], [%2];"
+        :: "r"((uint32_t)__cvta_generic_to_shared(smem)),
+        "l"((uint64_t)d),
+        "r"((uint32_t)__cvta_generic_to_shared(&bar[0])),
+        "r"(c0), "r"(c1), "r"(c2), "r"(c3), "r"(c4) : "memory");
+}
+
+__device__ __forceinline__ void tmem_alloc_cg1_fn(uint32_t* dst_smem, int ncols) {
+    uint32_t a = (uint32_t)__cvta_generic_to_shared(dst_smem);
+    asm volatile("tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%0], %1;"
+                 :: "r"(a), "r"(ncols));
+}
+
+__device__ __forceinline__ void tmem_dealloc_cg1_fn(uint32_t addr, int ncols) {
+    asm volatile("tcgen05.dealloc.cta_group::1.sync.aligned.b32 %0, %1;"
+                 :: "r"(addr), "r"(ncols));
+}
+
+__device__ __forceinline__ uint64_t make_smem_desc_sm100_fn(void* smem_ptr, uint32_t lbo, uint32_t sbo) {
+    uint64_t d = 0;
+    uint32_t addr = (uint32_t)__cvta_generic_to_shared(smem_ptr);
+    d |= (uint64_t)(addr & 0x3FFFF) >> 4;
+    d |= (uint64_t)((lbo & 0x3FFFF) >> 4) << 16;
+    d |= (uint64_t)((sbo & 0x3FFFF) >> 4) << 32;
+    d |= (uint64_t)1 << 46;   // version = 1 (SM100)
+    
+    // Pattern start address base offset handling
+    uint64_t base_offset = (addr >> 7) & 0x7;
+    d |= (base_offset << 49);
+    
+    d |= (uint64_t)2 << 61;   // layout_type = SWIZZLE_128B
+    return d;
+}
+
+__device__ __forceinline__ uint32_t make_instr_desc_fn(uint32_t M, uint32_t N) {
+    uint32_t d = 0;
+    d |= (1u << 4);    // c_format = FP32
+    d |= (1u << 7);    // a_format = BF16
+    d |= (1u << 10);   // b_format = BF16
+    d |= ((N / 8) << 17);
+    d |= ((M / 16) << 24);
+    return d;
+}
+
+__device__ __forceinline__ void mma_128x128_f16(
+    uint32_t tmem_c, void* smem_a, void* smem_b,
+    bool a_mn_major, bool b_mn_major,
+    uint32_t accum) 
+{
+    if (threadIdx.x != 0) return;
+
+    // Split the 128x128 multiplication into four 64x64 multiplications to respect
+    // the max dimension limits (M<=64 or N<=64) when passing MN-Major descriptors.
+    uint32_t idesc = make_instr_desc_fn(64, 64);
+    if (a_mn_major) idesc |= (1u << 15);
+    if (b_mn_major) idesc |= (1u << 16);
+
+    for (int m = 0; m < 128; m += 64) {
+        for (int n = 0; n < 128; n += 64) {
+            uint32_t tmem_dest = (m << 16) | (tmem_c + n); 
+            
+            for (int k = 0; k < 8; ++k) {
+                uint32_t offset_a;
+                if (!a_mn_major) {
+                    offset_a = m * 256 + (k * 16) * 2;
+                } else {
+                    offset_a = (k * 16) * 256 + m * 2;
+                }
+                
+                uint32_t offset_b;
+                if (!b_mn_major) {
+                    offset_b = n * 256 + (k * 16) * 2;
+                } else {
+                    offset_b = (k * 16) * 256 + n * 2;
+                }
+
+                uint32_t a_lbo, a_sbo;
+                if (!a_mn_major) {
+                    a_sbo = 1024;
+                    a_lbo = 1;
+                } else {
+                    a_sbo = 128 * 8;
+                    a_lbo = 2 * a_sbo; // (16 / 8) * a_sbo
+                }
+                
+                uint32_t b_lbo, b_sbo;
+                if (!b_mn_major) {
+                    b_sbo = 1024;
+                    b_lbo = 1;
+                } else {
+                    b_sbo = 128 * 8;
+                    b_lbo = 2 * b_sbo; // (16 / 8) * b_sbo
+                }
+
+                uint64_t desc_a = make_smem_desc_sm100_fn((char*)smem_a + offset_a, a_lbo, a_sbo);
+                uint64_t desc_b = make_smem_desc_sm100_fn((char*)smem_b + offset_b, b_lbo, b_sbo);
+                
+                uint32_t acc = (k == 0) ? accum : 1;
+                
+                asm volatile(
+                    "{\n.reg .pred p;\n"
+                    "setp.ne.b32 p, %4, 0;\n"
+                    "tcgen05.mma.cta_group::1.kind::f16 [%0], %1, %2, %3, p;\n}\n"
+                    :: "r"(tmem_dest), "l"(desc_a), "l"(desc_b), "r"(idesc), "r"(acc));
+            }
+        }
+    }
+}
+
+__device__ __forceinline__ float fast_exp2f_fn(float x) {
+    float y;
+    asm volatile("ex2.approx.ftz.f32 %0, %1;" : "=f"(y) : "f"(x));
+    return y;
+}
+
+// -------------------------------------------------------------------------
+// Pipeline math functions
+// -------------------------------------------------------------------------
+
+__device__ __forceinline__ void compute_P_write_smem(
+    uint32_t tmem_S, float* LSE, __nv_bfloat16* smem_PT) {
+    uint32_t lane_id = threadIdx.x % 32;
+    uint32_t warp_id = threadIdx.x / 32;
+    uint32_t row = warp_id * 32 + lane_id; 
+    
+    float scale = 1.0f / sqrtf(128.0f);
+
+    for (int col = 0; col < 128; col += 4) {
+        uint32_t r0, r1, r2, r3;
+        uint32_t tmem_col = tmem_S + col;
+        asm volatile("tcgen05.ld.sync.aligned.32x32b.x4.b32 {%0,%1,%2,%3}, [%4];"
+                     : "=r"(r0),"=r"(r1),"=r"(r2),"=r"(r3) : "r"(tmem_col));
+        asm volatile("tcgen05.wait::ld.sync.aligned;" ::: "memory");
+        
+        float f0 = __uint_as_float(r0);
+        float f1 = __uint_as_float(r1);
+        float f2 = __uint_as_float(r2);
+        float f3 = __uint_as_float(r3);
+        
+        float lse0 = LSE[col + 0];
+        float lse1 = LSE[col + 1];
+        float lse2 = LSE[col + 2];
+        float lse3 = LSE[col + 3];
+        
+        f0 = fast_exp2f_fn((f0 * scale - lse0) * 1.44269504f);
+        f1 = fast_exp2f_fn((f1 * scale - lse1) * 1.44269504f);
+        f2 = fast_exp2f_fn((f2 * scale - lse2) * 1.44269504f);
+        f3 = fast_exp2f_fn((f3 * scale - lse3) * 1.44269504f);
+        
+        uint32_t smem_idx = row * 128 + col;
+        smem_PT[smem_idx + 0] = __float2bfloat16(f0);
+        smem_PT[smem_idx + 1] = __float2bfloat16(f1);
+        smem_PT[smem_idx + 2] = __float2bfloat16(f2);
+        smem_PT[smem_idx + 3] = __float2bfloat16(f3);
+    }
+}
+
+__device__ __forceinline__ void compute_dS_write_smem(
+    uint32_t tmem_dP, __nv_bfloat16* smem_PT, float* D, __nv_bfloat16* smem_dST) {
+    uint32_t lane_id = threadIdx.x % 32;
+    uint32_t warp_id = threadIdx.x / 32;
+    uint32_t row = warp_id * 32 + lane_id;
+
+    for (int col = 0; col < 128; col += 4) {
+        uint32_t r0, r1, r2, r3;
+        uint32_t tmem_col = tmem_dP + col;
+        asm volatile("tcgen05.ld.sync.aligned.32x32b.x4.b32 {%0,%1,%2,%3}, [%4];"
+                     : "=r"(r0),"=r"(r1),"=r"(r2),"=r"(r3) : "r"(tmem_col));
+        asm volatile("tcgen05.wait::ld.sync.aligned;" ::: "memory");
+        
+        float dp0 = __uint_as_float(r0);
+        float dp1 = __uint_as_float(r1);
+        float dp2 = __uint_as_float(r2);
+        float dp3 = __uint_as_float(r3);
+        
+        uint32_t smem_idx = row * 128 + col;
+        float p0 = __bfloat162float(smem_PT[smem_idx + 0]);
+        float p1 = __bfloat162float(smem_PT[smem_idx + 1]);
+        float p2 = __bfloat162float(smem_PT[smem_idx + 2]);
+        float p3 = __bfloat162float(smem_PT[smem_idx + 3]);
+        
+        float d0 = D[col + 0];
+        float d1 = D[col + 1];
+        float d2 = D[col + 2];
+        float d3 = D[col + 3];
+        
+        float ds0 = p0 * (dp0 - d0);
+        float ds1 = p1 * (dp1 - d1);
+        float ds2 = p2 * (dp2 - d2);
+        float ds3 = p3 * (dp3 - d3);
+        
+        smem_dST[smem_idx + 0] = __float2bfloat16(ds0);
+        smem_dST[smem_idx + 1] = __float2bfloat16(ds1);
+        smem_dST[smem_idx + 2] = __float2bfloat16(ds2);
+        smem_dST[smem_idx + 3] = __float2bfloat16(ds3);
+    }
+}
+
+__device__ __forceinline__ void atomicAdd_dQ(
+    uint32_t tmem_dQ, __nv_bfloat16* dQ_global, uint32_t M, uint32_t d, uint32_t m_base,
+    uint32_t b, uint32_t h, float scale) {
+    uint32_t lane_id = threadIdx.x % 32;
+    uint32_t warp_id = threadIdx.x / 32;
+    uint32_t row = warp_id * 32 + lane_id; 
+    
+    if (m_base + row >= M) return;
+    
+    for (int col = 0; col < 128; col += 4) { 
+        uint32_t r0, r1, r2, r3;
+        uint32_t tmem_col = tmem_dQ + col;
+        asm volatile("tcgen05.ld.sync.aligned.32x32b.x4.b32 {%0,%1,%2,%3}, [%4];"
+                     : "=r"(r0),"=r"(r1),"=r"(r2),"=r"(r3) : "r"(tmem_col));
+        asm volatile("tcgen05.wait::ld.sync.aligned;" ::: "memory");
+        
+        float f0 = __uint_as_float(r0) * scale;
+        float f1 = __uint_as_float(r1) * scale;
+        float f2 = __uint_as_float(r2) * scale;
+        float f3 = __uint_as_float(r3) * scale;
+        
+        uint64_t idx = b * (gridDim.y * M * d) + h * (M * d) + (m_base + row) * d + col;
+        
+        __nv_bfloat162 val01 = __floats2bfloat162_rn(f0, f1);
+        __nv_bfloat162 val23 = __floats2bfloat162_rn(f2, f3);
+        
+        atomicAdd((__nv_bfloat162*)&dQ_global[idx + 0], val01);
+        atomicAdd((__nv_bfloat162*)&dQ_global[idx + 2], val23);
+    }
+}
+
+__device__ __forceinline__ void tmem_epilogue_coalesced_4w_base_fn(
+    uint32_t tmem_base,
+    __nv_bfloat16* D, __nv_bfloat16* smem_out,
+    uint32_t M, uint32_t N, uint32_t m_block, uint32_t n_block,
+    uint32_t BM, uint32_t BN, uint32_t b, uint32_t h, float scale) {
+    for (uint32_t col = 0; col < BN; col += 4) {
+        uint32_t r0, r1, r2, r3;
+        uint32_t t_col = tmem_base + col;
+        asm volatile("tcgen05.ld.sync.aligned.32x32b.x4.b32 {%0,%1,%2,%3}, [%4];"
+                     : "=r"(r0),"=r"(r1),"=r"(r2),"=r"(r3) : "r"(t_col));
+        asm volatile("tcgen05.wait::ld.sync.aligned;" ::: "memory");
+        
+        float f0 = __uint_as_float(r0) * scale;
+        float f1 = __uint_as_float(r1) * scale;
+        float f2 = __uint_as_float(r2) * scale;
+        float f3 = __uint_as_float(r3) * scale;
+        
+        uint32_t base = threadIdx.x * BN + col;
+        smem_out[base + 0] = __float2bfloat16(f0);
+        smem_out[base + 1] = __float2bfloat16(f1);
+        smem_out[base + 2] = __float2bfloat16(f2);
+        smem_out[base + 3] = __float2bfloat16(f3);
+    }
+    __syncthreads();
+    
+    uint32_t warp_id = threadIdx.x / 32;
+    uint32_t lane_id = threadIdx.x % 32;
+    uint32_t num_steps = (BM + 3) / 4;
+    for (uint32_t step = 0; step < num_steps; ++step) {
+        uint32_t row = step * 4 + warp_id;
+        if (row >= BM) continue;
+        uint32_t global_row = m_block * BM + row;
+        uint32_t col_start = lane_id * 4;
+        uint32_t global_col = n_block * BN + col_start;
+        
+        if (global_row < M && global_col + 3 < N) {
+            uint64_t global_idx = b * (gridDim.y * M * N) + h * (M * N) + global_row * N + global_col;
+            uint2 data = *reinterpret_cast<uint2*>(&smem_out[row * BN + col_start]);
+            *reinterpret_cast<uint2*>(D + global_idx) = data;
+        }
+    }
+    __syncthreads(); 
+}
+
+// -------------------------------------------------------------------------
+// Main Kernels
+// -------------------------------------------------------------------------
+
+__global__ void compute_D_kernel(const __nv_bfloat16* O, const __nv_bfloat16* dO, float* D, int S, int d) {
+    int s = blockIdx.x * blockDim.x + threadIdx.x;
+    if (s < S) {
+        int h = blockIdx.y;
+        int b = blockIdx.z;
+        int H = gridDim.y;
+        uint64_t idx = b * (H * S) + h * S + s;
+        uint64_t offset = idx * d;
+        float sum = 0;
+        for (int i = 0; i < d; ++i) {
+            float o = __bfloat162float(O[offset + i]);
+            float do_val = __bfloat162float(dO[offset + i]);
+            sum += o * do_val;
+        }
+        D[idx] = sum;
+    }
+}
+
+struct SharedStorage {
+    __align__(128) __nv_bfloat16 K[128 * 128];
+    __align__(128) __nv_bfloat16 V[128 * 128];
+    __align__(128) __nv_bfloat16 Q[128 * 128];
+    __align__(128) __nv_bfloat16 dO[128 * 128];
+    __align__(128) __nv_bfloat16 PT[128 * 128];
+    __align__(128) __nv_bfloat16 dST[128 * 128];
+    
+    __align__(8) uint64_t bar_Q_dO;
+    __align__(8) uint64_t bar_K_V;
+    __align__(8) uint64_t mbar_commit;
+    
+    __align__(4) float LSE[128];
+    __align__(4) float D[128];
+};
+
+__global__ void mha_bwd_kernel(
+    const __grid_constant__ CUtensorMap tma_Q, 
+    const __grid_constant__ CUtensorMap tma_K, 
+    const __grid_constant__ CUtensorMap tma_V, 
+    const __grid_constant__ CUtensorMap tma_dO,
+    const float* LSE_global, const float* D_global,
+    __nv_bfloat16* dQ_global, __nv_bfloat16* dK_global, __nv_bfloat16* dV_global,
+    int S, int d) 
+{
+    extern __shared__ char smem_buf[];
+    SharedStorage& smem = *reinterpret_cast<SharedStorage*>(smem_buf);
+
+    int kv_idx = blockIdx.x;
+    int h = blockIdx.y;
+    int b = blockIdx.z;
+    int H = gridDim.y;
+    int N_blocks = S / 128;
+
+    init_smem_barrier_fn(&smem.bar_Q_dO, 1);
+    init_smem_barrier_fn(&smem.bar_K_V, 1);
+    init_smem_barrier_fn(&smem.mbar_commit, 1);
+    fence_smem_barrier_init_fn();
+    uint32_t phase_K = 0, phase_Q = 0;
+
+    if (threadIdx.x == 0) {
+        mbarrier_arrive_and_expect_tx_fn(&smem.bar_K_V, 65536);
+        tma_load_5d_fn(&tma_K, &smem.bar_K_V, smem.K, 0, 0, kv_idx * 128, h, b);
+        tma_load_5d_fn(&tma_V, &smem.bar_K_V, smem.V, 0, 0, kv_idx * 128, h, b);
+    }
+    mbarrier_wait_fn(&smem.bar_K_V, phase_K);
+    phase_K ^= 1;
+
+    __shared__ uint32_t smem_tmem_ptr;
+    if (threadIdx.x / 32 == 0) {
+        tmem_alloc_cg1_fn(&smem_tmem_ptr, 512);
+    }
+    __syncthreads();
+    uint32_t tmem_addr = smem_tmem_ptr; 
+    
+    uint32_t tmem_S = tmem_addr;
+    uint32_t tmem_dV = tmem_addr + 128;
+    uint32_t tmem_dP_dQ = tmem_addr + 256;
+    uint32_t tmem_dK = tmem_addr + 384;
+
+    uint32_t phase_commit = 0;
+
+    for (int q_idx = 0; q_idx < N_blocks; ++q_idx) {
+        if (threadIdx.x == 0) {
+            mbarrier_arrive_and_expect_tx_fn(&smem.bar_Q_dO, 65536);
+            tma_load_5d_fn(&tma_Q, &smem.bar_Q_dO, smem.Q, 0, 0, q_idx * 128, h, b);
+            tma_load_5d_fn(&tma_dO, &smem.bar_Q_dO, smem.dO, 0, 0, q_idx * 128, h, b);
+        }
+        
+        uint64_t lse_base = b * (H * S) + h * S + q_idx * 128;
+        if (threadIdx.x < 128) {
+            smem.LSE[threadIdx.x] = LSE_global[lse_base + threadIdx.x];
+            smem.D[threadIdx.x] = D_global[lse_base + threadIdx.x];
+        }
+        
+        mbarrier_wait_fn(&smem.bar_Q_dO, phase_Q);
+        __syncthreads(); 
+        
+        // S_j^T = K @ Q_j^T  (A is K, B is Q^T)
+        mma_128x128_f16(tmem_S, smem.K, smem.Q, 
+                        false, false, 0); 
+                        
+        // dP_j^T = V @ dO_j^T (A is V, B is dO^T)
+        mma_128x128_f16(tmem_dP_dQ, smem.V, smem.dO,
+                        false, false, 0); 
+                        
+        if (threadIdx.x == 0) {
+            asm volatile("tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [%0];"
+                         :: "r"((uint32_t)__cvta_generic_to_shared(&smem.mbar_commit)));
+        }
+        mbarrier_wait_fn(&smem.mbar_commit, phase_commit);
+        phase_commit ^= 1;
+        
+        compute_P_write_smem(tmem_S, smem.LSE, smem.PT);
+        __syncthreads(); 
+        asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
+        
+        // dV_j += P_j^T @ dO_j (A is P^T, B is dO)
+        uint32_t acc_dV = (q_idx == 0) ? 0 : 1;
+        mma_128x128_f16(tmem_dV, smem.PT, smem.dO,
+                        false, true, acc_dV);
+                        
+        compute_dS_write_smem(tmem_dP_dQ, smem.PT, smem.D, smem.dST);
+        __syncthreads(); 
+        asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
+        
+        // dK_{j-1} += dS_{j-1}^T @ Q_{j-1} (A is dS^T, B is Q)
+        uint32_t acc_dK = (q_idx == 0) ? 0 : 1;
+        mma_128x128_f16(tmem_dK, smem.dST, smem.Q,
+                        false, true, acc_dK);
+                        
+        // dQ_{j-1} = dS_{j-1} @ K (A is dS^T transposed, B is K)
+        mma_128x128_f16(tmem_dP_dQ, smem.dST, smem.K,
+                        true, true, 0);
+                        
+        if (threadIdx.x == 0) {
+            asm volatile("tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [%0];"
+                         :: "r"((uint32_t)__cvta_generic_to_shared(&smem.mbar_commit)));
+        }
+        mbarrier_wait_fn(&smem.mbar_commit, phase_commit);
+        phase_commit ^= 1;
+        
+        uint32_t m_base = q_idx * 128;
+        atomicAdd_dQ(tmem_dP_dQ, dQ_global, S, 128, m_base, b, h, 1.0f / sqrtf(128.0f));
+        
+        phase_Q ^= 1;
+    }
+
+    float scale_dK = 1.0f / sqrtf(128.0f);
+    tmem_epilogue_coalesced_4w_base_fn(tmem_dK, dK_global, smem.PT, S, d, kv_idx, 0, 128, 128, b, h, scale_dK);
+    tmem_epilogue_coalesced_4w_base_fn(tmem_dV, dV_global, smem.PT, S, d, kv_idx, 0, 128, 128, b, h, 1.0f);
+
+    __syncthreads();
+    if (threadIdx.x / 32 == 0) {
+        tmem_dealloc_cg1_fn(tmem_addr, 512);
+    }
+}
+
+// -------------------------------------------------------------------------
+// Host code
+// -------------------------------------------------------------------------
+
+CUresult create_tma_5d_descriptor_2B(CUtensorMap* d, void* globalAddress, uint64_t S, uint64_t H, uint64_t B) {
+    cuuint64_t globalDim[5] = {64, 2, S, H, B};
+    cuuint64_t globalStrides[4] = {128, 256, 256 * S, 256 * S * H};
+    cuuint32_t boxDim[5] = {64, 2, 128, 1, 1};
+    cuuint32_t elementStrides[5] = {1, 1, 1, 1, 1};
+    return cuTensorMapEncodeTiled(
+        d, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 5, globalAddress, globalDim, globalStrides, boxDim, elementStrides,
+        CU_TENSOR_MAP_INTERLEAVE_NONE, CU_TENSOR_MAP_SWIZZLE_128B, CU_TENSOR_MAP_L2_PROMOTION_L2_128B, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE
+    );
+}
+
+void run(tvm::ffi::TensorView Q, tvm::ffi::TensorView K, tvm::ffi::TensorView V,
+         tvm::ffi::TensorView O, tvm::ffi::TensorView dO, tvm::ffi::TensorView L,
+         tvm::ffi::TensorView dQ, tvm::ffi::TensorView dK, tvm::ffi::TensorView dV) {
+    CUDA_CHECK(cudaSetDevice(Q.device().device_id));
+    cudaStream_t stream = static_cast<cudaStream_t>(TVMFFIEnvGetStream(Q.device().device_type, Q.device().device_id));
+
+    int B = 4;
+    int H = 48;
+    int S = Q.size(2);
+    int d = 128;
+
+    float* D_ptr;
+    CUDA_CHECK(cudaMallocAsync(&D_ptr, B * H * S * sizeof(float), stream));
+
+    dim3 grid_D((S + 255) / 256, H, B);
+    compute_D_kernel<<<grid_D, 256, 0, stream>>>(
+        static_cast<const __nv_bfloat16*>(O.data_ptr()),
+        static_cast<const __nv_bfloat16*>(dO.data_ptr()),
+        D_ptr, S, d);
+
+    CUtensorMap tma_Q, tma_K, tma_V, tma_dO;
+    if (create_tma_5d_descriptor_2B(&tma_Q, Q.data_ptr(), S, H, B) != CUDA_SUCCESS) exit(1);
+    if (create_tma_5d_descriptor_2B(&tma_K, K.data_ptr(), S, H, B) != CUDA_SUCCESS) exit(1);
+    if (create_tma_5d_descriptor_2B(&tma_V, V.data_ptr(), S, H, B) != CUDA_SUCCESS) exit(1);
+    if (create_tma_5d_descriptor_2B(&tma_dO, dO.data_ptr(), S, H, B) != CUDA_SUCCESS) exit(1);
+
+    CUDA_CHECK(cudaMemsetAsync(dQ.data_ptr(), 0, B * H * S * d * sizeof(uint16_t), stream));
+
+    dim3 grid(S / 128, H, B);
+    dim3 block(128);
+
+    int smem_size = sizeof(SharedStorage);
+    CUDA_CHECK(cudaFuncSetAttribute(mha_bwd_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+
+    mha_bwd_kernel<<<grid, block, smem_size, stream>>>(
+        tma_Q, tma_K, tma_V, tma_dO,
+        static_cast<const float*>(L.data_ptr()),
+        D_ptr,
+        static_cast<__nv_bfloat16*>(dQ.data_ptr()),
+        static_cast<__nv_bfloat16*>(dK.data_ptr()),
+        static_cast<__nv_bfloat16*>(dV.data_ptr()),
+        S, d
+    );
+    CUDA_CHECK(cudaGetLastError());
+    
+    CUDA_CHECK(cudaFreeAsync(D_ptr, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+}
+
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(run, tvm_ffi_mha_bwd::run);
+
+} // namespace tvm_ffi_mha_bwd

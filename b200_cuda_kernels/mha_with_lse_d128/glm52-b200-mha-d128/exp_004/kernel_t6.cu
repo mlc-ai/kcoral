@@ -1,0 +1,516 @@
+#include <cuda_bf16.h>
+#include <cuda_runtime.h>
+#include <cuda.h>
+#include <cstdint>
+#include <stdio.h>
+#include <tvm/ffi/extra/c_env_api.h>
+#include <tvm/ffi/tvm_ffi.h>
+
+#define CUDA_CHECK(call) do {                                      \
+    cudaError_t _e = (call);                                       \
+    if (_e != cudaSuccess) {                                       \
+        fprintf(stderr, "CUDA error %s at %s:%d\n",               \
+                cudaGetErrorString(_e), __FILE__, __LINE__);       \
+        exit(1);                                                   \
+    }                                                              \
+} while(0)
+
+#define CU_CHECK(call) do {                                        \
+    CUresult _e = (call);                                          \
+    if (_e != CUDA_SUCCESS) {                                      \
+        const char* errStr;                                        \
+        cuGetErrorString(_e, &errStr);                             \
+        fprintf(stderr, "CU error %s at %s:%d\n",                  \
+                errStr ? errStr : "unknown", __FILE__, __LINE__);  \
+        exit(1);                                                   \
+    }                                                              \
+} while(0)
+
+namespace tvm_ffi_mha_cuda {
+
+constexpr int D_HEAD = 128;
+constexpr int BM = 128;
+constexpr int BK = 64;
+constexpr int NUM_THREADS = 128;
+constexpr float SCALE = 0.08838834764f;
+
+// SMEM layout (all 1024-byte aligned for 128B swizzle)
+constexpr int Q_SMEM_OFF = 0;
+constexpr int K_SMEM_OFF = 32768;
+constexpr int V_SMEM_OFF = 49152;
+constexpr int P_SMEM_OFF = 65536;
+constexpr int ML_SMEM_OFF = 81920;
+constexpr int MBAR_OFF = 82944;
+constexpr int TMEM_ADDR_OFF = 83008;
+constexpr int SMEM_SIZE = 86016;
+
+// ---- MBarrier ----
+__device__ __forceinline__ void init_smem_barrier_fn(uint64_t* bar, uint32_t count) {
+    asm volatile("mbarrier.init.shared.b64 [%0], %1;"
+        :: "r"((uint32_t)__cvta_generic_to_shared(&bar[0])), "r"(count));
+}
+__device__ __forceinline__ void fence_smem_barrier_init_fn() {
+    asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
+}
+__device__ __forceinline__ void mbarrier_arrive_and_expect_tx_fn(uint64_t* bar, uint32_t tx_bytes) {
+    asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;"
+        :: "r"((uint32_t)__cvta_generic_to_shared(&bar[0])), "r"(tx_bytes) : "memory");
+}
+__device__ __forceinline__ void mbarrier_wait_fn(uint64_t* bar, uint32_t phase) {
+    asm volatile(
+        "{\n.reg .pred P;\n"
+        "WAIT_%=:\n"
+        "mbarrier.try_wait.parity.shared.b64 P, [%0], %1;\n"
+        "@!P bra WAIT_%=;\n}\n"
+        :: "r"((uint32_t)__cvta_generic_to_shared(&bar[0])), "r"(phase));
+}
+
+// ---- TMA ----
+__device__ __forceinline__ void prefetch_tma_descriptor_fn(const CUtensorMap* d) {
+    asm volatile("prefetch.tensormap [%0];" :: "l"(d) : "memory");
+}
+__device__ __forceinline__ void tma_load_4d_fn(const CUtensorMap* d, uint64_t* bar, void* smem,
+    int32_t c0, int32_t c1, int32_t c2, int32_t c3) {
+    asm volatile(
+        "cp.async.bulk.tensor.4d.shared::cluster.global.mbarrier::complete_tx::bytes [%0], [%1, {%3, %4, %5, %6}], [%2];"
+        :: "r"((uint32_t)__cvta_generic_to_shared(smem)),
+        "l"((uint64_t)d),
+        "r"((uint32_t)__cvta_generic_to_shared(&bar[0])),
+        "r"(c0), "r"(c1), "r"(c2), "r"(c3) : "memory");
+}
+__device__ __forceinline__ void fence_async_shared_fn() {
+    asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
+}
+
+// ---- TMEM ----
+__device__ __forceinline__ void tmem_alloc_cg1_fn(uint32_t* dst_smem, int ncols) {
+    uint32_t a = (uint32_t)__cvta_generic_to_shared(dst_smem);
+    asm volatile("tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%0], %1;"
+   :: "r"(a), "r"(ncols));
+}
+__device__ __forceinline__ void tmem_dealloc_cg1_fn(uint32_t addr, int ncols) {
+    asm volatile("tcgen05.dealloc.cta_group::1.sync.aligned.b32 %0, %1;"
+   :: "r"(addr), "r"(ncols));
+}
+__device__ __forceinline__ void tmem_load_8x_fn(uint32_t col,
+    uint32_t* r0, uint32_t* r1, uint32_t* r2, uint32_t* r3,
+    uint32_t* r4, uint32_t* r5, uint32_t* r6, uint32_t* r7) {
+    asm volatile("tcgen05.ld.sync.aligned.32x32b.x8.b32 {%0,%1,%2,%3,%4,%5,%6,%7}, [%8];"
+   : "=r"(*r0),"=r"(*r1),"=r"(*r2),"=r"(*r3),
+     "=r"(*r4),"=r"(*r5),"=r"(*r6),"=r"(*r7) : "r"(col));
+}
+__device__ __forceinline__ void tmem_load_fence_fn() {
+    asm volatile("tcgen05.wait::ld.sync.aligned;" ::: "memory");
+}
+__device__ __forceinline__ void tmem_store_8x_fn(uint32_t col,
+    uint32_t r0, uint32_t r1, uint32_t r2, uint32_t r3,
+    uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7) {
+    asm volatile("tcgen05.st.sync.aligned.32x32b.x8.b32 [%0], {%1,%2,%3,%4,%5,%6,%7,%8};"
+   :: "r"(col), "r"(r0), "r"(r1), "r"(r2), "r"(r3),
+      "r"(r4), "r"(r5), "r"(r6), "r"(r7) : "memory");
+}
+__device__ __forceinline__ void tmem_store_wait_fn() {
+    asm volatile("tcgen05.wait::st.sync.aligned;" ::: "memory");
+}
+__device__ __forceinline__ void tcgen05_fence_after_fn() {
+    asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
+}
+
+// ---- UMMA (cta_group::1) ----
+__device__ __forceinline__ void umma_f16_cg1_fn(
+    uint32_t tmem_c, uint64_t desc_a, uint64_t desc_b,
+    uint32_t idesc, uint32_t accum) {
+    asm volatile(
+        "{\n.reg .pred p;\n"
+        "setp.ne.b32 p, %4, 0;\n"
+        "tcgen05.mma.cta_group::1.kind::f16 [%0], %1, %2, %3, p;\n}\n"
+        :: "r"(tmem_c), "l"(desc_a), "l"(desc_b), "r"(idesc), "r"(accum));
+}
+__device__ __forceinline__ void umma_commit_cg1_fn(uint64_t* bar) {
+    uint32_t a = (uint32_t)__cvta_generic_to_shared(&bar[0]);
+    asm volatile("tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [%0];" :: "r"(a));
+}
+
+// ---- Descriptor helpers ----
+__device__ __forceinline__ uint64_t make_smem_desc_swizzle_fn(void* smem_ptr, uint32_t lbo, uint32_t sbo) {
+    uint64_t d = 0;
+    uint32_t addr = (uint32_t)__cvta_generic_to_shared(smem_ptr);
+    d |= (uint64_t)(addr & 0x3FFFF) >> 4;
+    d |= (uint64_t)((lbo & 0x3FFFF) >> 4) << 16;
+    d |= (uint64_t)((sbo & 0x3FFFF) >> 4) << 32;
+    d |= (uint64_t)1 << 46;    // version = 1 (SM100)
+    d |= (uint64_t)2 << 61;    // SWIZZLE_128B
+    return d;
+}
+__device__ __forceinline__ uint32_t make_instr_desc_fn(uint32_t M, uint32_t N, uint32_t a_trans, uint32_t b_trans) {
+    uint32_t d = 0;
+    d |= (1u << 4);           // dtype = FP32
+    d |= (1u << 7);           // atype = BF16
+    d |= (1u << 10);          // btype = BF16
+    d |= (a_trans << 15);     // Transpose A
+    d |= (b_trans << 16);     // Transpose B
+    d |= ((N / 8) << 17);     // N >> 3
+    d |= ((M / 16) << 24);    // M >> 4
+    return d;
+}
+__device__ __forceinline__ uint64_t advance_desc(uint64_t desc, uint32_t byte_offset) {
+    uint64_t base = desc & 0x3FFF;
+    uint64_t new_base = base + (byte_offset >> 4);
+    return (desc & 0xFFFFFFFFFFFFC000ULL) | (new_base & 0x3FFF);
+}
+
+// ---- TMA descriptor creation (host) ----
+static CUresult create_tma_desc_bf16_4d(
+    CUtensorMap* d, void* ptr,
+    uint64_t dim_d, uint64_t dim_s, uint64_t dim_h, uint64_t dim_b,
+    uint32_t box_d, uint32_t box_s,
+    CUtensorMapFloatOOBfill oob_fill)
+{
+    cuuint64_t globalDim[4] = {dim_d, dim_s, dim_h, dim_b};
+    cuuint64_t globalStrides[3] = {dim_d * 2, dim_s * dim_d * 2, dim_h * dim_s * dim_d * 2};
+    cuuint32_t boxDim[4] = {box_d, box_s, 1, 1};
+    cuuint32_t elementStrides[4] = {1, 1, 1, 1};
+    return cuTensorMapEncodeTiled(
+        d, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 4,
+        ptr, globalDim, globalStrides, boxDim, elementStrides,
+        CU_TENSOR_MAP_INTERLEAVE_NONE, CU_TENSOR_MAP_SWIZZLE_128B,
+        CU_TENSOR_MAP_L2_PROMOTION_L2_128B, oob_fill);
+}
+
+// ---- Kernel ----
+__global__ void attention_kernel(
+    const __grid_constant__ CUtensorMap tma_Q,
+    const __grid_constant__ CUtensorMap tma_K,
+    const __grid_constant__ CUtensorMap tma_V,
+    __nv_bfloat16* __restrict__ O,
+    float* __restrict__ LSE,
+    int S, int B, int H)
+{
+    const int q_block = blockIdx.x;
+    const int bh = blockIdx.y;
+    const int b = bh / H;
+    const int h = bh % H;
+    const int q_start = q_block * BM;
+    const int tid = threadIdx.x;
+    const int warp_id = tid / 32;
+    const bool row_valid = (q_start + tid < S);
+
+    extern __shared__ char smem_raw[];
+    char* smem = (char*)(((uintptr_t)smem_raw + 1023) & ~1023);
+
+    __nv_bfloat16* Q_smem = reinterpret_cast<__nv_bfloat16*>(smem + Q_SMEM_OFF);
+    __nv_bfloat16* K_smem = reinterpret_cast<__nv_bfloat16*>(smem + K_SMEM_OFF);
+    __nv_bfloat16* V_smem = reinterpret_cast<__nv_bfloat16*>(smem + V_SMEM_OFF);
+    __nv_bfloat16* P_smem = reinterpret_cast<__nv_bfloat16*>(smem + P_SMEM_OFF);
+    float* m_smem = reinterpret_cast<float*>(smem + ML_SMEM_OFF);
+    float* l_smem = m_smem + BM;
+    uint64_t* mbar = reinterpret_cast<uint64_t*>(smem + MBAR_OFF);
+    uint32_t* tmem_addr_smem = reinterpret_cast<uint32_t*>(smem + TMEM_ADDR_OFF);
+
+    // ---- TMEM allocation ----
+    if (warp_id == 0) {
+        tmem_alloc_cg1_fn(tmem_addr_smem, 256);
+    }
+    __syncthreads();
+    uint32_t tmem_base = tmem_addr_smem[0];
+    uint32_t tmem_S = tmem_base;        // 64 cols for S (128x64 FP32)
+    uint32_t tmem_O = tmem_base + 64;   // 128 cols for O (128x128 FP32)
+
+    // ---- Init barriers ----
+    if (tid == 0) {
+        init_smem_barrier_fn(&mbar[0], 1);  // K/Q loads
+        init_smem_barrier_fn(&mbar[1], 1);  // V loads
+        init_smem_barrier_fn(&mbar[2], 1);  // UMMA
+    }
+    fence_smem_barrier_init_fn();
+    __syncthreads();
+
+    // ---- Init m, l ----
+    if (tid < BM) {
+        m_smem[tid] = -INFINITY;
+        l_smem[tid] = 0.0f;
+    }
+
+    // ---- Prefetch TMA descriptors ----
+    prefetch_tma_descriptor_fn(&tma_Q);
+    prefetch_tma_descriptor_fn(&tma_K);
+    prefetch_tma_descriptor_fn(&tma_V);
+
+    // ---- Load Q (2 TMA loads for D=128) ----
+    int phase_k = 0, phase_v = 0, phase_mma = 0;
+    if (tid == 0) {
+        mbarrier_arrive_and_expect_tx_fn(&mbar[0], 32768);
+        tma_load_4d_fn(&tma_Q, &mbar[0], Q_smem, 0, q_start, h, b);
+        tma_load_4d_fn(&tma_Q, &mbar[0], Q_smem + 8192, 64, q_start, h, b);
+    }
+    mbarrier_wait_fn(&mbar[0], phase_k); phase_k ^= 1;
+
+    // ---- Build UMMA descriptors ----
+    // Q: K-major [M=128, K=128], 2 spans of K=64. SBO=1024, LBO=1.
+    uint64_t q_desc0 = make_smem_desc_swizzle_fn(Q_smem, 1, 1024);
+    uint64_t q_desc1 = make_smem_desc_swizzle_fn(Q_smem + 8192, 1, 1024);
+    // K^T: K-major [N=64, K=128], 2 spans of K=64. SBO=1024, LBO=1.
+    uint64_t k_desc0 = make_smem_desc_swizzle_fn(K_smem, 1, 1024);
+    uint64_t k_desc1 = make_smem_desc_swizzle_fn(K_smem + 4096, 1, 1024);
+    // P: K-major [M=128, K=64], 1 span. SBO=1024, LBO=1.
+    uint64_t p_desc = make_smem_desc_swizzle_fn(P_smem, 1, 1024);
+    // V: N-major [K=64, N=128], 2 spans of N=64. SBO=1024, LBO=8192.
+    uint64_t v_desc0 = make_smem_desc_swizzle_fn(V_smem, 8192, 1024);
+    uint64_t v_desc1 = make_smem_desc_swizzle_fn(V_smem + 4096, 8192, 1024);
+
+    // Instruction descriptors
+    uint32_t idesc_qk = make_instr_desc_fn(BM, BK, 0, 0);     // both K-major
+    uint32_t idesc_pv = make_instr_desc_fn(BM, 64, 0, 1);     // P K-major, V N-major
+
+    // ---- Main loop over KV blocks ----
+    for (int kv_start = 0; kv_start < S; kv_start += BK) {
+        int kv_len = min(kv_start + BK, S) - kv_start;
+        bool first_block = (kv_start == 0);
+
+        // ---- Load K (2 TMA loads) ----
+        if (tid == 0) {
+            mbarrier_arrive_and_expect_tx_fn(&mbar[0], 16384);
+            tma_load_4d_fn(&tma_K, &mbar[0], K_smem, 0, kv_start, h, b);
+            tma_load_4d_fn(&tma_K, &mbar[0], K_smem + 4096, 64, kv_start, h, b);
+        }
+        mbarrier_wait_fn(&mbar[0], phase_k); phase_k ^= 1;
+
+        // ---- QK^T UMMA (K=128, 8 steps of K=16) ----
+        if (tid == 0) {
+            #pragma unroll
+            for (int k = 0; k < D_HEAD; k += 16) {
+                int span = k / 64;
+                int k_in = k % 64;
+                uint64_t a_d = advance_desc(span ? q_desc1 : q_desc0, k_in * 2);
+                uint64_t b_d = advance_desc(span ? k_desc1 : k_desc0, k_in * 2);
+                umma_f16_cg1_fn(tmem_S, a_d, b_d, idesc_qk, (k == 0) ? 0 : 1);
+            }
+            umma_commit_cg1_fn(&mbar[2]);
+        }
+
+        // ---- Issue V TMA load (overlap with UMMA and softmax) ----
+        if (tid == 0) {
+            mbarrier_arrive_and_expect_tx_fn(&mbar[1], 16384);
+            tma_load_4d_fn(&tma_V, &mbar[1], V_smem, 0, kv_start, h, b);
+            tma_load_4d_fn(&tma_V, &mbar[1], V_smem + 4096, 64, kv_start, h, b);
+        }
+
+        // ---- Wait for QK^T UMMA ----
+        mbarrier_wait_fn(&mbar[2], phase_mma); phase_mma ^= 1;
+        tcgen05_fence_after_fn();
+
+        // ---- Softmax Pass 1: Find row max ----
+        float m_old = row_valid ? m_smem[tid] : -INFINITY;
+        float l_old = row_valid ? l_smem[tid] : 0.0f;
+        float row_max = -INFINITY;
+
+        for (int c = 0; c < BK; c += 8) {
+            uint32_t r0, r1, r2, r3, r4, r5, r6, r7;
+            tmem_load_8x_fn(tmem_S + c, &r0, &r1, &r2, &r3, &r4, &r5, &r6, &r7);
+            tmem_load_fence_fn();
+            if (row_valid) {
+                float vals[8] = {
+                    __uint_as_float(r0) * SCALE, __uint_as_float(r1) * SCALE,
+                    __uint_as_float(r2) * SCALE, __uint_as_float(r3) * SCALE,
+                    __uint_as_float(r4) * SCALE, __uint_as_float(r5) * SCALE,
+                    __uint_as_float(r6) * SCALE, __uint_as_float(r7) * SCALE
+                };
+                #pragma unroll
+                for (int j = 0; j < 8; j++) {
+                    if (c + j >= kv_len) vals[j] = -INFINITY;
+                    row_max = fmaxf(row_max, vals[j]);
+                }
+            }
+        }
+
+        float m_new = row_valid ? fmaxf(m_old, row_max) : -INFINITY;
+
+        // ---- Softmax Pass 2: Compute P, write to swizzled SMEM ----
+        float row_sum = 0.0f;
+
+        for (int c = 0; c < BK; c += 8) {
+            uint32_t r0, r1, r2, r3, r4, r5, r6, r7;
+            tmem_load_8x_fn(tmem_S + c, &r0, &r1, &r2, &r3, &r4, &r5, &r6, &r7);
+            tmem_load_fence_fn();
+
+            float p[8];
+            uint32_t vals[8] = {r0, r1, r2, r3, r4, r5, r6, r7};
+
+            if (row_valid) {
+                #pragma unroll
+                for (int j = 0; j < 8; j++) {
+                    float s = __uint_as_float(vals[j]) * SCALE;
+                    if (c + j >= kv_len) s = -INFINITY;
+                    p[j] = __expf(s - m_new);
+                    row_sum += p[j];
+                }
+            } else {
+                #pragma unroll
+                for (int j = 0; j < 8; j++) p[j] = 0.0f;
+            }
+
+            // Write to 128B-swizzled P_smem
+            // Physical: core_matrix = tid/8, row_in_core = tid%8, chunk = c/8
+            // phys_chunk = row_in_core ^ chunk
+            // byte_addr = core_matrix * 1024 + row_in_core * 128 + phys_chunk * 16
+            int chunk = c / 8;
+            int phys = (tid % 8) ^ chunk;
+            int byte_addr = (tid / 8) * 1024 + (tid % 8) * 128 + phys * 16;
+            __nv_bfloat16* dst = reinterpret_cast<__nv_bfloat16*>(
+                reinterpret_cast<char*>(P_smem) + byte_addr);
+            #pragma unroll
+            for (int j = 0; j < 8; j++) {
+                dst[j] = __float2bfloat16(p[j]);
+            }
+        }
+
+        // ---- Update m, l ----
+        if (row_valid) {
+            float rescale_factor = (m_old != -INFINITY) ? __expf(m_old - m_new) : 1.0f;
+            l_smem[tid] = l_old * rescale_factor + row_sum;
+            m_smem[tid] = m_new;
+        }
+
+        // ---- O rescale (skip first block) ----
+        if (!first_block) {
+            bool need_rescale = row_valid && (m_old != m_new);
+            uint32_t mask = __ballot_sync(0xFFFFFFFF, need_rescale);
+            if (mask != 0) {
+                float rescale = need_rescale ? __expf(m_old - m_new) : 1.0f;
+                for (int c = 0; c < D_HEAD; c += 8) {
+                    uint32_t r0, r1, r2, r3, r4, r5, r6, r7;
+                    tmem_load_8x_fn(tmem_O + c, &r0, &r1, &r2, &r3, &r4, &r5, &r6, &r7);
+                    tmem_load_fence_fn();
+                    r0 = __float_as_uint(__uint_as_float(r0) * rescale);
+                    r1 = __float_as_uint(__uint_as_float(r1) * rescale);
+                    r2 = __float_as_uint(__uint_as_float(r2) * rescale);
+                    r3 = __float_as_uint(__uint_as_float(r3) * rescale);
+                    r4 = __float_as_uint(__uint_as_float(r4) * rescale);
+                    r5 = __float_as_uint(__uint_as_float(r5) * rescale);
+                    r6 = __float_as_uint(__uint_as_float(r6) * rescale);
+                    r7 = __float_as_uint(__uint_as_float(r7) * rescale);
+                    tmem_store_8x_fn(tmem_O + c, r0, r1, r2, r3, r4, r5, r6, r7);
+                }
+                tmem_store_wait_fn();
+            }
+        }
+
+        // ---- Wait for V ----
+        mbarrier_wait_fn(&mbar[1], phase_v); phase_v ^= 1;
+
+        // ---- Fence P writes, sync ----
+        fence_async_shared_fn();
+        __syncthreads();
+
+        // ---- PV UMMA (K=64, 4 steps of K=16, 2 N-spans) ----
+        if (tid == 0) {
+            #pragma unroll
+            for (int k = 0; k < BK; k += 16) {
+                uint64_t a_d = advance_desc(p_desc, k * 2);
+                // N-major V: advance K by (k/8) * SBO = (k/8) * 1024
+                uint64_t b_d0 = advance_desc(v_desc0, (k / 8) * 1024);
+                uint64_t b_d1 = advance_desc(v_desc1, (k / 8) * 1024);
+                uint32_t accum = (k == 0 && first_block) ? 0 : 1;
+                umma_f16_cg1_fn(tmem_O, a_d, b_d0, idesc_pv, accum);
+                umma_f16_cg1_fn(tmem_O + 64, a_d, b_d1, idesc_pv, accum);
+            }
+            umma_commit_cg1_fn(&mbar[2]);
+        }
+        mbarrier_wait_fn(&mbar[2], phase_mma); phase_mma ^= 1;
+        tcgen05_fence_after_fn();
+
+        __syncthreads();
+    }
+
+    // ---- Final normalization and output ----
+    __syncthreads();
+
+    float final_l = row_valid ? l_smem[tid] : 0.0f;
+    float final_m = row_valid ? m_smem[tid] : -INFINITY;
+    float inv_l = (final_l > 0.0f) ? (1.0f / final_l) : 0.0f;
+
+    // Write LSE
+    if (row_valid && final_l > 0.0f) {
+        size_t lse_offset = (size_t)(b * H + h) * S + q_start + tid;
+        LSE[lse_offset] = final_m + logf(final_l);
+    }
+
+    // TMEM O -> SMEM (normalized BF16, reuse Q_smem, standard row-major)
+    for (int c = 0; c < D_HEAD; c += 8) {
+        uint32_t r0, r1, r2, r3, r4, r5, r6, r7;
+        tmem_load_8x_fn(tmem_O + c, &r0, &r1, &r2, &r3, &r4, &r5, &r6, &r7);
+        tmem_load_fence_fn();
+        uint32_t vals[8] = {r0, r1, r2, r3, r4, r5, r6, r7};
+        #pragma unroll
+        for (int j = 0; j < 8; j++) {
+            Q_smem[tid * D_HEAD + c + j] = __float2bfloat16(__uint_as_float(vals[j]) * inv_l);
+        }
+    }
+    __syncthreads();
+
+    // SMEM -> Global (coalesced uint4 writes)
+    {
+        const uint4* O_s = reinterpret_cast<const uint4*>(Q_smem);
+        uint4* O_g = reinterpret_cast<uint4*>(O + (size_t)(b * H + h) * S * D_HEAD + (size_t)q_start * D_HEAD);
+        int total = BM * D_HEAD / 8;
+        for (int i = tid; i < total; i += blockDim.x) {
+            int row = i / (D_HEAD / 8);
+            if (q_start + row < S) {
+                O_g[i] = O_s[i];
+            }
+        }
+    }
+
+    // ---- TMEM dealloc ----
+    __syncthreads();
+    if (warp_id == 0) {
+        tmem_dealloc_cg1_fn(tmem_base, 256);
+    }
+}
+
+// ---- Host function ----
+void run(tvm::ffi::TensorView Q, tvm::ffi::TensorView K, tvm::ffi::TensorView V,
+         tvm::ffi::TensorView O, tvm::ffi::TensorView LSE) {
+    CUDA_CHECK(cudaSetDevice(Q.device().device_id));
+
+    const int B = static_cast<int>(Q.size(0));
+    const int H = static_cast<int>(Q.size(1));
+    const int S = static_cast<int>(Q.size(2));
+    const int D = static_cast<int>(Q.size(3));
+    (void)D;
+
+    __nv_bfloat16* Q_ptr = static_cast<__nv_bfloat16*>(Q.data_ptr());
+    __nv_bfloat16* K_ptr = static_cast<__nv_bfloat16*>(K.data_ptr());
+    __nv_bfloat16* V_ptr = static_cast<__nv_bfloat16*>(V.data_ptr());
+    __nv_bfloat16* O_ptr = static_cast<__nv_bfloat16*>(O.data_ptr());
+    float* LSE_ptr = static_cast<float*>(LSE.data_ptr());
+
+    // Create 4D TMA descriptors: [D, S, H, B]
+    CUtensorMap tma_Q, tma_K, tma_V;
+    CU_CHECK(create_tma_desc_bf16_4d(&tma_Q, Q_ptr, D_HEAD, S, H, B, 64, BM,
+        CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA));
+    CU_CHECK(create_tma_desc_bf16_4d(&tma_K, K_ptr, D_HEAD, S, H, B, 64, BK,
+        CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA));
+    CU_CHECK(create_tma_desc_bf16_4d(&tma_V, V_ptr, D_HEAD, S, H, B, 64, BK,
+        CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA));
+
+    const int num_q_blocks = (S + BM - 1) / BM;
+    dim3 grid(num_q_blocks, B * H);
+    dim3 block(NUM_THREADS);
+
+    cudaStream_t stream = static_cast<cudaStream_t>(
+        TVMFFIEnvGetStream(Q.device().device_type, Q.device().device_id));
+
+    CUDA_CHECK(cudaFuncSetAttribute(attention_kernel,
+        cudaFuncAttributeMaxDynamicSharedMemorySize, SMEM_SIZE));
+
+    attention_kernel<<<grid, block, SMEM_SIZE, stream>>>(
+        tma_Q, tma_K, tma_V, O_ptr, LSE_ptr, S, B, H);
+
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+}
+
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(run, tvm_ffi_mha_cuda::run);
+
+}  // namespace tvm_ffi_mha_cuda

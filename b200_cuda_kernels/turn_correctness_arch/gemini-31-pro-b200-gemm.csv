@@ -1,0 +1,97 @@
+trajectory_id,turn,correctness,speedup,arch_tag
+exp_000,0,Runtime error,0.0,
+exp_000,1,Correct,0.19230438885803872,"H, B"
+exp_000,2,Runtime error,0.0,
+exp_000,3,Correct,0.3030403334847672,"H, B"
+exp_000,4,Runtime error,0.0,
+exp_000,5,Correct,0.3466602797405959,"H, B"
+exp_000,6,Correct,0.5040950661044751,"H, B"
+exp_000,7,Kernel Execution Timeout,0.0,
+exp_001,0,Correct,0.27348139284644163,"H, B"
+exp_001,1,Correct,0.29474960385861915,"H, B"
+exp_001,2,Correct,0.40835433127845494,"H, B"
+exp_001,3,Correct,0.5128544020132744,"H, B"
+exp_001,4,Correct,0.49717612467383143,"H, B"
+exp_001,5,Correct,0.4403713799626856,"H, B"
+exp_001,6,Correct,0.4972960215055874,"H, B"
+exp_001,7,Numerical error,0.0,
+exp_002,0,Kernel Execution Timeout,0.0,
+exp_002,1,Numerical error,0.0,
+exp_002,2,Runtime error,0.0,
+exp_002,3,Correct,0.2967839118993547,"H, B"
+exp_002,4,Correct,0.3376829452236624,"H, B"
+exp_002,5,Runtime error,0.0,
+exp_002,6,Runtime error,0.0,
+exp_002,7,Compilation error,,
+exp_003,0,Compilation error,,
+exp_003,1,Correct,0.35871818367162867,"H, B"
+exp_003,2,Kernel Execution Timeout,0.0,
+exp_003,3,Correct,0.45463286620924426,"H, B"
+exp_003,4,Correct,0.47262419846075926,"H, B"
+exp_003,5,Correct,0.6105161898624776,"H, B"
+exp_003,6,Correct,0.5726608814562815,"H, B"
+exp_003,7,Correct,0.645075375240613,"H, B"
+exp_004,0,Compilation error,,
+exp_004,1,Runtime error,0.0,
+exp_004,2,Correct,0.5073029708495579,"H, B"
+exp_004,3,Correct,0.6797862074724793,"H, B"
+exp_004,4,Correct,0.760006369478199,"H, B"
+exp_004,5,Correct,0.6255372867354638,"H, B"
+exp_004,6,Correct,0.7896354314777773,"H, B"
+exp_004,7,Numerical error,0.0,
+exp_005,0,Runtime error,0.0,
+exp_005,1,Correct,0.5442226753753543,"H, B"
+exp_005,2,Runtime error,0.0,
+exp_005,3,Compilation error,,
+exp_005,4,Kernel Execution Timeout,0.0,
+exp_005,5,Numerical error,0.0,
+exp_005,6,Numerical error,0.0,
+exp_005,7,Numerical error,0.0,
+exp_006,0,Kernel Execution Timeout,0.0,
+exp_006,1,Numerical error,0.0,
+exp_006,2,Numerical error,0.0,
+exp_006,3,Numerical error,0.0,
+exp_006,4,Numerical error,0.0,
+exp_006,5,Numerical error,0.0,
+exp_006,6,Numerical error,0.0,
+exp_006,7,Numerical error,0.0,
+exp_007,0,Kernel Execution Timeout,0.0,
+exp_007,1,Kernel Execution Timeout,0.0,
+exp_007,2,Numerical error,0.0,
+exp_007,3,Numerical error,0.0,
+exp_007,4,Numerical error,0.0,
+exp_007,5,Runtime error,0.0,
+exp_007,6,Numerical error,0.0,
+exp_007,7,Numerical error,0.0,
+exp_008,0,Compilation error,,
+exp_008,1,Correct,0.19122273671996015,"H, B"
+exp_008,2,Correct,0.3248249935591948,"H, B"
+exp_008,3,Correct,0.3370151311441555,"H, B"
+exp_008,4,Runtime error,0.0,
+exp_008,5,Correct,0.3448452760282362,"H, B"
+exp_008,6,Correct,0.5077689110564636,"H, B"
+exp_008,7,Correct,0.33695492478796235,"H, B"
+exp_009,0,Numerical error,0.0,
+exp_009,1,Correct,0.2994957994816943,"H, B"
+exp_009,2,Correct,0.6482492449876387,"H, B"
+exp_009,3,Correct,0.6527011209535939,"H, B"
+exp_009,4,Correct,0.6565405109731495,"H, B"
+exp_009,5,Kernel Execution Timeout,0.0,
+exp_009,6,Kernel Execution Timeout,0.0,
+exp_009,7,Kernel Execution Timeout,0.0,
+exp_010,0,Compilation error,,
+exp_010,1,Kernel Execution Timeout,0.0,
+exp_010,2,Correct,0.18572205064631775,"H, B"
+exp_010,3,Correct,0.25801671879071786,"H, B"
+exp_010,4,Runtime error,0.0,
+exp_010,5,Kernel Execution Timeout,0.0,
+exp_010,6,Numerical error,0.0,
+exp_010,7,Numerical error,0.0,
+exp_011,0,Runtime error,0.0,
+exp_011,1,Correct,0.45252938030148243,"H, B"
+exp_011,2,Correct,0.5772289564037553,"H, B"
+exp_011,3,Correct,0.6245608618074054,"H, B"
+exp_011,4,Correct,0.5246202847010791,"H, B"
+exp_011,5,Correct,0.6427477078867653,"H, B"
+exp_011,6,Correct,0.6455904904706881,"H, B"
+exp_011,7,Correct,0.8916522745966365,"H, B"
