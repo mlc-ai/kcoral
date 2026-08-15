@@ -1,0 +1,232 @@
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+#include <cuda.h>
+#include <cstdint>
+#include <stdio.h>
+#include <math.h>
+#include <tvm/ffi/extra/c_env_api.h>
+#include <tvm/ffi/tvm_ffi.h>
+
+#define CUDA_CHECK(call) do {                                      \
+    cudaError_t _e = (call);                                       \
+    if (_e != cudaSuccess) {                                       \
+        fprintf(stderr, "CUDA error %s at %s:%d\n",               \
+                cudaGetErrorString(_e), __FILE__, __LINE__);       \
+        exit(1);                                                   \
+    }                                                              \
+} while(0)
+
+namespace tvm_ffi_mha_causal_d128 {
+
+// Causal FlashAttention kernel for BF16 inputs
+template <int BM, int BN, int D, int NUM_THREADS>
+__global__ void causal_attn_kernel(
+    const __nv_bfloat16* __restrict__ Q,
+    const __nv_bfloat16* __restrict__ K,
+    const __nv_bfloat16* __restrict__ V,
+    __nv_bfloat16* __restrict__ O,
+    float* __restrict__ LSE,
+    int B, int H, int S,
+    float inv_sqrt_d)
+{
+    // Shared memory layout: Q_tile + K_tile + V_tile
+    extern __shared__ char shared_mem[];
+    __nv_bfloat16* s_Q = reinterpret_cast<__nv_bfloat16*>(shared_mem);
+    __nv_bfloat16* s_K = s_Q + BM * D;
+    __nv_bfloat16* s_V = s_K + BN * D;
+
+    int tid = threadIdx.x;
+    int bid_bh = blockIdx.x;
+    int batch = bid_bh / H;
+    int head = bid_bh % H;
+    if (batch >= B || head >= H) return;
+
+    int64_t bh_off = (static_cast<int64_t>(batch) * H + head) * static_cast<int64_t>(S) * D;
+    const __nv_bfloat16* Q_base = Q + bh_off;
+    const __nv_bfloat16* K_base = K + bh_off;
+    const __nv_bfloat16* V_base = V + bh_off;
+    __nv_bfloat16* O_base      = O + bh_off;
+    float* LSE_base             = LSE + (batch * H + head) * S;
+
+    int num_kv_blocks = (S + BN - 1) / BN;
+
+    // Process one query block (BM rows) assigned to this block.y
+    int b_m = blockIdx.y;
+    int q_start = b_m * BM;
+    if (q_start >= S) return;
+    int bm_actual = min(q_start + BM, S) - q_start;
+
+    // Load Q tile into shared memory cooperatively
+    for (int idx = tid; idx < bm_actual * D; idx += NUM_THREADS) {
+        int r = idx / D;
+        int c = idx % D;
+        s_Q[r * D + c] = Q_base[(q_start + r) * D + c];
+    }
+    __syncthreads();
+
+    // Each thread handles one query row (tid < bm_actual means active)
+    bool active = tid < bm_actual;
+    float m_val = active ? -INFINITY : 0.0f;
+    float l_val = active ? 0.0f       : 0.0f;
+    
+    // Per-thread output accumulator for this thread's query row
+    float o_vals[D];
+    #pragma unroll
+    for (int d = 0; d < D; d++) o_vals[d] = 0.0f;
+
+    // Iterate over all KV blocks
+    for (int b_n = 0; b_n < num_kv_blocks; b_n++) {
+        int kv_start = b_n * BN;
+        int bn_actual = min(kv_start + BN, S) - kv_start;
+
+        // Load K and V tiles cooperatively
+        for (int idx = tid; idx < bn_actual * D; idx += NUM_THREADS) {
+            int r = idx / D;
+            int c = idx % D;
+            s_K[r * D + c] = K_base[(kv_start + r) * D + c];
+            s_V[r * D + c] = V_base[(kv_start + r) * D + c];
+        }
+        __syncthreads();
+
+        // Pass 1: compute new local max over keys in this block
+        float new_m = -INFINITY;
+        if (active) {
+            int qr = tid;  // row index within [0, BM)
+            int qp = q_start + qr;  // absolute query position
+
+            for (int k_col = 0; k_col < bn_actual; k_col++) {
+                int kp = kv_start + k_col;
+                float dot = 0.0f;
+
+                // Dot product with 4-wide unrolling for D=128
+                #pragma unroll
+                for (int dd = 0; dd < D; dd += 4) {
+                    float q0 = __bfloat162float(s_Q[qr * D + dd]);
+                    float q1 = __bfloat162float(s_Q[qr * D + dd + 1]);
+                    float q2 = __bfloat162float(s_Q[qr * D + dd + 2]);
+                    float q3 = __bfloat162float(s_Q[qr * D + dd + 3]);
+                    float k0 = __bfloat162float(s_K[k_col * D + dd]);
+                    float k1 = __bfloat162float(s_K[k_col * D + dd + 1]);
+                    float k2 = __bfloat162float(s_K[k_col * D + dd + 2]);
+                    float k3 = __bfloat162float(s_K[k_col * D + dd + 3]);
+                    dot += q0*k0 + q1*k1 + q2*k2 + q3*k3;
+                }
+                dot *= inv_sqrt_d;
+
+                // Causal mask
+                if (kp <= qp && dot > new_m) {
+                    new_m = dot;
+                }
+            }
+        }
+
+        // Update running max and compute scaling factor
+        float old_m = m_val;
+        if (new_m > m_val) m_val = new_m;
+        float alpha = expf(old_m - m_val);
+
+        // Pass 2: compute attn scores and accumulate into output
+        float new_l = 0.0f;
+        if (active) {
+            int qr = tid;
+            int qp = q_start + qr;
+
+            for (int k_col = 0; k_col < bn_actual; k_col++) {
+                int kp = kv_start + k_col;
+                float dot = 0.0f;
+
+                #pragma unroll
+                for (int dd = 0; dd < D; dd += 4) {
+                    float q0 = __bfloat162float(s_Q[qr * D + dd]);
+                    float q1 = __bfloat162float(s_Q[qr * D + dd + 1]);
+                    float q2 = __bfloat162float(s_Q[qr * D + dd + 2]);
+                    float q3 = __bfloat162float(s_Q[qr * D + dd + 3]);
+                    float k0 = __bfloat162float(s_K[k_col * D + dd]);
+                    float k1 = __bfloat162float(s_K[k_col * D + dd + 1]);
+                    float k2 = __bfloat162float(s_K[k_col * D + dd + 2]);
+                    float k3 = __bfloat162float(s_K[k_col * D + dd + 3]);
+                    dot += q0*k0 + q1*k1 + q2*k2 + q3*k3;
+                }
+                dot *= inv_sqrt_d;
+
+                float attn;
+                if (kp <= qp) {
+                    attn = expf(dot - m_val);
+                    new_l += attn;
+
+                    #pragma unroll
+                    for (int dd = 0; dd < D; dd++) {
+                        o_vals[dd] += attn * __bfloat162float(s_V[k_col * D + dd]);
+                    }
+                }
+            }
+        }
+
+        // Update accumulators
+        #pragma unroll
+        for (int dd = 0; dd < D; dd++) {
+            o_vals[dd] *= alpha;
+        }
+        l_val = l_val * alpha + new_l;
+    }
+
+    // Write final output and LSE
+    if (active) {
+        int out_row = q_start + tid;
+        float inv_l = 1.0f / fmaxf(l_val, 1e-12f);
+
+        #pragma unroll
+        for (int dd = 0; dd < D; dd++) {
+            O_base[static_cast<int64_t>(out_row) * D + dd] = __float2bfloat16(o_vals[dd] * inv_l);
+        }
+        LSE_base[out_row] = m_val + logf(fmaxf(l_val, 1e-12f));
+    }
+}
+
+void run(tvm::ffi::TensorView Q, tvm::ffi::TensorView K, tvm::ffi::TensorView V,
+         tvm::ffi::TensorView O, tvm::ffi::TensorView LSE) {
+    CUDA_CHECK(cudaSetDevice(Q.device().device_id));
+
+    int64_t B = Q.size(0);
+    int64_t H = Q.size(1);
+    int64_t S = Q.size(2);
+    int64_t D = Q.size(3);
+
+    const __nv_bfloat16* q_ptr = static_cast<const __nv_bfloat16*>(Q.data_ptr());
+    const __nv_bfloat16* k_ptr = static_cast<const __nv_bfloat16*>(K.data_ptr());
+    const __nv_bfloat16* v_ptr = static_cast<const __nv_bfloat16*>(V.data_ptr());
+    __nv_bfloat16* o_ptr       = static_cast<__nv_bfloat16*>(O.data_ptr());
+    float* lse_ptr             = static_cast<float*>(LSE.data_ptr());
+
+    constexpr int BM  = 64;
+    constexpr int BN  = 64;
+    constexpr int NUM_THREADS = 64;
+
+    int num_q_blocks = (S + BM - 1) / BM;
+    dim3 grid(static_cast<int>(B * H), num_q_blocks);
+    dim3 block(NUM_THREADS);
+
+    // Shared memory: Q(BM*D bf16) + K(BN*D bf16) + V(BN*D bf16)
+    size_t smem_size = (BM + BN + BN) * D * sizeof(__nv_bfloat16);
+
+    cudaStream_t stream = static_cast<cudaStream_t>(
+        TVMFFIEnvGetStream(Q.device().device_type, Q.device().device_id));
+
+    float inv_sqrt_d = rsqrtf(static_cast<float>(D));
+
+    causal_attn_kernel<BM, BN, static_cast<int>(D), NUM_THREADS><<<grid, block, smem_size, stream>>>(
+        q_ptr, k_ptr, v_ptr, o_ptr, lse_ptr,
+        static_cast<int>(B), static_cast<int>(H),
+        static_cast<int>(S),
+        inv_sqrt_d
+    );
+
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+}
+
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(run, tvm_ffi_mha_causal_d128::run);
+
+}  // namespace tvm_ffi_mha_causal_d128

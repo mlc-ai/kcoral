@@ -1,0 +1,453 @@
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+#include <cuda.h>
+#include <cstdint>
+#include <stdio.h>
+#include <tvm/ffi/extra/c_env_api.h>
+#include <tvm/ffi/tvm_ffi.h>
+
+#define CUDA_CHECK(call) do {                                      \
+    cudaError_t _e = (call);                                       \
+    if (_e != cudaSuccess) {                                       \
+        fprintf(stderr, "CUDA error %s at %s:%d\n",               \
+                cudaGetErrorString(_e), __FILE__, __LINE__);       \
+        exit(1);                                                   \
+    }                                                              \
+} while(0)
+
+#define CU_CHECK(call) do {                                        \
+    CUresult _e = (call);                                          \
+    if (_e != CUDA_SUCCESS) {                                      \
+        fprintf(stderr, "CU error %d at %s:%d\n",                 \
+                (int)_e, __FILE__, __LINE__);                      \
+        exit(1);                                                   \
+    }                                                              \
+} while(0)
+
+// -------------------------------------------------------------------------
+// SM100 Helper Functions
+// -------------------------------------------------------------------------
+__device__ __forceinline__ uint32_t cluster_rank_fn() {
+    uint32_t r;
+    asm volatile("mov.u32 %0, %%cluster_ctarank;" : "=r"(r));
+    return r;
+}
+
+__device__ __forceinline__ void cluster_sync_fn() {
+    asm volatile("barrier.cluster.arrive;\nbarrier.cluster.wait;\n" ::: "memory");
+}
+
+template <int NUM_REGS>
+__device__ __forceinline__ void setmaxnreg_inc_sync_fn() {
+    asm volatile("setmaxnreg.inc.sync.aligned.u32 %0;" :: "n"(NUM_REGS) : "memory");
+}
+
+__device__ __forceinline__ void init_smem_barrier_fn(uint64_t* bar, uint32_t count) {
+    asm volatile("mbarrier.init.shared.b64 [%0], %1;"
+        :: "r"((uint32_t)__cvta_generic_to_shared(&bar[0])), "r"(count));
+}
+
+__device__ __forceinline__ void fence_smem_barrier_init_fn() {
+    asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
+}
+
+__device__ __forceinline__ void mbarrier_arrive_and_expect_tx_fn(uint64_t* bar, uint32_t tx_bytes) {
+    asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;"
+        :: "r"((uint32_t)__cvta_generic_to_shared(&bar[0])), "r"(tx_bytes) : "memory");
+}
+
+__device__ __forceinline__ void mbarrier_arrive_expect_tx_cluster_fn(uint64_t* bar, uint32_t tx, uint32_t target_cta) {
+    uint32_t a = (uint32_t)__cvta_generic_to_shared(&bar[0]);
+    uint32_t remote_a;
+    asm volatile("mapa.shared::cluster.u32 %0, %1, %2;"
+                 : "=r"(remote_a) : "r"(a), "r"(target_cta));
+    asm volatile("mbarrier.arrive.expect_tx.shared::cluster.b64 _, [%0], %1;"
+                 :: "r"(remote_a), "r"(tx));
+}
+
+__device__ __forceinline__ void mbarrier_wait_fn(uint64_t* bar, uint32_t phase) {
+    asm volatile(
+        "{\n"
+        ".reg .pred P;\n"
+        "WAIT_%=:\n"
+        "mbarrier.try_wait.parity.shared.b64 P, [%0], %1;\n"
+        "@!P bra WAIT_%=;\n"
+        "}\n"
+        :: "r"((uint32_t)__cvta_generic_to_shared(&bar[0])), "r"(phase));
+}
+
+__device__ __forceinline__ void tcgen05_fence_after_fn() {
+    asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
+}
+
+__device__ __forceinline__ void prefetch_tma_descriptor_fn(const CUtensorMap* d) {
+    asm volatile("prefetch.tensormap [%0];" :: "l"(d) : "memory");
+}
+
+__device__ __forceinline__ void tma_load_2d_cg2_fn(const CUtensorMap* d, uint64_t* bar, void* smem, int32_t c0, int32_t c1) {
+    uint32_t sa = (uint32_t)__cvta_generic_to_shared(smem);
+    uint32_t ba = (uint32_t)__cvta_generic_to_shared(&bar[0]) & 0xFEFFFFFF;
+    asm volatile(
+        "cp.async.bulk.tensor.2d.cta_group::2.shared::cluster.global.tile.mbarrier::complete_tx::bytes"
+        " [%0], [%1, {%2, %3}], [%4];"
+        :: "r"(sa), "l"((uint64_t)d), "r"(c0), "r"(c1), "r"(ba) : "memory");
+}
+
+__device__ __forceinline__ void tmem_alloc_fn(uint32_t* dst_smem, int ncols) {
+    uint32_t a = (uint32_t)__cvta_generic_to_shared(dst_smem);
+    asm volatile("tcgen05.alloc.cta_group::2.sync.aligned.shared::cta.b32 [%0], %1;"
+   :: "r"(a), "r"(ncols));
+}
+
+__device__ __forceinline__ void tmem_dealloc_fn(uint32_t addr, int ncols) {
+    asm volatile("tcgen05.dealloc.cta_group::2.sync.aligned.b32 %0, %1;"
+   :: "r"(addr), "r"(ncols));
+}
+
+__device__ __forceinline__ uint64_t make_smem_desc_sm100_fn(void* smem_ptr, uint32_t lbo, uint32_t sbo) {
+    uint64_t d = 0;
+    uint32_t addr = (uint32_t)__cvta_generic_to_shared(smem_ptr);
+    d |= (uint64_t)(addr & 0x3FFFF) >> 4;
+    d |= (uint64_t)((lbo & 0x3FFFF) >> 4) << 16; 
+    d |= (uint64_t)((sbo & 0x3FFFF) >> 4) << 32; 
+    d |= (uint64_t)1 << 46;  
+    
+    uint32_t base_offset = (addr >> 7) & 0x7;
+    d |= (uint64_t)(base_offset) << 49;
+    
+    d |= (uint64_t)2 << 61;   
+    return d;
+}
+
+__device__ __forceinline__ uint32_t make_instr_desc_fn(uint32_t M, uint32_t N) {
+    uint32_t d = 0;
+    d |= (1u << 4);    // c_format = FP32
+    d |= (1u << 7);    // a_format = BF16
+    d |= (1u << 10);   // b_format = BF16
+    d |= (0u << 15);   // a_major = 0 (K-Major)
+    d |= (0u << 16);   // b_major = 0 (K-Major)
+    d |= ((N / 8) << 17);     
+    d |= ((M / 16) << 24);    
+    return d;
+}
+
+__device__ __forceinline__ void umma_f16_cg2_fn(uint32_t tmem_c, uint64_t desc_a, uint64_t desc_b, uint32_t idesc, uint32_t accum) {
+    asm volatile(
+        "{\n.reg .pred p;\n"
+        "setp.ne.b32 p, %4, 0;\n"
+        "tcgen05.mma.cta_group::2.kind::f16 [%0], %1, %2, %3, p;\n}\n"
+        :: "r"(tmem_c), "l"(desc_a), "l"(desc_b), "r"(idesc), "r"(accum));
+}
+
+__device__ __forceinline__ void umma_commit_2sm_fn(uint64_t* bar) {
+    uint32_t a = (uint32_t)__cvta_generic_to_shared(&bar[0]);
+    asm volatile(
+        "tcgen05.commit.cta_group::2"
+        ".mbarrier::arrive::one.shared::cluster.multicast::cluster.b64"
+        " [%0], %1;"
+        :: "r"(a), "h"((uint16_t)0x3)); 
+}
+
+__device__ __forceinline__ uint32_t pack_bf16_fn(uint32_t fp32_a, uint32_t fp32_b) {
+    __nv_bfloat16 a = __float2bfloat16(__uint_as_float(fp32_a));
+    __nv_bfloat16 b = __float2bfloat16(__uint_as_float(fp32_b));
+    uint32_t result;
+    asm("mov.b32 %0, {%1, %2};"
+        : "=r"(result)
+        : "h"(*reinterpret_cast<uint16_t*>(&a)),
+          "h"(*reinterpret_cast<uint16_t*>(&b)));
+    return result;
+}
+
+__device__ __forceinline__ void st_shared_128_fn(uint32_t addr, uint32_t v0, uint32_t v1, uint32_t v2, uint32_t v3) {
+    asm volatile("st.shared.v4.b32 [%0], {%1, %2, %3, %4};"
+                 :: "r"(addr), "r"(v0), "r"(v1), "r"(v2), "r"(v3) : "memory");
+}
+
+__device__ __forceinline__ void tmem_epilogue_coalesced_4w_fixed_fn(
+    __nv_bfloat16* D, __nv_bfloat16* smem_out,
+    uint32_t M, uint32_t N, uint32_t m_block, uint32_t n_block,
+    uint32_t BM, uint32_t BN, uint32_t tmem_base, uint32_t smem_stride) {
+    
+    // Phase 1: TMEM -> SMEM
+    // Unrolled to overlap TMEM loads
+    #pragma unroll 1
+    for (uint32_t col = 0; col < BN; col += 16) {
+        uint32_t r0, r1, r2, r3, r4, r5, r6, r7;
+        uint32_t r8, r9, r10, r11, r12, r13, r14, r15;
+        uint32_t taddr0 = tmem_base + col;
+        uint32_t taddr1 = tmem_base + col + 8;
+        
+        asm volatile("tcgen05.ld.sync.aligned.32x32b.x8.b32 {%0,%1,%2,%3,%4,%5,%6,%7}, [%8];"
+                     : "=r"(r0),"=r"(r1),"=r"(r2),"=r"(r3),"=r"(r4),"=r"(r5),"=r"(r6),"=r"(r7) : "r"(taddr0));
+        asm volatile("tcgen05.ld.sync.aligned.32x32b.x8.b32 {%0,%1,%2,%3,%4,%5,%6,%7}, [%8];"
+                     : "=r"(r8),"=r"(r9),"=r"(r10),"=r"(r11),"=r"(r12),"=r"(r13),"=r"(r14),"=r"(r15) : "r"(taddr1));
+        
+        asm volatile("tcgen05.wait::ld.sync.aligned;" ::: "memory");
+        
+        uint32_t p0 = pack_bf16_fn(r0, r1);
+        uint32_t p1 = pack_bf16_fn(r2, r3);
+        uint32_t p2 = pack_bf16_fn(r4, r5);
+        uint32_t p3 = pack_bf16_fn(r6, r7);
+        
+        uint32_t p4 = pack_bf16_fn(r8, r9);
+        uint32_t p5 = pack_bf16_fn(r10, r11);
+        uint32_t p6 = pack_bf16_fn(r12, r13);
+        uint32_t p7 = pack_bf16_fn(r14, r15);
+        
+        uint32_t smem_addr0 = (uint32_t)__cvta_generic_to_shared(&smem_out[threadIdx.x * smem_stride + col]);
+        uint32_t smem_addr1 = (uint32_t)__cvta_generic_to_shared(&smem_out[threadIdx.x * smem_stride + col + 8]);
+        
+        st_shared_128_fn(smem_addr0, p0, p1, p2, p3);
+        st_shared_128_fn(smem_addr1, p4, p5, p6, p7);
+    }
+    __syncthreads();
+    
+    // Phase 2: SMEM -> Global
+    uint32_t warp_id = threadIdx.x / 32;
+    uint32_t lane_id = threadIdx.x % 32;
+    uint32_t num_steps = (BM + 3) / 4; // 32 steps for 128 rows across 4 warps
+    
+    #pragma unroll 1
+    for (uint32_t step = 0; step < num_steps; ++step) {
+        uint32_t row = step * 4 + warp_id;
+        if (row >= BM) continue;
+        uint32_t global_row = m_block * BM + row;
+        
+        #pragma unroll
+        for (uint32_t c = 0; c < BN; c += 128) {
+            uint32_t col_start = c + lane_id * 4;
+            if (col_start < BN) {
+                uint32_t global_col = n_block * BN + col_start;
+                if (global_row < M && global_col + 3 < N) {
+                    uint2 data = *reinterpret_cast<uint2*>(&smem_out[row * smem_stride + col_start]);
+                    *reinterpret_cast<uint2*>(D + (uint64_t)global_row * N + global_col) = data;
+                }
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------------------
+// Kernel and Host Setup
+// -------------------------------------------------------------------------
+
+struct SharedStorage {
+    union {
+        struct {
+            __align__(1024) uint8_t A[3][32768]; 
+            __align__(1024) uint8_t B[3][32768];
+        };
+        // 256 + 8 elements padding minimizes bank conflicts during Phase 1
+        __align__(1024) __nv_bfloat16 epilogue[128][264];
+    };
+    __align__(8)    uint64_t bar_produce[3];
+    __align__(8)    uint64_t bar_consume[3];
+    __align__(16)   uint32_t tmem_addr;
+};
+
+__global__ __launch_bounds__(128, 1) void gemm_kernel(
+    const __grid_constant__ CUtensorMap tma_A,
+    const __grid_constant__ CUtensorMap tma_B,
+    __nv_bfloat16* C,
+    uint32_t M, uint32_t N, uint32_t K
+) {
+    if (threadIdx.x == 0) {
+        prefetch_tma_descriptor_fn(&tma_A);
+        prefetch_tma_descriptor_fn(&tma_B);
+    }
+
+    extern __shared__ __align__(1024) uint8_t smem_raw[];
+    SharedStorage& smem = *reinterpret_cast<SharedStorage*>(smem_raw);
+
+    uint32_t cluster_id_x = blockIdx.x / 2;
+    uint32_t cluster_id_y = blockIdx.y;
+    uint32_t rank = cluster_rank_fn();
+
+    uint32_t c_m = cluster_id_y * 256;
+    uint32_t c_n = cluster_id_x * 256;
+
+    if (c_m >= M || c_n >= N) return;
+
+    if (threadIdx.x < 32) {
+        tmem_alloc_fn(&smem.tmem_addr, 256);
+    }
+    __syncthreads();
+    uint32_t tmem_addr = smem.tmem_addr;
+
+    uint32_t instr_desc = make_instr_desc_fn(256, 256);
+
+    if (threadIdx.x == 0) {
+        #pragma unroll 3
+        for (int i = 0; i < 3; ++i) {
+            init_smem_barrier_fn(&smem.bar_produce[i], 2);
+            init_smem_barrier_fn(&smem.bar_consume[i], 1);
+        }
+    }
+    fence_smem_barrier_init_fn();
+    __syncthreads();
+    cluster_sync_fn();
+
+    uint32_t k_iters = K / 128;
+    uint32_t stages = 3;
+    
+    uint32_t warp_id = threadIdx.x / 32;
+    uint32_t lane_id = threadIdx.x % 32;
+
+    if (warp_id == 0) {
+        uint32_t phase_consume_wait[3] = {0, 0, 0};
+        
+        #pragma unroll 1
+        for (uint32_t k = 0; k < k_iters; ++k) {
+            int sp = k % stages;
+            
+            if (k >= stages) {
+                if (lane_id == 0) {
+                    mbarrier_wait_fn(&smem.bar_consume[sp], phase_consume_wait[sp]);
+                    phase_consume_wait[sp] ^= 1;
+                }
+            }
+            
+            if (lane_id == 0) {
+                if (rank == 0) {
+                    mbarrier_arrive_and_expect_tx_fn(&smem.bar_produce[sp], 65536);
+                } else {
+                    mbarrier_arrive_expect_tx_cluster_fn(&smem.bar_produce[sp], 65536, 0);
+                }
+                tma_load_2d_cg2_fn(&tma_A, &smem.bar_produce[sp], smem.A[sp], k * 128, c_m + rank * 128);
+                tma_load_2d_cg2_fn(&tma_B, &smem.bar_produce[sp], smem.B[sp], k * 128, c_n + rank * 128);
+                
+                tma_load_2d_cg2_fn(&tma_A, &smem.bar_produce[sp], smem.A[sp] + 16384, k * 128 + 64, c_m + rank * 128);
+                tma_load_2d_cg2_fn(&tma_B, &smem.bar_produce[sp], smem.B[sp] + 16384, k * 128 + 64, c_n + rank * 128);
+            }
+        }
+    }
+    else if (warp_id == 1) {
+        uint32_t phase_produce_wait[3] = {0, 0, 0};
+        uint32_t phase_consume_wait[3] = {0, 0, 0};
+        
+        #pragma unroll 1
+        for (uint32_t k = 0; k < k_iters; ++k) {
+            int sc = k % stages;
+            
+            if (rank == 0 && lane_id == 0) {
+                mbarrier_wait_fn(&smem.bar_produce[sc], phase_produce_wait[sc]);
+                phase_produce_wait[sc] ^= 1;
+                
+                #pragma unroll
+                for (int step = 0; step < 8; step++) {
+                    uint8_t* ptr_A = smem.A[sc] + (step / 4) * 16384 + (step % 4) * 32;
+                    uint8_t* ptr_B = smem.B[sc] + (step / 4) * 16384 + (step % 4) * 32;
+                    uint64_t desc_A_val = make_smem_desc_sm100_fn(ptr_A, 1, 1024);
+                    uint64_t desc_B_val = make_smem_desc_sm100_fn(ptr_B, 1, 1024);
+                    uint32_t accum = (k > 0 || step > 0) ? 1 : 0;
+                    umma_f16_cg2_fn(tmem_addr, desc_A_val, desc_B_val, instr_desc, accum);
+                }
+                umma_commit_2sm_fn(&smem.bar_consume[sc]);
+                phase_consume_wait[sc] ^= 1;
+            }
+        }
+        
+        if (rank == 0 && lane_id == 0) {
+            int last_sc = (k_iters - 1) % stages;
+            mbarrier_wait_fn(&smem.bar_consume[last_sc], phase_consume_wait[last_sc] ^ 1);
+        }
+    }
+
+    __syncthreads();
+    cluster_sync_fn();
+    tcgen05_fence_after_fn();
+
+    tmem_epilogue_coalesced_4w_fixed_fn(
+        C, &smem.epilogue[0][0],
+        M, N, 
+        cluster_id_y * 2 + rank, 
+        cluster_id_x,            
+        128, 256,
+        tmem_addr, 264
+    );
+
+    cluster_sync_fn();
+    if (threadIdx.x < 32) {
+        tmem_dealloc_fn(tmem_addr, 256);
+    }
+}
+
+inline CUresult create_tma_2d_descriptor_2B(CUtensorMap* d, void* globalAddress, uint64_t gmem_inner_dim, uint64_t gmem_outer_dim, uint32_t smem_inner_dim, uint32_t smem_outer_dim, CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion, CUtensorMapFloatOOBfill oobFill) {
+    cuuint64_t globalDim[2] = {gmem_inner_dim, gmem_outer_dim};
+    cuuint64_t globalStrides[1] = {gmem_inner_dim * 2};
+    cuuint32_t boxDim[2] = {smem_inner_dim, smem_outer_dim};
+    cuuint32_t elementStrides[2] = {1, 1};
+    return cuTensorMapEncodeTiled(
+        d,
+        CU_TENSOR_MAP_DATA_TYPE_BFLOAT16,
+        2, 
+        globalAddress,
+        globalDim,
+        globalStrides,
+        boxDim, 
+        elementStrides,
+        CU_TENSOR_MAP_INTERLEAVE_NONE,
+        swizzle,
+        l2Promotion,
+        oobFill
+    );
+}
+
+namespace gemm_n7168_k5120 {
+
+void run(tvm::ffi::TensorView A, tvm::ffi::TensorView B, tvm::ffi::TensorView C) {
+    CUDA_CHECK(cudaSetDevice(A.device().device_id));
+    
+    int64_t M = A.size(0);
+    int64_t K = A.size(1);
+    int64_t N = B.size(0); 
+
+    CUtensorMap tma_A, tma_B;
+    
+    CU_CHECK(create_tma_2d_descriptor_2B(
+        &tma_A, A.data_ptr(), K, M, 64, 128,
+        CU_TENSOR_MAP_SWIZZLE_128B,
+        CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
+        CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA
+    ));
+
+    CU_CHECK(create_tma_2d_descriptor_2B(
+        &tma_B, B.data_ptr(), K, N, 64, 128,
+        CU_TENSOR_MAP_SWIZZLE_128B,
+        CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
+        CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA
+    ));
+
+    int num_n = (N + 255) / 256;
+    int num_m = (M + 255) / 256;
+    dim3 grid(num_n * 2, num_m, 1);
+    dim3 block(128, 1, 1);
+    
+    int max_smem = sizeof(SharedStorage);
+    CUDA_CHECK(cudaFuncSetAttribute(gemm_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, max_smem));
+    
+    cudaStream_t stream = static_cast<cudaStream_t>(TVMFFIEnvGetStream(A.device().device_type, A.device().device_id));
+    
+    cudaLaunchConfig_t config = {};
+    config.gridDim = grid;
+    config.blockDim = block;
+    config.dynamicSmemBytes = max_smem;
+    config.stream = stream;
+    cudaLaunchAttribute attrs[1];
+    attrs[0].id = cudaLaunchAttributeClusterDimension;
+    attrs[0].val.clusterDim.x = 2;
+    attrs[0].val.clusterDim.y = 1;
+    attrs[0].val.clusterDim.z = 1;
+    config.attrs = attrs;
+    config.numAttrs = 1;
+    
+    CUDA_CHECK(cudaLaunchKernelEx(&config, gemm_kernel, tma_A, tma_B, static_cast<__nv_bfloat16*>(C.data_ptr()), (uint32_t)M, (uint32_t)N, (uint32_t)K));
+    CUDA_CHECK(cudaGetLastError());
+}
+
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(run, run);
+
+} // namespace gemm_n7168_k5120

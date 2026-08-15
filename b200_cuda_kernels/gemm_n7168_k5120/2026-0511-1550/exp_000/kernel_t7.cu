@@ -1,0 +1,329 @@
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+#include <cuda.h>
+#include <stdio.h>
+#include <tvm/ffi/extra/c_env_api.h>
+#include <tvm/ffi/tvm_ffi.h>
+
+#define CUDA_CHECK(call) do {                                      \
+    cudaError_t _e = (call);                                       \
+    if (_e != cudaSuccess) {                                       \
+        fprintf(stderr, "CUDA error %s at %s:%d\n",               \
+                cudaGetErrorString(_e), __FILE__, __LINE__);       \
+        exit(1);                                                   \
+    }                                                              \
+} while(0)
+
+namespace gemm_n7168_k5120 {
+
+__device__ __forceinline__ void tcgen05_fence_after_fn() {
+    asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
+}
+
+__device__ __forceinline__ void tcgen05_fence_before_fn() {
+    asm volatile("tcgen05.fence::before_thread_sync;" ::: "memory");
+}
+
+template <int NUM_REGS>
+__device__ __forceinline__ void setmaxnreg_inc_sync_fn() {
+    asm volatile("setmaxnreg.inc.sync.aligned.u32 %0;" :: "n"(NUM_REGS) : "memory");
+}
+
+__device__ __forceinline__ void init_smem_barrier_fn(uint64_t* bar, uint32_t count) {
+    asm volatile("mbarrier.init.shared.b64 [%0], %1;"
+        :: "r"((uint32_t)__cvta_generic_to_shared(&bar[0])), "r"(count));
+}
+
+__device__ __forceinline__ void fence_smem_barrier_init_fn() {
+    asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
+}
+
+__device__ __forceinline__ void mbarrier_arrive_and_expect_tx_fn(uint64_t* bar, uint32_t tx_bytes) {
+    asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;"
+        :: "r"((uint32_t)__cvta_generic_to_shared(bar)), "r"(tx_bytes) : "memory");
+}
+
+__device__ __forceinline__ void mbarrier_wait_fn(uint64_t* bar, uint32_t phase) {
+    asm volatile(
+        "{\n"
+        ".reg .pred P;\n"
+        "WAIT_%=:\n"
+        "mbarrier.try_wait.parity.shared.b64 P, [%0], %1;\n"
+        "@!P bra WAIT_%=;\n"
+        "}\n"
+        :: "r"((uint32_t)__cvta_generic_to_shared(bar)), "r"(phase));
+}
+
+__device__ __forceinline__ void tma_load_2d_fn(const CUtensorMap* d, uint64_t* bar, void* smem, int32_t c0, int32_t c1) {
+    asm volatile(
+        "cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes [%0], [%1, {%3, %4}], [%2];"
+        :: "r"((uint32_t)__cvta_generic_to_shared(smem)),
+        "l"((uint64_t)d),
+        "l"((uint64_t)bar),
+        "r"(c0), "r"(c1) : "memory");
+}
+
+__device__ __forceinline__ uint64_t make_smem_desc_sm100_mn_major_fn(void* smem_ptr) {
+    uint64_t d = 0;
+    uint32_t addr = (uint32_t)__cvta_generic_to_shared(smem_ptr);
+    d |= (uint64_t)((addr >> 4) & 0x3FFF);
+    
+    // For MN-Major (Row-Major A/B, K is contiguous):
+    // BK = 64. 1 span = 128B = 64 bf16.
+    // SBO = stride from first 8 rows to next 8 rows = 8 * 128 = 1024
+    // LBO = (ATOM_KMODE_DIM / 8U) * SBO = (64 / 8) * 1024 = 8192
+    uint32_t sbo = 1024;
+    uint32_t lbo = 8192;
+    
+    d |= (uint64_t)((lbo >> 4) & 0x3FFF) << 16;
+    d |= (uint64_t)((sbo >> 4) & 0x3FFF) << 32;
+    d |= (uint64_t)1 << 46;   
+    
+    uint32_t base_offset = (addr >> 7) & 0x7;
+    d |= (uint64_t)(base_offset & 0x7) << 49;
+    d |= (uint64_t)2 << 61;   // SWIZZLE_128B
+    return d;
+}
+
+__device__ __forceinline__ uint32_t make_instr_desc(uint32_t M, uint32_t N) {
+    uint32_t d = 0;
+    d |= (1u << 4);           // c_format = FP32
+    d |= (1u << 7);           // a_format = BF16
+    d |= (1u << 10);          // b_format = BF16
+    d |= (1u << 15);          // Transpose A = 1 (MN-Major, so A is M x K)
+    d |= (1u << 16);          // Transpose B = 1 (MN-Major, B is N x K -> treated as K x N transposed)
+    d |= ((N / 8) << 17);     
+    d |= ((M / 16) << 24);    
+    return d;
+}
+
+__device__ __forceinline__ void my_epilogue(
+    uint32_t tmem_addr,
+    __nv_bfloat16* D, __nv_bfloat16* smem_out,
+    uint32_t M, uint32_t N, uint32_t m_block, uint32_t n_block,
+    uint32_t BM, uint32_t BN) {
+    
+    tcgen05_fence_before_fn();
+    tcgen05_fence_after_fn();
+    for (uint32_t col = 0; col < BN; col += 4) {
+        uint32_t r0, r1, r2, r3;
+        uint32_t addr = tmem_addr + col;
+        asm volatile("tcgen05.ld.sync.aligned.32x32b.x4.b32 {%0,%1,%2,%3}, [%4];"
+                     : "=r"(r0),"=r"(r1),"=r"(r2),"=r"(r3) : "r"(addr));
+        asm volatile("tcgen05.wait::ld.sync.aligned;" ::: "memory");
+        uint32_t base = threadIdx.x * BN + col;
+        smem_out[base + 0] = __float2bfloat16(__uint_as_float(r0));
+        smem_out[base + 1] = __float2bfloat16(__uint_as_float(r1));
+        smem_out[base + 2] = __float2bfloat16(__uint_as_float(r2));
+        smem_out[base + 3] = __float2bfloat16(__uint_as_float(r3));
+    }
+    __syncthreads();
+    
+    uint32_t warp_id = threadIdx.x / 32;
+    uint32_t lane_id = threadIdx.x % 32;
+    uint32_t num_steps = (BM + 3) / 4;
+    for (uint32_t step = 0; step < num_steps; ++step) {
+        uint32_t row = step * 4 + warp_id;
+        if (row >= BM) continue;
+        uint32_t global_row = m_block * BM + row;
+        uint32_t col_start = lane_id * 4;
+        uint32_t global_col = n_block * BN + col_start;
+        if (global_row < M && global_col + 3 < N) {
+            uint2 data = *reinterpret_cast<uint2*>(&smem_out[row * BN + col_start]);
+            *reinterpret_cast<uint2*>(D + (uint64_t)global_row * N + global_col) = data;
+        }
+    }
+}
+
+union SharedStorage {
+    struct {
+        __nv_bfloat16 A[2][128 * 64];
+        __nv_bfloat16 B[2][128 * 64];
+    } gemm;
+    __nv_bfloat16 epilogue[128 * 128];
+};
+
+__global__ void __launch_bounds__(128, 2) gemm_kernel(
+    const __grid_constant__ CUtensorMap tma_A,
+    const __grid_constant__ CUtensorMap tma_B,
+    __nv_bfloat16* C,
+    uint32_t M, uint32_t N, uint32_t K) {
+    
+    setmaxnreg_inc_sync_fn<256>();
+    
+    uint32_t m_idx = blockIdx.y * 128;
+    uint32_t n_idx = blockIdx.x * 128;
+    
+    if (m_idx >= M || n_idx >= N) return;
+    
+    __shared__ __align__(1024) SharedStorage smem;
+    
+    __shared__ alignas(8) uint64_t bar_A[2];
+    __shared__ alignas(8) uint64_t bar_B[2];
+    __shared__ alignas(8) uint64_t bar_umma[2];
+    
+    if (threadIdx.x == 0) {
+        for (int i = 0; i < 2; ++i) {
+            init_smem_barrier_fn(&bar_A[i], 1);
+            init_smem_barrier_fn(&bar_B[i], 1);
+            init_smem_barrier_fn(&bar_umma[i], 1);
+        }
+        fence_smem_barrier_init_fn();
+    }
+    __syncthreads();
+    
+    __shared__ uint32_t shared_tmem_addr;
+    if (threadIdx.x < 32) {
+        uint32_t a = (uint32_t)__cvta_generic_to_shared(&shared_tmem_addr);
+        asm volatile("tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%0], %1;"
+                     :: "r"(a), "r"(128));
+    }
+    __syncthreads();
+    
+    uint32_t tx_bytes = 16384; // 128 * 64 * 2 bytes
+    
+    if (threadIdx.x == 0) {
+        for (int i = 0; i < 2 && i * 64 < K; ++i) {
+            mbarrier_arrive_and_expect_tx_fn(&bar_A[i], tx_bytes);
+            tma_load_2d_fn(&tma_A, &bar_A[i], smem.gemm.A[i], i * 64, m_idx);
+            
+            mbarrier_arrive_and_expect_tx_fn(&bar_B[i], tx_bytes);
+            tma_load_2d_fn(&tma_B, &bar_B[i], smem.gemm.B[i], i * 64, n_idx);
+        }
+    }
+    
+    uint32_t idesc = make_instr_desc(128, 128);
+    uint32_t phase_A[2] = {0, 0};
+    uint32_t phase_B[2] = {0, 0};
+    uint32_t phase_umma[2] = {0, 0};
+    
+    for (int k = 0; k < K; k += 64) {
+        int buf = (k / 64) % 2;
+        
+        mbarrier_wait_fn(&bar_A[buf], phase_A[buf]);
+        mbarrier_wait_fn(&bar_B[buf], phase_B[buf]);
+        
+        __syncthreads();
+        tcgen05_fence_after_fn(); 
+        
+        if (threadIdx.x == 0) {
+            uint32_t tmem_addr_reg;
+            asm volatile("ld.shared.b32 %0, [%1];" : "=r"(tmem_addr_reg) : "r"((uint32_t)__cvta_generic_to_shared(&shared_tmem_addr)));
+            
+            uint32_t accum = (k == 0) ? 0 : 1;
+            uint64_t s_desc_A = make_smem_desc_sm100_mn_major_fn(smem.gemm.A[buf]);
+            uint64_t s_desc_B = make_smem_desc_sm100_mn_major_fn(smem.gemm.B[buf]);
+            
+            asm volatile(
+                "{\n.reg .pred p;\n"
+                "setp.ne.b32 p, %4, 0;\n"
+                "tcgen05.mma.cta_group::1.kind::f16 [%0], %1, %2, %3, p;\n}\n"
+                :: "r"(tmem_addr_reg), "l"(s_desc_A), "l"(s_desc_B), "r"(idesc), "r"(accum));
+                
+            uint64_t a = (uint64_t)(&bar_umma[buf]);
+            asm volatile(
+                "tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [%0];"
+                :: "l"(a));
+        }
+        
+        mbarrier_wait_fn(&bar_umma[buf], phase_umma[buf]);
+        __syncthreads(); 
+        
+        int next_k = k + 2 * 64;
+        if (next_k < K) {
+            if (threadIdx.x == 0) {
+                mbarrier_arrive_and_expect_tx_fn(&bar_A[buf], tx_bytes);
+                tma_load_2d_fn(&tma_A, &bar_A[buf], smem.gemm.A[buf], next_k, m_idx);
+                
+                mbarrier_arrive_and_expect_tx_fn(&bar_B[buf], tx_bytes);
+                tma_load_2d_fn(&tma_B, &bar_B[buf], smem.gemm.B[buf], next_k, n_idx);
+            }
+        }
+        
+        phase_A[buf] ^= 1;
+        phase_B[buf] ^= 1;
+        phase_umma[buf] ^= 1;
+    }
+    
+    __syncthreads();
+    
+    uint32_t tmem_addr_reg;
+    asm volatile("ld.shared.b32 %0, [%1];" : "=r"(tmem_addr_reg) : "r"((uint32_t)__cvta_generic_to_shared(&shared_tmem_addr)));
+    
+    my_epilogue(tmem_addr_reg, C, smem.epilogue, M, N, m_idx / 128, n_idx / 128, 128, 128);
+    
+    __syncthreads();
+    if (threadIdx.x < 32) {
+        asm volatile("tcgen05.dealloc.cta_group::1.sync.aligned.b32 %0, %1;"
+                 :: "r"(tmem_addr_reg), "r"(128));
+    }
+}
+
+CUresult create_tma_2d_descriptor_2B(CUtensorMap* d, void* globalAddress, uint64_t gmem_inner_dim, uint64_t gmem_outer_dim, uint32_t smem_inner_dim, uint32_t smem_outer_dim, CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion, CUtensorMapFloatOOBfill oobFill) {
+    cuuint64_t globalDim[2] = {gmem_inner_dim, gmem_outer_dim};
+    cuuint64_t globalStrides[1] = {gmem_inner_dim * 2};
+    cuuint32_t boxDim[2] = {smem_inner_dim, smem_outer_dim};
+    cuuint32_t elementStrides[2] = {1, 1};
+    return cuTensorMapEncodeTiled(
+        d,
+        CU_TENSOR_MAP_DATA_TYPE_BFLOAT16,
+        2, 
+        globalAddress,
+        globalDim,
+        globalStrides,
+        boxDim, 
+        elementStrides,
+        CU_TENSOR_MAP_INTERLEAVE_NONE,
+        swizzle,
+        l2Promotion,
+        oobFill
+    );
+}
+
+void run(tvm::ffi::TensorView A, tvm::ffi::TensorView B, tvm::ffi::TensorView C) {
+    CUDA_CHECK(cudaSetDevice(A.device().device_id));
+    
+    int64_t M = A.size(0);
+    int64_t K = A.size(1);
+    int64_t N = B.size(0); 
+
+    __nv_bfloat16* A_ptr = static_cast<__nv_bfloat16*>(A.data_ptr());
+    __nv_bfloat16* B_ptr = static_cast<__nv_bfloat16*>(B.data_ptr());
+    __nv_bfloat16* C_ptr = static_cast<__nv_bfloat16*>(C.data_ptr());
+
+    CUtensorMap tma_A, tma_B;
+    
+    CUresult resA = create_tma_2d_descriptor_2B(&tma_A, A_ptr, K, M, 64, 128, CU_TENSOR_MAP_SWIZZLE_128B, CU_TENSOR_MAP_L2_PROMOTION_NONE, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+    if (resA != CUDA_SUCCESS) { fprintf(stderr, "TMA A failed\n"); exit(1); }
+    
+    CUresult resB = create_tma_2d_descriptor_2B(&tma_B, B_ptr, K, N, 64, 128, CU_TENSOR_MAP_SWIZZLE_128B, CU_TENSOR_MAP_L2_PROMOTION_NONE, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+    if (resB != CUDA_SUCCESS) { fprintf(stderr, "TMA B failed\n"); exit(1); }
+
+    int gridX = (N + 127) / 128;
+    int gridY = (M + 127) / 128;
+    
+    cudaStream_t stream = static_cast<cudaStream_t>(TVMFFIEnvGetStream(A.device().device_type, A.device().device_id));
+    
+    cudaLaunchConfig_t config = {};
+    config.gridDim = dim3(gridX, gridY, 1);
+    config.blockDim = dim3(128, 1, 1);
+    config.dynamicSmemBytes = 0;
+    config.stream = stream;
+    
+    cudaLaunchAttribute attrs[1];
+    attrs[0].id = cudaLaunchAttributeClusterDimension;
+    attrs[0].val.clusterDim.x = 1;
+    attrs[0].val.clusterDim.y = 1;
+    attrs[0].val.clusterDim.z = 1;
+    config.attrs = attrs;
+    config.numAttrs = 1;
+    
+    CUDA_CHECK(cudaLaunchKernelEx(&config, gemm_kernel, tma_A, tma_B, C_ptr, (uint32_t)M, (uint32_t)N, (uint32_t)K));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+}
+
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(run, run);
+
+} // namespace gemm_n7168_k5120

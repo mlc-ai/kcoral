@@ -1,0 +1,436 @@
+#include <cuda_bf16.h>
+#include <cuda_runtime.h>
+#include <cuda.h>
+#include <math.h>
+#include <stdio.h>
+#include <tvm/ffi/extra/c_env_api.h>
+#include <tvm/ffi/tvm_ffi.h>
+
+#define CUDA_CHECK(call) do{ cudaError_t _e=(call); if(_e!=cudaSuccess){ \
+  fprintf(stderr,"CUDA error %s at %s:%d\n",cudaGetErrorString(_e),__FILE__,__LINE__); exit(1);} }while(0)
+#define CU_CHECK(call) do{ CUresult _e=(call); if(_e!=CUDA_SUCCESS){ const char* s; cuGetErrorString(_e,&s); \
+  fprintf(stderr,"CU error %s at %s:%d\n",s,__FILE__,__LINE__); exit(1);} }while(0)
+
+namespace mha_bwd {
+using bf16 = __nv_bfloat16;
+
+__device__ __forceinline__ uint32_t cvta(const void* p){ return (uint32_t)__cvta_generic_to_shared(p); }
+__device__ __forceinline__ void init_bar(uint64_t* b, uint32_t c){
+  asm volatile("mbarrier.init.shared::cta.b64 [%0], %1;"::"r"(cvta(b)),"r"(c)); }
+__device__ __forceinline__ void fence_bar_init(){ asm volatile("fence.mbarrier_init.release.cluster;":::"memory"); }
+__device__ __forceinline__ void arrive_expect_tx(uint64_t* b, uint32_t tx){
+  asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;"::"r"(cvta(b)),"r"(tx):"memory"); }
+__device__ __forceinline__ void bar_wait(uint64_t* b, uint32_t ph){
+  asm volatile("{\n.reg .pred P;\nW%=:\nmbarrier.try_wait.parity.shared.b64 P,[%0],%1;\n@!P bra W%=;\n}\n"
+    ::"r"(cvta(b)),"r"(ph)); }
+__device__ __forceinline__ void fence_proxy_async(){ asm volatile("fence.proxy.async;":::"memory"); }
+__device__ __forceinline__ void tma_load(const CUtensorMap* d, uint64_t* bar, void* smem, int c0, int c1){
+  asm volatile("cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [%0],[%1,{%3,%4}],[%2];"
+    ::"r"(cvta(smem)),"l"((uint64_t)d),"r"(cvta(&bar[0])),"r"(c0),"r"(c1):"memory"); }
+__device__ __forceinline__ void tmem_alloc(uint32_t* dst,int n){
+  asm volatile("tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%0], %1;"::"r"(cvta(dst)),"r"(n)); }
+__device__ __forceinline__ void tmem_dealloc(uint32_t a,int n){
+  asm volatile("tcgen05.dealloc.cta_group::1.sync.aligned.b32 %0, %1;"::"r"(a),"r"(n)); }
+__device__ __forceinline__ void umma(uint32_t td,uint64_t da,uint64_t db,uint32_t id,uint32_t acc){
+  asm volatile("{\n.reg .pred p;\nsetp.ne.b32 p,%4,0;\n"
+    "tcgen05.mma.cta_group::1.kind::f16 [%0],%1,%2,%3,p;\n}\n"
+    ::"r"(td),"l"(da),"l"(db),"r"(id),"r"(acc)); }
+__device__ __forceinline__ void umma_commit(uint64_t* bar){
+  asm volatile("tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [%0];"::"r"(cvta(&bar[0]))); }
+__device__ __forceinline__ void tmem_ld_x4(uint32_t a,uint32_t*r0,uint32_t*r1,uint32_t*r2,uint32_t*r3){
+  asm volatile("tcgen05.ld.sync.aligned.32x32b.x4.b32 {%0,%1,%2,%3},[%4];"
+    :"=r"(*r0),"=r"(*r1),"=r"(*r2),"=r"(*r3):"r"(a)); }
+__device__ __forceinline__ void tmem_wait_ld(){ asm volatile("tcgen05.wait::ld.sync.aligned;":::"memory"); }
+
+__device__ __forceinline__ uint64_t mk_desc(uint32_t saddr, uint32_t lbo, uint32_t sbo){
+  uint64_t d=0;
+  d |= (uint64_t)((saddr&0x3FFFFu)>>4);
+  d |= (uint64_t)((lbo&0x3FFFFu)>>4)<<16;
+  d |= (uint64_t)((sbo&0x3FFFFu)>>4)<<32;
+  d |= (uint64_t)1<<46;
+  return d;
+}
+__device__ __forceinline__ uint32_t mk_idesc(int M,int N){
+  uint32_t d=0;
+  d |= (1u<<4); d |= (1u<<7); d |= (1u<<10);
+  d |= ((uint32_t)(N>>3)<<17);
+  d |= ((uint32_t)(M>>4)<<24);
+  return d;
+}
+
+// row-major [M][K] -> packed K-major core layout (vectorized int4: 8 contiguous k)
+__device__ __forceinline__ void repack_kmajor_v(const bf16* src, bf16* dst, int M, int K, int tid){
+  int groups = M*(K>>3);
+  for(int g=tid; g<groups; g+=128){
+    int m=g/(K>>3), k8=g%(K>>3);
+    int doff = k8*((M>>3)*64) + (m>>3)*64 + (m&7)*8;
+    *(int4*)(dst+doff) = *(const int4*)(src + m*K + (k8<<3));
+  }
+}
+// row-major [R][C] -> packed K-major core layout of transpose T[C][R] (M-mode=C,K-mode=R)
+__device__ __forceinline__ void transpose_pack_v(const bf16* src, bf16* dst, int R, int C, int tid){
+  int groups = C*(R>>3);
+  for(int g=tid; g<groups; g+=128){
+    int c=g/(R>>3), r8=g%(R>>3);
+    bf16 tmp[8];
+    #pragma unroll
+    for(int i=0;i<8;i++) tmp[i]=src[(r8*8+i)*C + c];
+    int doff = r8*((C>>3)*64) + (c>>3)*64 + (c&7)*8;
+    *(int4*)(dst+doff) = *(int4*)tmp;
+  }
+}
+
+__global__ void delta_kernel(const bf16* __restrict__ O, const bf16* __restrict__ dO,
+                             float* __restrict__ Delta, long total){
+  long idx=(long)blockIdx.x*blockDim.x+threadIdx.x;
+  if(idx>=total) return;
+  const int4* o4=reinterpret_cast<const int4*>(O+idx*128);
+  const int4* g4=reinterpret_cast<const int4*>(dO+idx*128);
+  float acc=0.f;
+  #pragma unroll
+  for(int j=0;j<16;j++){
+    int4 ov=o4[j], gv=g4[j];
+    const bf16* op=reinterpret_cast<const bf16*>(&ov);
+    const bf16* gp=reinterpret_cast<const bf16*>(&gv);
+    #pragma unroll
+    for(int k=0;k<8;k++) acc+=__bfloat162float(op[k])*__bfloat162float(gp[k]);
+  }
+  Delta[idx]=acc;
+}
+
+// ---------------- dK / dV ----------------
+__global__ __launch_bounds__(128) void kv_kernel(
+    const __grid_constant__ CUtensorMap tmK,
+    const __grid_constant__ CUtensorMap tmV,
+    const __grid_constant__ CUtensorMap tmQ,
+    const __grid_constant__ CUtensorMap tmdO,
+    const float* __restrict__ Lg, const float* __restrict__ Dg,
+    bf16* __restrict__ dKo, bf16* __restrict__ dVo, int S, float scale)
+{
+  constexpr int BN=128, BM=64, D=128;
+  extern __shared__ __align__(1024) char smem[];
+  bf16* K_pk  = (bf16*)(smem + 0);
+  bf16* V_pk  = (bf16*)(smem + 32768);
+  bf16* Q_pk  = (bf16*)(smem + 65536);    bf16* Pt_pk = Q_pk;
+  bf16* dO_pk = (bf16*)(smem + 81920);    bf16* dSt_pk= dO_pk;
+  bf16* QT_pk = (bf16*)(smem + 98304);
+  bf16* dOT_pk= (bf16*)(smem + 114688);
+  bf16* Qstg[2]={(bf16*)(smem+131072),(bf16*)(smem+163840)};
+  bf16* dOstg[2]={(bf16*)(smem+147456),(bf16*)(smem+180224)};
+  float* sL   = (float*)(smem + 196608);
+  float* sD   = (float*)(smem + 196864);
+  uint64_t* mbKV=(uint64_t*)(smem + 197120);
+  uint64_t* mbT[2]={(uint64_t*)(smem+197128),(uint64_t*)(smem+197136)};
+  uint64_t* mbM=(uint64_t*)(smem + 197144);
+  uint32_t* tmemp=(uint32_t*)(smem + 197152);
+
+  int tid=threadIdx.x;
+  int bh=blockIdx.y, kv0=blockIdx.x*BN;
+  const float* Lb=Lg+(size_t)bh*S;
+  const float* Db=Dg+(size_t)bh*S;
+  bf16* dKb=dKo+(size_t)bh*S*128;
+  bf16* dVb=dVo+(size_t)bh*S*128;
+
+  if(tid<32) tmem_alloc(tmemp,512);
+  if(tid==0){ init_bar(mbKV,1); init_bar(mbT[0],1); init_bar(mbT[1],1); init_bar(mbM,1); }
+  fence_bar_init();
+  __syncthreads();
+  uint32_t tb=*tmemp;
+  const uint32_t R_S=tb+0, R_dV=tb+64, R_dP=tb+192, R_dK=tb+256;
+
+  // load K,V into stage[0] temporarily, repack
+  if(tid==0){ arrive_expect_tx(mbKV, 2*BN*D*2);
+    tma_load(&tmK,mbKV,Qstg[0],0,bh*S+kv0);
+    tma_load(&tmV,mbKV,dOstg[0],0,bh*S+kv0); }
+  bar_wait(mbKV,0);
+  repack_kmajor_v(Qstg[0], K_pk, BN, D, tid);
+  repack_kmajor_v(dOstg[0], V_pk, BN, D, tid);
+  __syncthreads();
+
+  int nQ=(S+BM-1)/BM;
+  // prefetch Q tile 0
+  if(tid==0){ arrive_expect_tx(mbT[0], 2*BM*D*2);
+    tma_load(&tmQ,mbT[0],Qstg[0],0,bh*S+0);
+    tma_load(&tmdO,mbT[0],dOstg[0],0,bh*S+0); }
+  uint32_t pT[2]={0,0}, pM=0;
+
+  for(int j=0;j<nQ;j++){
+    int cur=j&1, nxt=(j+1)&1;
+    int q0=j*BM;
+    bar_wait(mbT[cur], pT[cur]); pT[cur]^=1;
+    if(j+1<nQ && tid==0){ int qn=(j+1)*BM;
+      arrive_expect_tx(mbT[nxt], 2*BM*D*2);
+      tma_load(&tmQ,mbT[nxt],Qstg[nxt],0,bh*S+qn);
+      tma_load(&tmdO,mbT[nxt],dOstg[nxt],0,bh*S+qn); }
+
+    for(int i=tid;i<BM;i+=128){ int r=q0+i; sL[i]=(r<S)?Lb[r]:1e30f; sD[i]=(r<S)?Db[r]:0.f; }
+    repack_kmajor_v(Qstg[cur], Q_pk, BM, D, tid);
+    repack_kmajor_v(dOstg[cur], dO_pk, BM, D, tid);
+    transpose_pack_v(Qstg[cur], QT_pk, BM, D, tid);
+    transpose_pack_v(dOstg[cur], dOT_pk, BM, D, tid);
+    fence_proxy_async();
+    __syncthreads();
+
+    if(tid==0){
+      uint32_t aK=cvta(K_pk), aQ=cvta(Q_pk), aV=cvta(V_pk), adO=cvta(dO_pk);
+      uint32_t id1=mk_idesc(BN,BM);
+      for(int i=0;i<8;i++)
+        umma(R_S, mk_desc(aK+i*4096,2048,128), mk_desc(aQ+i*2048,1024,128), id1, i==0?0:1);
+      for(int i=0;i<8;i++)
+        umma(R_dP, mk_desc(aV+i*4096,2048,128), mk_desc(adO+i*2048,1024,128), id1, i==0?0:1);
+      umma_commit(mbM);
+    }
+    bar_wait(mbM,pM); pM^=1;
+
+    for(int col=0;col<BM;col+=4){
+      uint32_t s0,s1,s2,s3,p0,p1,p2,p3;
+      tmem_ld_x4(R_S+col,&s0,&s1,&s2,&s3);
+      tmem_ld_x4(R_dP+col,&p0,&p1,&p2,&p3);
+      tmem_wait_ld();
+      float Sv[4]={__uint_as_float(s0),__uint_as_float(s1),__uint_as_float(s2),__uint_as_float(s3)};
+      float Pv[4]={__uint_as_float(p0),__uint_as_float(p1),__uint_as_float(p2),__uint_as_float(p3)};
+      #pragma unroll
+      for(int i=0;i<4;i++){
+        int q=col+i;
+        float pt=__expf(scale*Sv[i]-sL[q]);
+        float ds=pt*(Pv[i]-sD[q]);
+        int po=(q>>3)*1024 + (tid>>3)*64 + (tid&7)*8 + (q&7);
+        Pt_pk[po]=__float2bfloat16(pt);
+        dSt_pk[po]=__float2bfloat16(ds);
+      }
+    }
+    fence_proxy_async();
+    __syncthreads();
+
+    if(tid==0){
+      uint32_t aP=cvta(Pt_pk), adOT=cvta(dOT_pk), aS=cvta(dSt_pk), aQT=cvta(QT_pk);
+      uint32_t id2=mk_idesc(BN,D);
+      uint32_t fa=(j==0)?0:1;
+      for(int i=0;i<4;i++)
+        umma(R_dV, mk_desc(aP+i*4096,2048,128), mk_desc(adOT+i*4096,2048,128), id2, (i==0)?fa:1);
+      for(int i=0;i<4;i++)
+        umma(R_dK, mk_desc(aS+i*4096,2048,128), mk_desc(aQT+i*4096,2048,128), id2, (i==0)?fa:1);
+      umma_commit(mbM);
+    }
+    bar_wait(mbM,pM); pM^=1;
+    __syncthreads();
+  }
+
+  int grow=kv0+tid;
+  for(int col=0;col<128;col+=4){
+    uint32_t r0,r1,r2,r3;
+    tmem_ld_x4(R_dV+col,&r0,&r1,&r2,&r3); tmem_wait_ld();
+    if(grow<S){
+      bf16* g=dVb+(size_t)grow*128+col;
+      g[0]=__float2bfloat16(__uint_as_float(r0));
+      g[1]=__float2bfloat16(__uint_as_float(r1));
+      g[2]=__float2bfloat16(__uint_as_float(r2));
+      g[3]=__float2bfloat16(__uint_as_float(r3));
+    }
+  }
+  for(int col=0;col<128;col+=4){
+    uint32_t r0,r1,r2,r3;
+    tmem_ld_x4(R_dK+col,&r0,&r1,&r2,&r3); tmem_wait_ld();
+    if(grow<S){
+      bf16* g=dKb+(size_t)grow*128+col;
+      g[0]=__float2bfloat16(scale*__uint_as_float(r0));
+      g[1]=__float2bfloat16(scale*__uint_as_float(r1));
+      g[2]=__float2bfloat16(scale*__uint_as_float(r2));
+      g[3]=__float2bfloat16(scale*__uint_as_float(r3));
+    }
+  }
+  __syncthreads();
+  if(tid<32) tmem_dealloc(tb,512);
+}
+
+// ---------------- dQ ----------------
+__global__ __launch_bounds__(128) void dq_kernel(
+    const __grid_constant__ CUtensorMap tmQ,
+    const __grid_constant__ CUtensorMap tmdO,
+    const __grid_constant__ CUtensorMap tmK,
+    const __grid_constant__ CUtensorMap tmV,
+    const float* __restrict__ Lg, const float* __restrict__ Dg,
+    bf16* __restrict__ dQo, int S, float scale)
+{
+  constexpr int BM=128, BN=64, D=128;
+  extern __shared__ __align__(1024) char smem[];
+  bf16* Q_pk  = (bf16*)(smem+0);
+  bf16* dO_pk = (bf16*)(smem+32768);
+  bf16* K_pk  = (bf16*)(smem+65536);
+  bf16* V_pk  = (bf16*)(smem+81920);
+  bf16* KT_pk = (bf16*)(smem+98304);
+  bf16* dS_pk = (bf16*)(smem+114688);
+  bf16* Kstg[2]={(bf16*)(smem+131072),(bf16*)(smem+163840)};
+  bf16* Vstg[2]={(bf16*)(smem+147456),(bf16*)(smem+180224)};
+  float* sL=(float*)(smem+196608);
+  float* sD=(float*)(smem+197120);
+  uint64_t* mbQ=(uint64_t*)(smem+197632);
+  uint64_t* mbT[2]={(uint64_t*)(smem+197640),(uint64_t*)(smem+197648)};
+  uint64_t* mbM=(uint64_t*)(smem+197656);
+  uint32_t* tmemp=(uint32_t*)(smem+197664);
+
+  int tid=threadIdx.x;
+  int bh=blockIdx.y, q0=blockIdx.x*BM;
+  const float* Lb=Lg+(size_t)bh*S;
+  const float* Db=Dg+(size_t)bh*S;
+  bf16* dQb=dQo+(size_t)bh*S*128;
+
+  if(tid<32) tmem_alloc(tmemp,256);
+  if(tid==0){ init_bar(mbQ,1); init_bar(mbT[0],1); init_bar(mbT[1],1); init_bar(mbM,1); }
+  fence_bar_init();
+  __syncthreads();
+  uint32_t tb=*tmemp;
+  const uint32_t R_S=tb+0, R_dQ=tb+64, R_dP=tb+192;
+
+  // load Q,dO into Kstg[0],Vstg[0] temp; repack
+  if(tid==0){ arrive_expect_tx(mbQ, 2*BM*D*2);
+    tma_load(&tmQ,mbQ,Kstg[0],0,bh*S+q0);
+    tma_load(&tmdO,mbQ,Vstg[0],0,bh*S+q0); }
+  bar_wait(mbQ,0);
+  for(int i=tid;i<BM;i+=128){ int r=q0+i; sL[i]=(r<S)?Lb[r]:0.f; sD[i]=(r<S)?Db[r]:0.f; }
+  repack_kmajor_v(Kstg[0],Q_pk,BM,D,tid);
+  repack_kmajor_v(Vstg[0],dO_pk,BM,D,tid);
+  __syncthreads();
+
+  int nK=(S+BN-1)/BN;
+  if(tid==0){ arrive_expect_tx(mbT[0], 2*BN*D*2);
+    tma_load(&tmK,mbT[0],Kstg[0],0,bh*S+0);
+    tma_load(&tmV,mbT[0],Vstg[0],0,bh*S+0); }
+  uint32_t pT[2]={0,0}, pM=0;
+
+  for(int kb=0;kb<nK;kb++){
+    int cur=kb&1, nxt=(kb+1)&1;
+    int kv0=kb*BN;
+    bar_wait(mbT[cur], pT[cur]); pT[cur]^=1;
+    if(kb+1<nK && tid==0){ int kn=(kb+1)*BN;
+      arrive_expect_tx(mbT[nxt], 2*BN*D*2);
+      tma_load(&tmK,mbT[nxt],Kstg[nxt],0,bh*S+kn);
+      tma_load(&tmV,mbT[nxt],Vstg[nxt],0,bh*S+kn); }
+
+    repack_kmajor_v(Kstg[cur],K_pk,BN,D,tid);
+    repack_kmajor_v(Vstg[cur],V_pk,BN,D,tid);
+    transpose_pack_v(Kstg[cur],KT_pk,BN,D,tid);
+    fence_proxy_async();
+    __syncthreads();
+
+    if(tid==0){
+      uint32_t aQ=cvta(Q_pk),aK=cvta(K_pk),adO=cvta(dO_pk),aV=cvta(V_pk);
+      uint32_t id1=mk_idesc(BM,BN);
+      for(int i=0;i<8;i++)
+        umma(R_S, mk_desc(aQ+i*4096,2048,128), mk_desc(aK+i*2048,1024,128), id1, i==0?0:1);
+      for(int i=0;i<8;i++)
+        umma(R_dP, mk_desc(adO+i*4096,2048,128), mk_desc(aV+i*2048,1024,128), id1, i==0?0:1);
+      umma_commit(mbM);
+    }
+    bar_wait(mbM,pM); pM^=1;
+
+    float l=sL[tid], dd=sD[tid];
+    for(int col=0;col<BN;col+=4){
+      uint32_t s0,s1,s2,s3,p0,p1,p2,p3;
+      tmem_ld_x4(R_S+col,&s0,&s1,&s2,&s3);
+      tmem_ld_x4(R_dP+col,&p0,&p1,&p2,&p3);
+      tmem_wait_ld();
+      float Sv[4]={__uint_as_float(s0),__uint_as_float(s1),__uint_as_float(s2),__uint_as_float(s3)};
+      float Pv[4]={__uint_as_float(p0),__uint_as_float(p1),__uint_as_float(p2),__uint_as_float(p3)};
+      #pragma unroll
+      for(int i=0;i<4;i++){
+        int kv=col+i;
+        float pt=__expf(scale*Sv[i]-l);
+        float ds=pt*(Pv[i]-dd);
+        if(kv0+kv>=S) ds=0.f;
+        int po=(kv>>3)*1024 + (tid>>3)*64 + (tid&7)*8 + (kv&7);
+        dS_pk[po]=__float2bfloat16(ds);
+      }
+    }
+    fence_proxy_async();
+    __syncthreads();
+
+    if(tid==0){
+      uint32_t aS=cvta(dS_pk), aKT=cvta(KT_pk);
+      uint32_t id2=mk_idesc(BM,D);
+      uint32_t fa=(kb==0)?0:1;
+      for(int i=0;i<4;i++)
+        umma(R_dQ, mk_desc(aS+i*4096,2048,128), mk_desc(aKT+i*4096,2048,128), id2, (i==0)?fa:1);
+      umma_commit(mbM);
+    }
+    bar_wait(mbM,pM); pM^=1;
+    __syncthreads();
+  }
+
+  int grow=q0+tid;
+  for(int col=0;col<128;col+=4){
+    uint32_t r0,r1,r2,r3;
+    tmem_ld_x4(R_dQ+col,&r0,&r1,&r2,&r3); tmem_wait_ld();
+    if(grow<S){
+      bf16* g=dQb+(size_t)grow*128+col;
+      g[0]=__float2bfloat16(scale*__uint_as_float(r0));
+      g[1]=__float2bfloat16(scale*__uint_as_float(r1));
+      g[2]=__float2bfloat16(scale*__uint_as_float(r2));
+      g[3]=__float2bfloat16(scale*__uint_as_float(r3));
+    }
+  }
+  __syncthreads();
+  if(tid<32) tmem_dealloc(tb,256);
+}
+
+static CUresult make_tma(CUtensorMap* d, void* g, uint64_t inner, uint64_t outer,
+                         uint32_t bi, uint32_t bo){
+  uint64_t gdim[2]={inner,outer};
+  uint64_t gstr[1]={inner*2};
+  uint32_t bdim[2]={bi,bo};
+  uint32_t estr[2]={1,1};
+  return cuTensorMapEncodeTiled(d, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 2, g, gdim, gstr, bdim, estr,
+    CU_TENSOR_MAP_INTERLEAVE_NONE, CU_TENSOR_MAP_SWIZZLE_NONE,
+    CU_TENSOR_MAP_L2_PROMOTION_L2_128B, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+}
+
+static float* g_D=nullptr; static size_t g_Dsz=0;
+
+void run(tvm::ffi::TensorView Q, tvm::ffi::TensorView K, tvm::ffi::TensorView V,
+         tvm::ffi::TensorView O, tvm::ffi::TensorView dO, tvm::ffi::TensorView L,
+         tvm::ffi::TensorView dQ, tvm::ffi::TensorView dK, tvm::ffi::TensorView dV){
+  CUDA_CHECK(cudaSetDevice(Q.device().device_id));
+  int B=Q.size(0), H=Q.size(1), S=Q.size(2);
+  long BH=(long)B*H;
+  float scale=1.0f/sqrtf(128.0f);
+
+  bf16* Qp=(bf16*)Q.data_ptr();  bf16* Kp=(bf16*)K.data_ptr();  bf16* Vp=(bf16*)V.data_ptr();
+  bf16* Op=(bf16*)O.data_ptr();  bf16* dOp=(bf16*)dO.data_ptr();
+  float* Lp=(float*)L.data_ptr();
+  bf16* dQp=(bf16*)dQ.data_ptr(); bf16* dKp=(bf16*)dK.data_ptr(); bf16* dVp=(bf16*)dV.data_ptr();
+
+  cudaStream_t stream=(cudaStream_t)TVMFFIEnvGetStream(Q.device().device_type, Q.device().device_id);
+
+  size_t need=sizeof(float)*BH*S;
+  if(need>g_Dsz){ if(g_D) cudaFree(g_D); CUDA_CHECK(cudaMalloc(&g_D,need)); g_Dsz=need; }
+
+  long total=BH*S;
+  delta_kernel<<<(total+255)/256,256,0,stream>>>(Op,dOp,g_D,total);
+
+  uint64_t inner=128, outer=(uint64_t)BH*S;
+  CUtensorMap kvK,kvV,kvQ,kvdO, dqQ,dqdO,dqK,dqV;
+  CU_CHECK(make_tma(&kvK ,Kp ,inner,outer,128,128));
+  CU_CHECK(make_tma(&kvV ,Vp ,inner,outer,128,128));
+  CU_CHECK(make_tma(&kvQ ,Qp ,inner,outer,128,64));
+  CU_CHECK(make_tma(&kvdO,dOp,inner,outer,128,64));
+  CU_CHECK(make_tma(&dqQ ,Qp ,inner,outer,128,128));
+  CU_CHECK(make_tma(&dqdO,dOp,inner,outer,128,128));
+  CU_CHECK(make_tma(&dqK ,Kp ,inner,outer,128,64));
+  CU_CHECK(make_tma(&dqV ,Vp ,inner,outer,128,64));
+
+  size_t smemKV=204800, smemDQ=204800;
+  CUDA_CHECK(cudaFuncSetAttribute((const void*)kv_kernel,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)smemKV));
+  CUDA_CHECK(cudaFuncSetAttribute((const void*)dq_kernel,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)smemDQ));
+
+  dim3 gridKV((S+127)/128, (unsigned)BH);
+  dim3 gridDQ((S+127)/128, (unsigned)BH);
+
+  kv_kernel<<<gridKV,128,smemKV,stream>>>(kvK,kvV,kvQ,kvdO,Lp,g_D,dKp,dVp,S,scale);
+  dq_kernel<<<gridDQ,128,smemDQ,stream>>>(dqQ,dqdO,dqK,dqV,Lp,g_D,dQp,S,scale);
+
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+}
+
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(run, mha_bwd::run);
+
+}  // namespace mha_bwd

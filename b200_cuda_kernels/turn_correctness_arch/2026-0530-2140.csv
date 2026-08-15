@@ -1,0 +1,41 @@
+trajectory_id,turn,correctness,speedup,arch_tag
+exp_000,0,Numerical error,0.0,A
+exp_000,1,Numerical error,0.0,A
+exp_000,2,Numerical error,0.0,A
+exp_000,3,Correct,0.025753310320904364,A
+exp_000,4,Correct,0.02096181116787917,A
+exp_000,5,Correct,0.020467852780053385,A
+exp_000,6,Correct,0.02632849698553985,A
+exp_000,7,Correct,0.06950693957771878,A
+exp_001,0,Kernel Execution Timeout,0.0,A
+exp_001,1,Kernel Execution Timeout,0.0,A
+exp_001,2,Numerical error,0.0,A
+exp_001,3,Numerical error,0.0,A
+exp_001,4,Correct,0.030346580078542663,A
+exp_001,5,Correct,0.025423683715307833,A
+exp_001,6,Correct,0.030895824723950548,A
+exp_001,7,Correct,0.030084214972351083,A
+exp_002,0,Kernel Execution Timeout,0.0,A
+exp_002,1,Numerical error,0.0,A
+exp_002,2,Correct,0.017371633779346897,A
+exp_002,3,Correct,0.019603347620570786,A
+exp_002,4,Correct,0.04374232523768292,A
+exp_002,5,Correct,0.0675827574446592,A
+exp_002,6,Correct,0.07070396005038246,A
+exp_002,7,Correct,0.10308812036637034,A
+exp_003,0,Kernel Execution Timeout,0.0,A
+exp_003,1,Correct,0.004088798342474599,A
+exp_003,2,Numerical error,0.0,A
+exp_003,3,Correct,0.031237390761672198,A
+exp_003,4,Correct,0.056754926568678296,A
+exp_003,5,Numerical error,0.0,A
+exp_003,6,Correct,0.0717211215252509,A
+exp_003,7,Correct,0.0884306302649412,A
+exp_004,0,Kernel Execution Timeout,0.0,A
+exp_004,1,Correct,0.019677029993054505,A
+exp_004,2,Numerical error,0.0,A
+exp_004,3,Correct,0.032260940370178244,A
+exp_004,4,Correct,0.1252146843276944,A
+exp_004,5,Correct,0.09716888579301858,A
+exp_004,6,Numerical error,0.0,A
+exp_004,7,Correct,0.132092844984907,A

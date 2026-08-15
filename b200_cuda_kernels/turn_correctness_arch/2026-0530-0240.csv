@@ -1,0 +1,41 @@
+trajectory_id,turn,correctness,speedup,arch_tag
+exp_000,0,Numerical error,0.0,
+exp_000,1,Kernel Execution Timeout,0.0,
+exp_000,2,Runtime error,0.0,
+exp_000,3,Compilation error,,
+exp_000,4,Kernel Execution Timeout,0.0,
+exp_000,5,Runtime error,0.0,
+exp_000,6,Runtime error,0.0,
+exp_000,7,Runtime error,0.0,
+exp_001,0,Runtime error,0.0,
+exp_001,1,Runtime error,0.0,
+exp_001,2,Runtime error,0.0,
+exp_001,3,Runtime error,0.0,
+exp_001,4,Numerical error,0.0,
+exp_001,5,Runtime error,0.0,
+exp_001,6,Runtime error,0.0,
+exp_001,7,Numerical error,0.0,
+exp_002,0,Compilation error,,
+exp_002,1,Runtime error,0.0,
+exp_002,2,Runtime error,0.0,
+exp_002,3,Compilation error,,
+exp_002,4,Runtime error,0.0,
+exp_002,5,Numerical error,0.0,
+exp_002,6,Numerical error,0.0,
+exp_002,7,Numerical error,0.0,
+exp_003,0,Numerical error,0.0,"A, B"
+exp_003,1,Numerical error,0.0,"A, B"
+exp_003,2,Numerical error,0.0,"A, B"
+exp_003,3,Numerical error,0.0,"A, B"
+exp_003,4,Correct,0.026926936903174464,"A, B"
+exp_003,5,Compilation error,,"A, B"
+exp_003,6,Kernel Execution Timeout,0.0,"A, B"
+exp_003,7,Compilation error,,"A, B"
+exp_004,0,Kernel Execution Timeout,0.0,
+exp_004,1,Runtime error,0.0,
+exp_004,2,Runtime error,0.0,
+exp_004,3,Runtime error,0.0,
+exp_004,4,Runtime error,0.0,
+exp_004,5,Runtime error,0.0,
+exp_004,6,Runtime error,0.0,
+exp_004,7,Runtime error,0.0,

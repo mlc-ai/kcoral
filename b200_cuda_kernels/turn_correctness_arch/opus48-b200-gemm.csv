@@ -1,0 +1,97 @@
+trajectory_id,turn,correctness,speedup,arch_tag
+exp_000,0,Correct,0.17291467862298013,A
+exp_000,1,Compilation error,,
+exp_000,2,Correct,0.5687622391215589,"H, B"
+exp_000,3,Correct,0.808869600907796,"H, B"
+exp_000,4,Correct,0.8488340069011245,"H, B"
+exp_000,5,Correct,0.8442141246599464,"H, B"
+exp_000,6,Correct,0.8037124130660451,"H, B"
+exp_000,7,Correct,0.811267829739775,"H, B"
+exp_001,0,Correct,0.2109785574695196,A
+exp_001,1,Correct,0.7448460372655534,"H, B"
+exp_001,2,Kernel Execution Timeout,0.0,
+exp_001,3,Correct,0.7793860943686384,"H, B"
+exp_001,4,Correct,0.8438258679252482,"H, B"
+exp_001,5,Correct,0.836005340906255,"H, B"
+exp_001,6,Correct,0.982019135647657,"H, B"
+exp_001,7,Correct,0.8599501971580744,"H, B"
+exp_002,0,Correct,0.14045739993718687,A
+exp_002,1,Correct,0.7114540517568588,"H, B"
+exp_002,2,Correct,0.7431129655587779,"H, B"
+exp_002,3,Correct,0.7492051135679516,"H, B"
+exp_002,4,Correct,0.862842496358352,"H, B"
+exp_002,5,Correct,0.8472408282215796,"H, B"
+exp_002,6,Correct,0.8499569067034614,"H, B"
+exp_002,7,Correct,0.8658701032063654,"H, B"
+exp_003,0,Extraction error,,
+exp_003,1,Correct,0.17769632702205168,A
+exp_003,2,Correct,0.7177942485230869,"H, B"
+exp_003,3,Correct,0.8509343256232108,"H, B"
+exp_003,4,Correct,0.9457347518984381,"H, B"
+exp_003,5,Correct,0.6436677676746916,"H, B"
+exp_003,6,Correct,0.6788770600241252,"H, B"
+exp_003,7,Correct,0.6904228329325593,"H, B"
+exp_004,0,Correct,0.6464129726552228,"H, B"
+exp_004,1,Correct,0.8433868308278208,"H, B"
+exp_004,2,Correct,0.8516335470379015,"H, B"
+exp_004,3,Correct,0.8490104186799488,"H, B"
+exp_004,4,Correct,0.9049886744447938,"H, B"
+exp_004,5,Correct,0.923445895319274,"H, B"
+exp_004,6,Correct,0.8668185534288736,"H, B"
+exp_004,7,Numerical error,0.0,
+exp_005,0,Correct,0.7406973723970027,"H, B"
+exp_005,1,Correct,0.7653659067926194,"H, B"
+exp_005,2,Correct,0.773107576686473,"H, B"
+exp_005,3,Correct,0.7854702273685915,"H, B"
+exp_005,4,Correct,0.850221647750811,"H, B"
+exp_005,5,Correct,0.851311325479216,"H, B"
+exp_005,6,Numerical error,0.0,
+exp_005,7,Correct,0.8265831542606829,"H, B"
+exp_006,0,Correct,0.08868150828013893,A
+exp_006,1,Correct,0.8041371518075033,"H, B"
+exp_006,2,Correct,0.8374023071335202,"H, B"
+exp_006,3,Correct,1.0115569260425055,"H, B"
+exp_006,4,Correct,1.0112608244907915,"H, B"
+exp_006,5,Correct,0.8244927111448546,"H, B"
+exp_006,6,Correct,0.9892057824077815,"H, B"
+exp_006,7,Correct,0.8995924272737925,"H, B"
+exp_007,0,Correct,0.7818494284996953,"H, B"
+exp_007,1,Correct,0.8208298508511774,"H, B"
+exp_007,2,Correct,0.8380324450584089,"H, B"
+exp_007,3,Correct,0.8394650962711796,"H, B"
+exp_007,4,Correct,0.8200448084218667,"H, B"
+exp_007,5,Correct,0.9144679247135091,"H, B"
+exp_007,6,Correct,0.8961548251399813,"H, B"
+exp_007,7,Correct,0.9388285261931134,"H, B"
+exp_008,0,Extraction error,,
+exp_008,1,Correct,0.27622754573807323,"H, B"
+exp_008,2,Correct,0.7430663472620282,"H, B"
+exp_008,3,Correct,0.701499665251864,"H, B"
+exp_008,4,Correct,0.848057145195027,"H, B"
+exp_008,5,Correct,0.8441622140591082,"H, B"
+exp_008,6,Correct,0.908344227062845,"H, B"
+exp_008,7,Correct,0.9592757759749724,"H, B"
+exp_009,0,Extraction error,,
+exp_009,1,Numerical error,0.0,
+exp_009,2,Correct,0.08725279264205246,A
+exp_009,3,Compilation error,,
+exp_009,4,Correct,0.7451172416922954,"H, B"
+exp_009,5,Correct,0.7248958129106527,"H, B"
+exp_009,6,Correct,0.7814962550267187,"H, B"
+exp_009,7,Correct,0.9838345903693979,"H, B"
+exp_010,0,Correct,0.1474939187400379,A
+exp_010,1,Numerical error,0.0,
+exp_010,2,Correct,0.725866451888953,"H, B"
+exp_010,3,Correct,0.778275190278468,"H, B"
+exp_010,4,Correct,1.0109457901580856,"H, B"
+exp_010,5,Correct,0.8509075558325025,"H, B"
+exp_010,6,Correct,0.856233043126534,"H, B"
+exp_010,7,Correct,0.8475919160203588,"H, B"
+exp_011,0,Correct,0.152839762981454,A
+exp_011,1,Correct,0.8086865263818558,"H, B"
+exp_011,2,Correct,0.8709343319288393,"H, B"
+exp_011,3,Kernel Execution Timeout,0.0,
+exp_011,4,Correct,0.8147816524123377,"H, B"
+exp_011,5,Correct,0.8599720564470749,"H, B"
+exp_011,6,Correct,0.8537377718380403,"H, B"
+exp_011,7,Correct,0.9353744760764132,"H, B"
