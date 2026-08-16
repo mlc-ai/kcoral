@@ -40,6 +40,7 @@ def test_crash_replaces_worker_and_recovers(pool):
     with pytest.raises(WorkerCrashed) as exc_info:
         pool.submit(prog(Run("boom", "builtin.crash", [])), timeout=10)
     assert exc_info.value.gpu_id == 0 and exc_info.value.elapsed_ms >= 0
+    assert exc_info.value.instruction_index == 0 and exc_info.value.exitcode == 1
     # worker was respawned; the next request succeeds on the fresh worker
     assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
 

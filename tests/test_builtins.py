@@ -85,6 +85,15 @@ def test_diagnostics_drops_the_ninja_invocation():
     assert cuda._diagnostics("no diagnostic here") == "no diagnostic here"
 
 
+def test_cuda_source_can_manage_its_own_ffi_export():
+    source = """
+void run() {}
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(run, run);
+"""
+    assert cuda._declares_tvm_ffi_macro(source)
+    assert not cuda._declares_tvm_ffi_macro("// TVM_FFI_DLL_EXPORT_TYPED_FUNC(run, run);")
+
+
 def test_short_keeps_both_ends_of_a_compiler_error():
     text = "nvcc " + "-I/long/include/path " * 200 + "error: 'x' was not declared"
     short = _common.short(RuntimeError(text))

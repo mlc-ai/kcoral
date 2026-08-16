@@ -314,7 +314,16 @@ def test_timeout_and_worker_crash_statuses():
         timeout = post_program(client, timeout_program)
         crash = post_program(client, crash_program)
     assert timeout.status_code == 504 and timeout.json()["error"]["kind"] == "timeout"
-    assert crash.status_code == 500 and crash.json()["error"]["kind"] == "engine"
+    assert crash.status_code == 200
+    assert crash.json()["status"] == "FAILED"
+    assert crash.json()["error"] == {
+        "kind": "runtime",
+        "message": "worker exited while executing the instruction",
+        "instruction_index": 0,
+        "instruction_op": "run",
+        "instruction_id": "crash",
+        "traceback": "",
+    }
 
 
 SPAWN_AND_HANG = (

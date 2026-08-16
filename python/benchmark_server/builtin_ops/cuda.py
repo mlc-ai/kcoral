@@ -40,16 +40,17 @@ def compile_cuda(src: Any, cfg: Any = None) -> Any:
 
     # Selects the GPU's arch-specific target unless the operator already pinned one.
     os.environ.setdefault("TVM_FFI_CUDA_ARCH_LIST", _cuda_arch_list())
+    source_manages_exports = _declares_tvm_ffi_macro(src.source)
     try:
         mod = tvm_ffi.cpp.load_inline(
             name=f"upload_{src.entry}",
             cuda_sources=src.source,
-            functions=src.entry,
+            functions=None if source_manages_exports else src.entry,
             extra_cuda_cflags=cuda_cflags or None,
         )
+        return _compiled_entry(mod, src.entry)
     except RuntimeError as exc:  # nvcc/ptxas diagnostics, surfaced by ninja
         raise ExecutionError("compile", short(_diagnostics(str(exc)))) from exc
-    return getattr(mod, src.entry)
 
 
 # --- helpers ----------------------------------------------------------------
@@ -67,6 +68,20 @@ def _diagnostics(text: str) -> str:
         if _DIAGNOSTIC.search(line):
             return "\n".join(lines[index:])
     return text
+
+
+def _declares_tvm_ffi_macro(source: str) -> bool:
+    """Whether the source manages its own TVM FFI export boundary."""
+    return bool(re.search(r"(?m)^[ \t]*TVM_FFI_DLL_EXPORT_TYPED_FUNC[ \t]*\(", source))
+
+
+def _compiled_entry(mod: Any, entry: str):
+    if hasattr(mod, entry):
+        return getattr(mod, entry)
+    try:
+        return mod.get_function(entry)
+    except AttributeError as exc:
+        raise ExecutionError("compile", f"compiled module has no exported entry {entry!r}") from exc
 
 
 def _require_cuda_toolchain() -> None:

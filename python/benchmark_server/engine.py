@@ -44,7 +44,13 @@ class Runtime(Protocol):
     def reset(self) -> None: ...
 
 
-def execute(program: Program, runtime: Runtime, lease: Lease) -> ProgramOutcome:
+def execute(
+    program: Program,
+    runtime: Runtime,
+    lease: Lease,
+    *,
+    progress: Callable[[int], None] | None = None,
+) -> ProgramOutcome:
     """Run a program and serialize only values selected by return instructions.
 
     The GPU is claimed on the first instruction that needs it and given up around
@@ -63,6 +69,8 @@ def execute(program: Program, runtime: Runtime, lease: Lease) -> ProgramOutcome:
             try:
                 for current_index, instruction in enumerate(program.instructions):
                     current = instruction
+                    if progress is not None:
+                        progress(current_index)
                     _place(instruction, runtime, lease)
                     if isinstance(instruction, Upload):
                         if instruction.kind == "module":

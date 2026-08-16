@@ -17,7 +17,7 @@ from .errors import ValidationError
 from .events import EventLogger
 from .keys import is_blob_hash, verify_blob
 from .multipart import MultipartPart, encode_multipart, parse_multipart
-from .pool import PoolBusy, WorkerPool
+from .pool import PoolBusy, SubmitOutcome, WorkerPool
 from .schemas import (
     Program,
     ProgramOutcome,
@@ -146,17 +146,44 @@ def create_app(
             return _error_response(504, "timeout", "execution timed out", request_id)
         except WorkerCrashed as exc:
             events.emit(
-                "worker_restarted", request_id=request_id, gpu_id=exc.gpu_id, reason="crash"
-            )
-            finished(
-                500,
-                level="ERROR",
-                error="worker_crashed",
+                "worker_restarted",
+                request_id=request_id,
                 gpu_id=exc.gpu_id,
-                queue_ms=exc.queue_ms,
-                elapsed_ms=exc.elapsed_ms,
+                reason="crash",
+                exitcode=exc.exitcode,
             )
-            return _error_response(500, "engine", "worker crashed", request_id)
+            if exc.instruction_index is None or not 0 <= exc.instruction_index < len(
+                program.instructions
+            ):
+                finished(
+                    500,
+                    level="ERROR",
+                    error="worker_crashed",
+                    gpu_id=exc.gpu_id,
+                    queue_ms=exc.queue_ms,
+                    elapsed_ms=exc.elapsed_ms,
+                )
+                return _error_response(500, "engine", "worker crashed", request_id)
+            instruction = program.instructions[exc.instruction_index]
+            execution = ProgramOutcome(
+                status="FAILED",
+                error={
+                    "kind": "runtime",
+                    "message": "worker exited while executing the instruction",
+                    "instruction_index": exc.instruction_index,
+                    "instruction_op": instruction.op,
+                    "instruction_id": getattr(instruction, "id", None),
+                    "traceback": "",
+                },
+            )
+            outcome = SubmitOutcome(
+                execution=execution,
+                gpu_id=exc.gpu_id,
+                queue_ms=exc.queue_ms or 0.0,
+                elapsed_ms=exc.elapsed_ms or 0.0,
+                lease_wait_ms=exc.lease_wait_ms,
+                lease_held_ms=exc.lease_held_ms,
+            )
         finally:
             cache.unpin(cache_keys)
 

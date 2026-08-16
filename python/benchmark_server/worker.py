@@ -46,7 +46,14 @@ def worker_main(gpu_id: int, conn, runtime_factory: Callable) -> None:
             return
         if program is None:  # shutdown signal
             return
-        conn.send(execute(program, runtime, lease=lease))
+        conn.send(
+            execute(
+                program,
+                runtime,
+                lease=lease,
+                progress=lambda index: conn.send({"__instruction__": index}),
+            )
+        )
 
 
 class WorkerCrashed(Exception):
@@ -54,6 +61,10 @@ class WorkerCrashed(Exception):
     gpu_id: int | None = None
     queue_ms: float | None = None
     elapsed_ms: float | None = None
+    instruction_index: int | None = None
+    exitcode: int | None = None
+    lease_wait_ms: float = 0.0
+    lease_held_ms: float = 0.0
 
 
 class WorkerTimeout(Exception):
@@ -112,6 +123,7 @@ class Worker:
         lease_wait_ms = 0.0
         lease_held_ms = 0.0
         held_since: float | None = None
+        instruction_index: int | None = None
         while True:
             waited_from = time.monotonic()
             if not self._conn.poll(remaining):  # no answer by the deadline -> hung
@@ -121,8 +133,21 @@ class Worker:
             try:
                 message = self._conn.recv()
             except EOFError:  # child died mid-run
+                if held_since is not None:
+                    lease_held_ms += (time.monotonic() - held_since) * 1000
+                # Refresh multiprocessing's view of a child that has just closed
+                # its pipe before replacing it.
+                self._proc.join(timeout=0.1)
+                crash = WorkerCrashed(f"worker on GPU {self.gpu_id} crashed")
+                crash.instruction_index = instruction_index
+                crash.exitcode = self._proc.exitcode
+                crash.lease_wait_ms = lease_wait_ms
+                crash.lease_held_ms = lease_held_ms
                 self._abandon_and_respawn(leases)
-                raise WorkerCrashed(f"worker on GPU {self.gpu_id} crashed")
+                raise crash
+            if isinstance(message, dict) and "__instruction__" in message:
+                instruction_index = message["__instruction__"]
+                continue
             if not (isinstance(message, dict) and "__lease__" in message):
                 # Anything that is not a lease message is the program's outcome.
                 if held_since is not None:

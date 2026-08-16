@@ -651,13 +651,13 @@ Instruction error kinds are `parse`, `compile`, `runtime`, `correctness`,
 | HTTP | Body | Meaning |
 |---:|---|---|
 | 200 | `status: COMPLETED` | Program completed |
-| 200 | `status: FAILED` | An instruction failed; `results` holds the returns that ran |
+| 200 | `status: FAILED` | An instruction failed or terminated its worker; `results` holds the returns that ran |
 | 200 | `status: CACHE_MISS` | Tensor blobs are missing; program did not run |
 | 400 | `status: ERROR` | Malformed request or program, including duplicate JSON keys and NaN/Infinity |
 | 413 | `status: ERROR` | Request body exceeds the server's size limit |
 | 503 | `status: ERROR` | No worker is available; includes `Retry-After` |
 | 504 | `status: ERROR`, `error.kind: timeout` | Execution timed out |
-| 500 | `status: ERROR`, `error.kind: engine` | Worker or server failure |
+| 500 | `status: ERROR`, `error.kind: engine` | Worker failure outside an instruction, or server failure |
 | 500 | `status: ERROR`, `error.kind: response_too_large` | Results exceed the server's response-size limit |
 
 `ERROR` is not a program outcome, so its body is much smaller: `status`,
@@ -675,9 +675,10 @@ timings, or captured output.
 Its `kind` is `parse`, `request_too_large`, `busy`, `timeout`, `engine`, or
 `response_too_large` — a separate set from the instruction kinds above.
 
-The dividing line is whether the worker returned an outcome, not whether the
-program ran: a timed-out or crashed program reaches a worker but is killed, so
-it answers `ERROR` rather than `FAILED`.
+The dividing line is whether the failure can be attributed to an instruction.
+A worker terminated by native uploaded code answers `FAILED` for the active
+instruction after the server replaces it. A timeout, a worker failure outside
+an instruction, or a server failure answers `ERROR`.
 
 ---
 
