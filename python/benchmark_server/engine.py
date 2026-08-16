@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import IO, Any, Protocol
 
+from .deferred import DeferredGPUResult
 from .errors import ExecutionError
 from .keys import compute_blob_hash
 from .lease import Lease
@@ -102,7 +103,15 @@ def execute(
                                 instruction.shape,
                             )
                     elif isinstance(instruction, Run):
-                        env[instruction.id] = _invoke(instruction, env, runtime)
+                        value = _invoke(instruction, env, runtime)
+                        if isinstance(value, DeferredGPUResult):
+                            # The builtin completed its host-only phase without the
+                            # lease.  Driver/module loading must be serialized with
+                            # every other use of this GPU before the instruction is
+                            # considered complete.
+                            lease.acquire()
+                            value = value.resolve()
+                        env[instruction.id] = value
                     elif isinstance(instruction, Return):
                         # A return that fails mid-encode must leave nothing behind: it
                         # adds no results entry, so a binary part it already registered

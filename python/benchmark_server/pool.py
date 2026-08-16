@@ -114,9 +114,17 @@ class WorkerPool:
         runtime_factory: Callable,
         termination_grace_seconds: float = 5.0,
         workers_per_gpu: int = 1,
+        max_requests_per_worker: int = 1,
     ) -> None:
+        if max_requests_per_worker < 0:
+            raise ValueError("max_requests_per_worker must be non-negative")
         self._workers = [
-            Worker(g, runtime_factory, termination_grace_seconds=termination_grace_seconds)
+            Worker(
+                g,
+                runtime_factory,
+                termination_grace_seconds=termination_grace_seconds,
+                max_requests=max_requests_per_worker,
+            )
             for g in gpus
             for _ in range(max(1, workers_per_gpu))
         ]

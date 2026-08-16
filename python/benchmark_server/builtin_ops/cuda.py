@@ -10,6 +10,7 @@ import shutil
 from dataclasses import dataclass
 from typing import Any
 
+from ..deferred import DeferredGPUResult
 from ..errors import ExecutionError
 from ._common import short
 from ._registry import register_builtin
@@ -39,18 +40,23 @@ def compile_cuda(src: Any, cfg: Any = None) -> Any:
     import tvm_ffi.cpp
 
     # Selects the GPU's arch-specific target unless the operator already pinned one.
-    os.environ.setdefault("TVM_FFI_CUDA_ARCH_LIST", _cuda_arch_list())
+    if "TVM_FFI_CUDA_ARCH_LIST" not in os.environ:
+        os.environ["TVM_FFI_CUDA_ARCH_LIST"] = _cuda_arch_list()
     source_manages_exports = _declares_tvm_ffi_macro(src.source)
     try:
-        mod = tvm_ffi.cpp.load_inline(
+        library_path = tvm_ffi.cpp.build_inline(
             name=f"upload_{src.entry}",
             cuda_sources=src.source,
             functions=None if source_manages_exports else src.entry,
             extra_cuda_cflags=cuda_cflags or None,
+            backend="cuda",
         )
-        return _compiled_entry(mod, src.entry)
     except RuntimeError as exc:  # nvcc/ptxas diagnostics, surfaced by ninja
         raise ExecutionError("compile", short(_diagnostics(str(exc)))) from exc
+    # Building is host-only and may overlap another worker's benchmark. Loading
+    # the shared object registers its CUDA fatbinary, so defer that small phase
+    # until the engine has reacquired this GPU's lease.
+    return DeferredGPUResult(lambda: _load_compiled_entry(library_path, src.entry))
 
 
 # --- helpers ----------------------------------------------------------------
@@ -82,6 +88,18 @@ def _compiled_entry(mod: Any, entry: str):
         return mod.get_function(entry)
     except AttributeError as exc:
         raise ExecutionError("compile", f"compiled module has no exported entry {entry!r}") from exc
+
+
+def _load_compiled_entry(library_path: str, entry: str):
+    import tvm_ffi
+
+    try:
+        mod = tvm_ffi.load_module(library_path)
+        return _compiled_entry(mod, entry)
+    except ExecutionError:
+        raise
+    except Exception as exc:
+        raise ExecutionError("compile", f"cannot load compiled CUDA module: {short(exc)}") from exc
 
 
 def _require_cuda_toolchain() -> None:

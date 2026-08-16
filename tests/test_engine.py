@@ -1,5 +1,6 @@
 import pytest
 
+from benchmark_server.deferred import DeferredGPUResult
 from benchmark_server.engine import execute
 from benchmark_server.keys import compute_blob_hash
 from benchmark_server.schemas import Program, Ref, Return, Run, Upload
@@ -70,6 +71,43 @@ def test_cuda_last_error_overrides_cupti_unavailable_error():
     assert outcome.status == "FAILED"
     assert outcome.error["kind"] == "runtime"
     assert outcome.error["message"] == "CUDA error cudaErrorInvalidValue (1): invalid argument"
+
+
+def test_cpu_only_builtin_finalizes_deferred_gpu_result_under_lease():
+    events = []
+
+    class RecordingLease:
+        held = False
+
+        def acquire(self):
+            self.held = True
+            events.append("acquire")
+
+        def release(self):
+            self.held = False
+            events.append("release")
+
+    lease = RecordingLease()
+
+    class DeferredRuntime(FakeRuntime):
+        def builtin(self, name):
+            if name != "builtin.deferred":
+                return super().builtin(name)
+
+            def finalize():
+                assert lease.held
+                events.append("finalize")
+                return 42
+
+            return lambda: DeferredGPUResult(finalize)
+
+        def is_cpu_only(self, name):
+            return name == "builtin.deferred" or super().is_cpu_only(name)
+
+    outcome = execute(Program([Run("compiled", "builtin.deferred", [])]), DeferredRuntime(), lease)
+
+    assert outcome.status == "COMPLETED"
+    assert events == ["acquire", "finalize", "release"]
 
 
 @pytest.mark.parametrize(

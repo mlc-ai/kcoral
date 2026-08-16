@@ -37,6 +37,13 @@ lease and never run on it at once, so a measurement is unaffected by what else
 the server is doing. `lease_depth` is how many workers hold or are queued for
 that GPU.
 
+By default each worker generation serves one request
+(`--max-requests-per-worker 1`) and is replaced before its slot returns to the
+idle pool. This gives every request a fresh CUDA context and allocator state.
+Setting the option to `0` enables unlimited worker reuse for trusted kernels and
+higher throughput, at the cost of allowing undefined CUDA behaviour to depend on
+the process's prior allocation/module history.
+
 ## Request envelope
 
 `multipart/form-data` is an HTTP body format containing multiple named parts,
@@ -462,11 +469,13 @@ and host work outside those endpoints are excluded. `activities_stable` is
 `rtol`, and `atol`.
 
 The four `compile_*` builtins are registered `cpu_only`, so a worker drops its GPU
-lease while they run and another worker measures meanwhile. A new builtin should
-declare it only when both hold: it touches no GPU at all, and it is slow enough
-that a run is worth waiting to reacquire the lease afterwards — currently that
-means compilation. The default is the safe answer, and a builtin wrongly declared
-`cpu_only` corrupts whatever a neighbouring worker is timing.
+lease while their host compilation runs and another worker measures meanwhile.
+CUDA C compilation is split at that boundary: nvcc and linking run without the
+lease, then the worker reacquires it before loading the shared object and
+registering its CUDA module. A new builtin should declare `cpu_only` only when its
+off-lease phase touches no GPU at all. Any driver/module-loading finalization must
+be deferred until the engine reacquires the lease; otherwise it can perturb a
+neighbouring worker's kernel or timing.
 
 ---
 

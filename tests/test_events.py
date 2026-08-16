@@ -15,7 +15,7 @@ STRUCTURAL_PROGRAM = {
 
 
 def _make_client(tmp_path):
-    config = ServerConfig(gpus=[0], log_dir=tmp_path / "logs")
+    config = ServerConfig(gpus=[0], log_dir=tmp_path / "logs", max_requests_per_worker=0)
     return TestClient(create_app(config, runtime_factory=fake_runtime_factory))
 
 
@@ -78,6 +78,16 @@ def test_worker_restart_event_on_poisoned_context(tmp_path):
     assert restart["reason"] == "poisoned_context" and restart["gpu_id"] == 0
     finished = next(event for event in events if event["event"] == "request_finished")
     assert finished["http_status"] == 200 and finished["status"] == "FAILED"
+
+
+def test_worker_restart_event_on_request_limit(tmp_path):
+    config = ServerConfig(gpus=[0], log_dir=tmp_path / "logs")
+    with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as client:
+        assert _post(client, STRUCTURAL_PROGRAM).status_code == 200
+    restart = next(
+        event for event in _read_events(tmp_path) if event["event"] == "worker_restarted"
+    )
+    assert restart["reason"] == "request_limit" and restart["gpu_id"] == 0
 
 
 def test_invalid_request_is_logged(tmp_path):

@@ -17,6 +17,8 @@ ADD_ONE = "def main(value):\n    return value + 1\n"
 
 
 def make_client(config=None):
+    if config is None:
+        config = ServerConfig(max_requests_per_worker=0)
     return TestClient(create_app(config, runtime_factory=fake_runtime_factory))
 
 
@@ -26,7 +28,12 @@ def gpu_app(**overrides):
     gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
     gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0
     return create_app(
-        ServerConfig(gpus=[gpu_id], workers_per_gpu=1, **overrides),
+        ServerConfig(
+            gpus=[gpu_id],
+            workers_per_gpu=1,
+            max_requests_per_worker=overrides.pop("max_requests_per_worker", 0),
+            **overrides,
+        ),
         runtime_factory=gpu_runtime_factory,
     )
 

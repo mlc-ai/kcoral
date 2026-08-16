@@ -15,6 +15,7 @@ import gc
 import hashlib
 import importlib.metadata
 import linecache
+import os
 import tempfile
 from collections import OrderedDict
 from collections.abc import Callable
@@ -291,6 +292,11 @@ def describe_target() -> dict[str, str]:
     import torch
 
     major, minor = torch.cuda.get_device_capability()
+    # Cache the compiler spelling while worker startup is serialized. A later
+    # cpu_only compile must not query the CUDA driver after dropping its lease.
+    os.environ.setdefault(
+        "TVM_FFI_CUDA_ARCH_LIST", f"{major}.{minor}a" if major >= 9 else f"{major}.{minor}"
+    )
     return {"arch": f"sm_{major}{minor}a" if major >= 9 else f"sm_{major}{minor}"}
 
 

@@ -66,6 +66,7 @@ Useful options include:
 ```text
 --gpus 0,1                        CUDA devices exposed to workers
 --workers-per-gpu 8               Workers sharing each GPU
+--max-requests-per-worker 1       Fresh process/context per request; 0 reuses workers
 --worker-wait-timeout-seconds 30  Queue wait before HTTP 503 responses
 --default-timeout-seconds 300     Default execution timeout
 --output-limit-bytes 1048576      Request-level stdout/stderr capture limit
@@ -80,6 +81,14 @@ Several workers share each GPU, so one can compile while another measures on the
 GPU it is not using; they take turns through a per-GPU lease and never run on it
 at once. Raising `--workers-per-gpu` keeps the GPUs busier at the cost of dividing
 their memory among more concurrent benchmarks.
+
+Workers serve one request by default, then the pool replaces them before making
+the slot idle again. This gives submitted native code a fresh CUDA context and
+allocator state, so an out-of-bounds or race-sensitive kernel cannot make a later
+request depend on its process history. Trusted deployments can set
+`--max-requests-per-worker 0` to reuse workers for higher throughput; reset and
+poison detection still run, but CUDA undefined behaviour is then not guaranteed
+to reproduce identically across requests.
 
 ## Python client
 

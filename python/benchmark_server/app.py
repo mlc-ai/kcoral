@@ -47,8 +47,9 @@ def create_app(
         app.state.pool = WorkerPool(
             config.gpus,
             runtime_factory,
-            config.worker_termination_grace_seconds,
-            config.workers_per_gpu,
+            termination_grace_seconds=config.worker_termination_grace_seconds,
+            workers_per_gpu=config.workers_per_gpu,
+            max_requests_per_worker=config.max_requests_per_worker,
         )
         app.state.events = EventLogger(config.log_dir)
         app.state.events.emit("server_started", gpus=list(config.gpus))

@@ -13,6 +13,7 @@ def test_defaults():
     config = parse([])
     assert config.gpus == [0]
     assert config.log_dir == Path("logs")
+    assert config.max_requests_per_worker == 1
 
 
 def test_all_flags_reach_config():
@@ -32,6 +33,8 @@ def test_all_flags_reach_config():
             "5",
             "--workers-per-gpu",
             "3",
+            "--max-requests-per-worker",
+            "7",
             "--worker-termination-grace-seconds",
             "2",
             "--max-request-bytes",
@@ -51,6 +54,7 @@ def test_all_flags_reach_config():
     assert config.max_timeout_seconds == 34
     assert config.worker_wait_timeout_seconds == 5
     assert config.workers_per_gpu == 3
+    assert config.max_requests_per_worker == 7
     assert config.worker_termination_grace_seconds == 2
     assert config.max_request_bytes == 1000
     assert config.max_response_bytes == 2000
@@ -66,3 +70,8 @@ def test_bad_port_rejected():
 def test_empty_gpus_rejected():
     with pytest.raises(SystemExit):
         parse(["--gpus", ","])
+
+
+def test_negative_max_requests_per_worker_rejected():
+    with pytest.raises(SystemExit):
+        parse(["--max-requests-per-worker", "-1"])

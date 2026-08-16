@@ -44,7 +44,10 @@ def _start_server(app):
 
 @pytest.fixture(scope="module")
 def server_url():
-    app = create_app(ServerConfig(gpus=[0]), runtime_factory=fake_runtime_factory)
+    app = create_app(
+        ServerConfig(gpus=[0], max_requests_per_worker=0),
+        runtime_factory=fake_runtime_factory,
+    )
     server, thread, url = _start_server(app)
     yield url
     server.should_exit = True

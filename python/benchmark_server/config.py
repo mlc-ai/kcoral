@@ -15,6 +15,7 @@ class ServerConfig:
     max_timeout_seconds: float = 3600.0
     worker_wait_timeout_seconds: float = 30.0  # wait for a free worker before 503
     workers_per_gpu: int = 8
+    max_requests_per_worker: int = 1  # fresh process/context per request; 0 = unlimited
     worker_termination_grace_seconds: float = 5.0  # SIGTERM-to-SIGKILL window on kill
     max_request_bytes: int = 256 * 1024**2  # 256 MB request cap
     max_response_bytes: int = 256 * 1024**2  # cap on the serialized results payload

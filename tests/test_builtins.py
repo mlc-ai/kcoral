@@ -9,6 +9,7 @@ import pytest
 from benchmark_server.builtin_ops import _common, cuda
 from benchmark_server.builtin_ops.cuda import CUDASource, compile_cuda
 from benchmark_server.builtin_ops.tirx import compile_tirx
+from benchmark_server.deferred import DeferredGPUResult
 from benchmark_server.errors import ExecutionError
 
 
@@ -55,6 +56,38 @@ def test_compile_cuda_rejects_bad_arguments(args):
     with pytest.raises(ExecutionError) as exc:
         compile_cuda(*args)
     assert exc.value.kind == "compile"
+
+
+def test_compile_cuda_builds_off_lease_and_defers_module_loading(monkeypatch):
+    tvm_ffi = pytest.importorskip("tvm_ffi")
+    tvm_ffi_cpp = pytest.importorskip("tvm_ffi.cpp")
+
+    calls = []
+    monkeypatch.setattr(cuda, "_require_cuda_toolchain", lambda: None)
+    monkeypatch.setattr(cuda, "_cuda_arch_list", lambda: "10.0a")
+    monkeypatch.setattr(
+        tvm_ffi_cpp,
+        "build_inline",
+        lambda **kwargs: calls.append(("build", kwargs)) or "/cache/upload_run.so",
+    )
+
+    def compiled_fn(value):
+        return value + 1
+
+    monkeypatch.setattr(
+        tvm_ffi,
+        "load_module",
+        lambda path: calls.append(("load", path)) or types.SimpleNamespace(run=compiled_fn),
+    )
+
+    deferred = compile_cuda(CUDASource(source="void run() {}", entry="run"))
+
+    assert isinstance(deferred, DeferredGPUResult)
+    assert [call[0] for call in calls] == ["build"]
+    assert calls[0][1]["backend"] == "cuda"
+    resolved = deferred.resolve()
+    assert [call[0] for call in calls] == ["build", "load"]
+    assert resolved(41) == 42
 
 
 @pytest.mark.parametrize(

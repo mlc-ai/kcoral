@@ -21,7 +21,7 @@ from .lease import GPULeases, LeaseClient
 _WORKER_PIPE_FAILURES = (EOFError, ConnectionResetError, BrokenPipeError, OSError)
 
 
-def worker_main(gpu_id: int, conn, runtime_factory: Callable) -> None:
+def worker_main(gpu_id: int, conn, runtime_factory: Callable, max_requests: int) -> None:
     """Child entry point. Pins the GPU, builds the Runtime, serves programs."""
     # Lead a new process group, so the parent can clean up anything the submitted
     # code spawned (grandchildren included) with one killpg.
@@ -41,6 +41,7 @@ def worker_main(gpu_id: int, conn, runtime_factory: Callable) -> None:
     # Only this process sees the GPU, so only it can describe the target.
     conn.send({"__ready__": described})
     lease = LeaseClient(conn)
+    requests_served = 0
     while True:
         try:
             program = conn.recv()
@@ -62,12 +63,19 @@ def worker_main(gpu_id: int, conn, runtime_factory: Callable) -> None:
             progress=lambda index: conn.send({"__instruction__": index}),
             cleanup_failed=mark_cleanup_failed,
         )
-        if cleanup_error is None:
-            conn.send(outcome)
-        else:
+        requests_served += 1
+        if cleanup_error is not None:
             # Send the request's result before this process is discarded. The
             # parent respawns synchronously before returning the worker to idle.
             conn.send({"__outcome__": outcome, "__replace_worker__": "poisoned_context"})
+            return
+        if max_requests and requests_served >= max_requests:
+            # A fresh process gives every request the same CUDA context and
+            # allocator starting state, including after submitted native code
+            # happened to return without a detectable sticky error.
+            conn.send({"__outcome__": outcome, "__replace_worker__": "request_limit"})
+            return
+        conn.send(outcome)
 
 
 class WorkerCrashed(Exception):
@@ -96,11 +104,13 @@ class Worker:
         runtime_factory: Callable,
         spawn_timeout: float = 60.0,
         termination_grace_seconds: float = 5.0,
+        max_requests: int = 1,
     ) -> None:
         self.gpu_id = gpu_id
         self._factory = runtime_factory
         self._spawn_timeout = spawn_timeout
         self._termination_grace_seconds = termination_grace_seconds
+        self._max_requests = max_requests
         self._ctx = mp.get_context("spawn")  # 'spawn' — 'fork' is unsafe with CUDA
         self._spawn()
 
@@ -109,7 +119,9 @@ class Worker:
         parent, child = self._ctx.Pipe()
         self._conn = parent
         self._proc = self._ctx.Process(
-            target=worker_main, args=(self.gpu_id, child, self._factory), daemon=True
+            target=worker_main,
+            args=(self.gpu_id, child, self._factory, self._max_requests),
+            daemon=True,
         )
         self._proc.start()
         child.close()  # parent keeps only its end, so it sees EOF if the child dies
@@ -197,10 +209,21 @@ class Worker:
             raise crash from exc
 
     def _abandon_and_respawn(self, leases: GPULeases) -> None:
-        """Free the GPU before respawning: the dead worker cannot do it itself,
-        and a lease left held would strand every other worker on that GPU."""
+        """Replace a failed worker without letting its lifecycle touch an in-use GPU.
+
+        Terminate the old process before abandoning its lease: a timed-out native
+        kernel may still be running until process termination completes.  Worker
+        startup also creates a CUDA context and warms the runtime, so reacquire the
+        lease before spawning its replacement.  Otherwise a replacement racing a
+        waiter can run GPU initialization alongside that waiter's program.
+        """
+        self._kill()
         leases.abandon(self.gpu_id, self)
-        self._kill_and_respawn()
+        leases.acquire(self.gpu_id, self)
+        try:
+            self._spawn()
+        finally:
+            leases.release(self.gpu_id, self)
 
     def _kill(self) -> None:
         try:
@@ -211,10 +234,6 @@ class Worker:
             self._conn.close()
         except Exception:
             pass
-
-    def _kill_and_respawn(self) -> None:
-        self._kill()
-        self._spawn()
 
     def close(self) -> None:
         try:

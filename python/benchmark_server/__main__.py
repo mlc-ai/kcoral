@@ -66,6 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="workers sharing each GPU, so one can compile while another measures",
     )
     parser.add_argument(
+        "--max-requests-per-worker",
+        type=int,
+        default=_DEFAULTS.max_requests_per_worker,
+        help="retire a worker after this many requests; 0 allows unlimited reuse",
+    )
+    parser.add_argument(
         "--worker-termination-grace-seconds",
         type=float,
         default=_DEFAULTS.worker_termination_grace_seconds,
@@ -91,6 +97,8 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         raise SystemExit("--gpus needs at least one GPU id")
     if not 1 <= args.port <= 65535:
         raise SystemExit("--port must be between 1 and 65535")
+    if args.max_requests_per_worker < 0:
+        raise SystemExit("--max-requests-per-worker must be non-negative")
     return ServerConfig(
         gpus=gpus,
         cache_capacity_bytes=args.cache_capacity_bytes,
@@ -99,6 +107,7 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         max_timeout_seconds=args.max_timeout_seconds,
         worker_wait_timeout_seconds=args.worker_wait_timeout_seconds,
         workers_per_gpu=args.workers_per_gpu,
+        max_requests_per_worker=args.max_requests_per_worker,
         worker_termination_grace_seconds=args.worker_termination_grace_seconds,
         max_request_bytes=args.max_request_bytes,
         max_response_bytes=args.max_response_bytes,

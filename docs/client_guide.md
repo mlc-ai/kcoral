@@ -88,6 +88,11 @@ meanwhile.
 server's `compile_*` builtins cannot support. You compile the kernel and upload
 the library; the server only loads the compiled object and calls `entry`.
 
+For CUDA C, nvcc and linking happen while the GPU lease is released. The server
+reacquires the lease for the short shared-object load and CUDA module registration
+phase before the `compile_cuda` instruction completes, so compilation can overlap
+a neighbouring benchmark without its driver activity overlapping that benchmark.
+
 | | Server-side compile | Prebuilt library |
 |---|---|---|
 | Use when | The build is a standard one | Custom compilation the `compile_*` builtins cannot support |
