@@ -471,6 +471,14 @@ void illegal_access() {
 }
 """
 
+STALE_LAST_ERROR_KERNEL = """
+__global__ void never_runs() {}
+
+void stale_launch() {
+  never_runs<<<0, 1>>>();
+}
+"""
+
 CUDA_SYNC = """
 def main():
     import torch
@@ -661,6 +669,63 @@ def test_illegal_access_replaces_only_worker_and_next_gpu_request_recovers():
     assert failed_result["error"]["kind"] == "runtime"
     assert failed_result["error"]["instruction_id"] == "sync"
     assert replacement_pid != original_pid
+    assert recovered.status_code == 200
+    assert recovered_result["status"] == "COMPLETED", recovered_result.get("error")
+    assert recovered_binary["return:0"] == bytes(16 * 4)
+
+
+@pytest.mark.skipif(
+    os.environ.get("BENCH_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
+)
+def test_cuda_last_error_fails_current_request_without_replacing_worker():
+    stale_error_program = {
+        "instructions": [
+            {
+                "op": "upload",
+                "id": "kernel",
+                "kind": "module",
+                "language": "cuda",
+                "source": STALE_LAST_ERROR_KERNEL,
+                "entry": "stale_launch",
+            },
+            {
+                "op": "run",
+                "id": "compiled",
+                "fn": "builtin.compile_cuda",
+                "args": [{"$ref": "kernel"}],
+            },
+            {"op": "run", "id": "invoke", "fn": {"$ref": "compiled"}},
+        ],
+        "options": {"timeout_seconds": 300},
+    }
+    healthy_program = {
+        "instructions": [
+            {
+                "op": "run",
+                "id": "q",
+                "fn": "builtin.zeros",
+                "args": [{"shape": [16], "dtype": "float32"}],
+            },
+            {"op": "return", "key": "q", "value": {"$ref": "q"}},
+        ],
+        "options": {"timeout_seconds": 60},
+    }
+    app = gpu_app()
+    with TestClient(app) as client:
+        original_pid = app.state.pool._workers[0]._proc.pid
+        failed = post_program(client, stale_error_program)
+        worker_pid_after_failure = app.state.pool._workers[0]._proc.pid
+        recovered = post_program(client, healthy_program)
+
+    failed_result, _ = response_parts(failed)
+    recovered_result, recovered_binary = response_parts(recovered)
+    assert failed.status_code == 200
+    assert failed_result["status"] == "FAILED"
+    assert failed_result["error"]["kind"] == "runtime"
+    assert failed_result["error"]["instruction_id"] == "invoke"
+    assert "cudaErrorInvalidValue" in failed_result["error"]["message"]
+    assert worker_pid_after_failure == original_pid
     assert recovered.status_code == 200
     assert recovered_result["status"] == "COMPLETED", recovered_result.get("error")
     assert recovered_binary["return:0"] == bytes(16 * 4)

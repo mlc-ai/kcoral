@@ -679,7 +679,9 @@ The dividing line is whether the failure can be attributed to an instruction.
 A worker terminated by native uploaded code answers `FAILED` for the active
 instruction after the server replaces it. A CUDA error that poisons a worker's
 context also answers `FAILED` for the active instruction; the server replaces
-only that worker process before it accepts another program. A timeout, a worker
+only that worker process before it accepts another program. A non-sticky CUDA
+launch error found while draining the request also answers `FAILED`, but the
+server clears the error and keeps that healthy worker. A timeout, a worker
 failure outside an instruction, or a server failure answers `ERROR`.
 
 ---

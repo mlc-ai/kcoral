@@ -41,6 +41,7 @@ class Runtime(Protocol):
     def builtin(self, name: str) -> Callable: ...
     def is_cpu_only(self, name: str) -> bool: ...
     def synchronize(self) -> None: ...
+    def take_last_error(self) -> str | None: ...
     def reset(self) -> None: ...
 
 
@@ -134,6 +135,24 @@ def execute(
                 )
             if cleanup_failed is not None:
                 cleanup_failed(exc)
+        else:
+            try:
+                last_error = runtime.take_last_error()
+            except Exception as exc:
+                if error is None:
+                    error = _instruction_error(
+                        "runtime", f"{type(exc).__name__}: {exc}", current_index, current
+                    )
+                if cleanup_failed is not None:
+                    cleanup_failed(exc)
+            else:
+                # A launch-configuration error can live in CUDA's thread-local
+                # last-error slot without making synchronize fail. Consume it
+                # here so it belongs to this request rather than the next CUDA
+                # API call. Reading it clears the slot; the context is healthy
+                # and must not be replaced.
+                if last_error is not None:
+                    error = _instruction_error("runtime", last_error, current_index, current)
         env.clear()
         try:
             runtime.reset()

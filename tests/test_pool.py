@@ -57,6 +57,18 @@ def test_poisoned_context_replaces_worker_and_recovers(pool):
     assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
 
 
+def test_last_error_fails_current_request_without_replacing_worker(pool):
+    original_pid = pool._workers[0]._proc.pid
+    outcome = pool.submit(prog(Run("bad", "builtin.stale_cuda_error", [])), timeout=10)
+
+    assert outcome.execution.status == "FAILED"
+    assert outcome.execution.error["kind"] == "runtime"
+    assert "cudaErrorInvalidValue" in outcome.execution.error["message"]
+    assert outcome.worker_restart_reason is None
+    assert pool._workers[0]._proc.pid == original_pid
+    assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
+
+
 class _FailedPipe:
     def __init__(self, exc):
         self._exc = exc

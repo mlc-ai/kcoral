@@ -41,6 +41,37 @@ def test_cleanup_failure_preserves_runtime_error_and_marks_worker_unhealthy():
     assert str(cleanup_errors[0]) == "simulated poisoned GPU context"
 
 
+def test_cuda_last_error_is_attributed_to_the_current_request_without_poisoning_cleanup():
+    runtime = FakeRuntime()
+    cleanup_errors = []
+    outcome = execute(
+        Program([Run("bad", "builtin.stale_cuda_error", [])]),
+        runtime,
+        UNSHARED_GPU,
+        cleanup_failed=cleanup_errors.append,
+    )
+
+    assert outcome.status == "FAILED"
+    assert outcome.error["kind"] == "runtime"
+    assert outcome.error["message"] == "CUDA error cudaErrorInvalidValue (1): invalid argument"
+    assert outcome.error["instruction_index"] == 0
+    assert outcome.error["instruction_id"] == "bad"
+    assert cleanup_errors == []
+    assert runtime.take_last_error() is None
+
+
+def test_cuda_last_error_overrides_cupti_unavailable_error():
+    outcome = execute(
+        Program([Run("bad", "builtin.stale_cuda_error_unavailable", [])]),
+        FakeRuntime(),
+        UNSHARED_GPU,
+    )
+
+    assert outcome.status == "FAILED"
+    assert outcome.error["kind"] == "runtime"
+    assert outcome.error["message"] == "CUDA error cudaErrorInvalidValue (1): invalid argument"
+
+
 @pytest.mark.parametrize(
     "source,entry",
     [

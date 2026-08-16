@@ -73,6 +73,7 @@ _BUILTINS: dict[str, Callable] = {
 class FakeRuntime:
     def __init__(self) -> None:
         self._poisoned = False
+        self._last_error: str | None = None
 
     def load_module(self, source: str, entry: str | None = None, language: str = "python") -> Any:
         assert language == "python", "the fake runtime has no compiler"
@@ -105,6 +106,10 @@ class FakeRuntime:
     def builtin(self, name: str) -> Callable:
         if name == "builtin.poison":
             return self._poison
+        if name == "builtin.stale_cuda_error":
+            return self._stale_cuda_error
+        if name == "builtin.stale_cuda_error_unavailable":
+            return self._stale_cuda_error_unavailable
         fn = _BUILTINS.get(name)
         if fn is None:
             raise ExecutionError("runtime", f"unknown function: {name!r}")
@@ -116,6 +121,11 @@ class FakeRuntime:
     def synchronize(self) -> None:
         pass
 
+    def take_last_error(self) -> str | None:
+        error = self._last_error
+        self._last_error = None
+        return error
+
     def reset(self) -> None:
         if self._poisoned:
             raise RuntimeError("simulated poisoned GPU context")
@@ -123,6 +133,13 @@ class FakeRuntime:
     def _poison(self) -> None:
         self._poisoned = True
         raise ExecutionError("runtime", "simulated illegal memory access")
+
+    def _stale_cuda_error(self) -> None:
+        self._last_error = "CUDA error cudaErrorInvalidValue (1): invalid argument"
+
+    def _stale_cuda_error_unavailable(self) -> None:
+        self._stale_cuda_error()
+        raise ExecutionError("unavailable", "CUPTI recorded no GPU activity")
 
 
 def fake_runtime_factory() -> FakeRuntime:

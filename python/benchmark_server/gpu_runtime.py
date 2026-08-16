@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import ctypes
+import ctypes.util
 import gc
 import hashlib
 import importlib.metadata
@@ -17,6 +18,7 @@ import linecache
 import tempfile
 from collections import OrderedDict
 from collections.abc import Callable
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +99,15 @@ class GPURuntime:
         # instruction error while the parent replaces this worker process.
         torch.cuda.synchronize()
 
+    def take_last_error(self) -> str | None:
+        """Consume CUDA's thread-local last error, if one is pending.
+
+        Some invalid launches do not enqueue work and therefore are not reported
+        by ``synchronize``. Leaving that error behind makes an unrelated CUDA API
+        call in the next request report it instead.
+        """
+        return _cuda_error_api().take_last_error()
+
     def reset(self) -> None:
         import torch
 
@@ -129,6 +140,58 @@ class GPURuntime:
         except Exception as exc:
             raise ExecutionError("parse", f"{type(exc).__name__}: {exc}") from exc
         return resolve_entry(ns, source, entry)
+
+
+class _CUDAErrorAPI:
+    """The small libcudart surface needed to inspect CUDA's last-error slot."""
+
+    def __init__(self, library: Any) -> None:
+        self._get_last_error = library.cudaGetLastError
+        self._get_last_error.argtypes = []
+        self._get_last_error.restype = ctypes.c_int
+        self._get_error_name = library.cudaGetErrorName
+        self._get_error_name.argtypes = [ctypes.c_int]
+        self._get_error_name.restype = ctypes.c_char_p
+        self._get_error_string = library.cudaGetErrorString
+        self._get_error_string.argtypes = [ctypes.c_int]
+        self._get_error_string.restype = ctypes.c_char_p
+
+    def take_last_error(self) -> str | None:
+        code = self._get_last_error()
+        if code == 0:
+            return None
+        name = _decode_cuda_error(self._get_error_name(code), "cudaErrorUnknown")
+        description = _decode_cuda_error(self._get_error_string(code), "unknown error")
+        return f"CUDA error {name} ({code}): {description}"
+
+
+def _decode_cuda_error(value: bytes | None, fallback: str) -> str:
+    return value.decode("utf-8", errors="replace") if value is not None else fallback
+
+
+@cache
+def _cuda_error_api() -> _CUDAErrorAPI:
+    """Load the same CUDA runtime torch uses, once per worker process."""
+    candidates: list[str] = []
+    discovered = ctypes.util.find_library("cudart")
+    if discovered is not None:
+        candidates.append(discovered)
+    try:
+        import torch
+
+        if torch.version.cuda:
+            candidates.append(f"libcudart.so.{torch.version.cuda.split('.', 1)[0]}")
+    except Exception:
+        pass
+    candidates.extend(["libcudart.so", "libcudart.so.13", "libcudart.so.12", "libcudart.so.11.0"])
+
+    failures: list[str] = []
+    for candidate in dict.fromkeys(candidates):
+        try:
+            return _CUDAErrorAPI(ctypes.CDLL(candidate))
+        except (AttributeError, OSError) as exc:
+            failures.append(f"{candidate}: {exc}")
+    raise RuntimeError("could not load libcudart to inspect CUDA errors: " + "; ".join(failures))
 
 
 def resolve_entry(namespace: dict, source: str, entry: str | None) -> Any:
