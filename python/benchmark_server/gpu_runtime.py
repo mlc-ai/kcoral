@@ -93,10 +93,9 @@ class GPURuntime:
         lease is given up and another worker starts measuring."""
         import torch
 
-        try:
-            torch.cuda.synchronize()
-        except Exception:
-            pass  # a poisoned CUDA context is handled at the worker level
+        # Do not hide a poisoned context. The engine preserves the request's
+        # instruction error while the parent replaces this worker process.
+        torch.cuda.synchronize()
 
     def reset(self) -> None:
         import torch
@@ -108,11 +107,10 @@ class GPURuntime:
         # `__globals__` point back at it), so only a collection frees the
         # module-scope tensors `empty_cache()` would otherwise find still live.
         gc.collect()
-        try:
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
-        except Exception:
-            pass  # a poisoned CUDA context is handled at the worker level
+        # CUDA errors are sticky within a process. Surface one so the parent can
+        # replace this worker instead of returning its context to the pool.
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
 
     def _materialize_module(self, source: str, entry: str | None) -> Any:
         # A kernel is re-read from its source text at compile time, so seed

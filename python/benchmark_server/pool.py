@@ -104,6 +104,7 @@ class SubmitOutcome:
     elapsed_ms: float
     lease_wait_ms: float = 0.0
     lease_held_ms: float = 0.0
+    worker_restart_reason: str | None = None
 
 
 class WorkerPool:
@@ -132,7 +133,9 @@ class WorkerPool:
             raise PoolBusy("all workers busy", queue_ms=queue_ms)
         run_started = time.monotonic()
         try:
-            execution, lease_wait_ms, lease_held_ms = worker.run(program, timeout, self._leases)
+            execution, lease_wait_ms, lease_held_ms, restart_reason = worker.run(
+                program, timeout, self._leases
+            )
             return SubmitOutcome(
                 execution,
                 worker.gpu_id,
@@ -140,6 +143,7 @@ class WorkerPool:
                 (time.monotonic() - run_started) * 1000,
                 lease_wait_ms,
                 lease_held_ms,
+                restart_reason,
             )
         except (WorkerTimeout, WorkerCrashed) as exc:
             exc.gpu_id = worker.gpu_id

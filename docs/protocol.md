@@ -677,8 +677,10 @@ Its `kind` is `parse`, `request_too_large`, `busy`, `timeout`, `engine`, or
 
 The dividing line is whether the failure can be attributed to an instruction.
 A worker terminated by native uploaded code answers `FAILED` for the active
-instruction after the server replaces it. A timeout, a worker failure outside
-an instruction, or a server failure answers `ERROR`.
+instruction after the server replaces it. A CUDA error that poisons a worker's
+context also answers `FAILED` for the active instruction; the server replaces
+only that worker process before it accepts another program. A timeout, a worker
+failure outside an instruction, or a server failure answers `ERROR`.
 
 ---
 

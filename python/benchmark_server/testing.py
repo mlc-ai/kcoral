@@ -71,6 +71,9 @@ _BUILTINS: dict[str, Callable] = {
 
 
 class FakeRuntime:
+    def __init__(self) -> None:
+        self._poisoned = False
+
     def load_module(self, source: str, entry: str | None = None, language: str = "python") -> Any:
         assert language == "python", "the fake runtime has no compiler"
         namespace: dict[str, Any] = {}
@@ -100,6 +103,8 @@ class FakeRuntime:
         return value.dtype, value.shape, value.data
 
     def builtin(self, name: str) -> Callable:
+        if name == "builtin.poison":
+            return self._poison
         fn = _BUILTINS.get(name)
         if fn is None:
             raise ExecutionError("runtime", f"unknown function: {name!r}")
@@ -112,7 +117,12 @@ class FakeRuntime:
         pass
 
     def reset(self) -> None:
-        pass
+        if self._poisoned:
+            raise RuntimeError("simulated poisoned GPU context")
+
+    def _poison(self) -> None:
+        self._poisoned = True
+        raise ExecutionError("runtime", "simulated illegal memory access")
 
 
 def fake_runtime_factory() -> FakeRuntime:

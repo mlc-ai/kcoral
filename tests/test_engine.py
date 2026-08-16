@@ -25,6 +25,22 @@ def call_module(source, entry=None):
     )
 
 
+def test_cleanup_failure_preserves_runtime_error_and_marks_worker_unhealthy():
+    runtime = FakeRuntime()
+    cleanup_errors = []
+    outcome = execute(
+        Program([Run("bad", "builtin.poison", [])]),
+        runtime,
+        UNSHARED_GPU,
+        cleanup_failed=cleanup_errors.append,
+    )
+    assert outcome.status == "FAILED"
+    assert outcome.error["kind"] == "runtime"
+    assert outcome.error["message"] == "simulated illegal memory access"
+    assert len(cleanup_errors) == 1
+    assert str(cleanup_errors[0]) == "simulated poisoned GPU context"
+
+
 @pytest.mark.parametrize(
     "source,entry",
     [

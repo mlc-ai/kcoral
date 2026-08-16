@@ -67,6 +67,19 @@ def test_worker_restart_event_on_timeout(tmp_path):
     assert finished["http_status"] == 504 and finished["error"] == "timeout"
 
 
+def test_worker_restart_event_on_poisoned_context(tmp_path):
+    program = {"instructions": [{"op": "run", "id": "bad", "fn": "builtin.poison"}]}
+    with _make_client(tmp_path) as client:
+        response = _post(client, program)
+    assert response.status_code == 200
+    assert response.json()["error"]["kind"] == "runtime"
+    events = _read_events(tmp_path)
+    restart = next(event for event in events if event["event"] == "worker_restarted")
+    assert restart["reason"] == "poisoned_context" and restart["gpu_id"] == 0
+    finished = next(event for event in events if event["event"] == "request_finished")
+    assert finished["http_status"] == 200 and finished["status"] == "FAILED"
+
+
 def test_invalid_request_is_logged(tmp_path):
     with _make_client(tmp_path) as client:
         assert _post(client, {"instructions": []}).status_code == 400

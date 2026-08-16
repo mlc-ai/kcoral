@@ -18,6 +18,8 @@ from collections.abc import Callable
 from .engine import execute
 from .lease import GPULeases, LeaseClient
 
+_WORKER_PIPE_FAILURES = (EOFError, ConnectionResetError, BrokenPipeError, OSError)
+
 
 def worker_main(gpu_id: int, conn, runtime_factory: Callable) -> None:
     """Child entry point. Pins the GPU, builds the Runtime, serves programs."""
@@ -46,14 +48,26 @@ def worker_main(gpu_id: int, conn, runtime_factory: Callable) -> None:
             return
         if program is None:  # shutdown signal
             return
-        conn.send(
-            execute(
-                program,
-                runtime,
-                lease=lease,
-                progress=lambda index: conn.send({"__instruction__": index}),
-            )
+        cleanup_error: BaseException | None = None
+
+        def mark_cleanup_failed(exc: BaseException) -> None:
+            nonlocal cleanup_error
+            if cleanup_error is None:
+                cleanup_error = exc
+
+        outcome = execute(
+            program,
+            runtime,
+            lease=lease,
+            progress=lambda index: conn.send({"__instruction__": index}),
+            cleanup_failed=mark_cleanup_failed,
         )
+        if cleanup_error is None:
+            conn.send(outcome)
+        else:
+            # Send the request's result before this process is discarded. The
+            # parent respawns synchronously before returning the worker to idle.
+            conn.send({"__outcome__": outcome, "__replace_worker__": "poisoned_context"})
 
 
 class WorkerCrashed(Exception):
@@ -99,10 +113,15 @@ class Worker:
         )
         self._proc.start()
         child.close()  # parent keeps only its end, so it sees EOF if the child dies
-        if not self._conn.poll(self._spawn_timeout):
+        try:
+            ready = self._conn.poll(self._spawn_timeout)
+            msg = self._conn.recv() if ready else None
+        except _WORKER_PIPE_FAILURES as exc:
+            self._kill()
+            raise WorkerCrashed(f"worker on GPU {self.gpu_id} failed during startup") from exc
+        if not ready:
             self._kill()
             raise WorkerCrashed(f"worker on GPU {self.gpu_id} did not become ready")
-        msg = self._conn.recv()
         if not (isinstance(msg, dict) and "__ready__" in msg):
             self._kill()
             raise WorkerCrashed(f"worker init error: {msg}")
@@ -112,59 +131,70 @@ class Worker:
 
     def run(self, program, timeout: float, leases: GPULeases) -> tuple:
         """Run a program, servicing its lease requests; kill+respawn on timeout or
-        crash, then re-raise. Returns ``(outcome, lease_wait_ms, lease_held_ms)``.
+        crash, then re-raise. A poisoned context is respawned after preserving its
+        outcome. Returns the outcome, lease timings, and optional restart reason.
 
         The deadline covers only the worker's own work - time blocked on a lease
         another worker holds is not counted, or ``timeout_seconds`` would mean
         different things at different loads.
         """
-        self._conn.send(program)
         remaining = timeout
         lease_wait_ms = 0.0
         lease_held_ms = 0.0
         held_since: float | None = None
         instruction_index: int | None = None
-        while True:
-            waited_from = time.monotonic()
-            if not self._conn.poll(remaining):  # no answer by the deadline -> hung
-                self._abandon_and_respawn(leases)
-                raise WorkerTimeout(f"program exceeded {timeout}s on GPU {self.gpu_id}")
-            remaining -= time.monotonic() - waited_from
-            try:
+        try:
+            self._conn.send(program)
+            while True:
+                waited_from = time.monotonic()
+                if not self._conn.poll(remaining):  # no answer by the deadline -> hung
+                    self._abandon_and_respawn(leases)
+                    raise WorkerTimeout(f"program exceeded {timeout}s on GPU {self.gpu_id}")
+                remaining -= time.monotonic() - waited_from
                 message = self._conn.recv()
-            except EOFError:  # child died mid-run
-                if held_since is not None:
-                    lease_held_ms += (time.monotonic() - held_since) * 1000
-                # Refresh multiprocessing's view of a child that has just closed
-                # its pipe before replacing it.
+                if isinstance(message, dict) and "__instruction__" in message:
+                    instruction_index = message["__instruction__"]
+                    continue
+                if isinstance(message, dict) and "__replace_worker__" in message:
+                    if held_since is not None:
+                        lease_held_ms += (time.monotonic() - held_since) * 1000
+                    outcome = message.get("__outcome__")
+                    reason = message["__replace_worker__"]
+                    self._abandon_and_respawn(leases)
+                    return outcome, lease_wait_ms, lease_held_ms, reason
+                if not (isinstance(message, dict) and "__lease__" in message):
+                    # Anything that is not a lease message is the program's outcome.
+                    if held_since is not None:
+                        lease_held_ms += (time.monotonic() - held_since) * 1000
+                    leases.release(self.gpu_id, self)  # no-op if the engine already did
+                    return message, lease_wait_ms, lease_held_ms, None
+                if message["__lease__"] == "acquire":
+                    # The child is blocked until we answer, so this may wait freely.
+                    lease_wait_ms += leases.acquire(self.gpu_id, self)
+                    held_since = time.monotonic()
+                    self._conn.send({"__lease__": "granted"})
+                else:
+                    # A release; the child did not wait for an answer and has moved on.
+                    if held_since is not None:
+                        lease_held_ms += (time.monotonic() - held_since) * 1000
+                        held_since = None
+                    leases.release(self.gpu_id, self)
+        except _WORKER_PIPE_FAILURES as exc:
+            # send, poll, recv, and lease replies can each be the first place a
+            # dead worker is observed, depending on pipe timing and platform.
+            if held_since is not None:
+                lease_held_ms += (time.monotonic() - held_since) * 1000
+            try:
                 self._proc.join(timeout=0.1)
-                crash = WorkerCrashed(f"worker on GPU {self.gpu_id} crashed")
-                crash.instruction_index = instruction_index
-                crash.exitcode = self._proc.exitcode
-                crash.lease_wait_ms = lease_wait_ms
-                crash.lease_held_ms = lease_held_ms
-                self._abandon_and_respawn(leases)
-                raise crash
-            if isinstance(message, dict) and "__instruction__" in message:
-                instruction_index = message["__instruction__"]
-                continue
-            if not (isinstance(message, dict) and "__lease__" in message):
-                # Anything that is not a lease message is the program's outcome.
-                if held_since is not None:
-                    lease_held_ms += (time.monotonic() - held_since) * 1000
-                leases.release(self.gpu_id, self)  # no-op if the engine already did
-                return message, lease_wait_ms, lease_held_ms
-            if message["__lease__"] == "acquire":
-                # The child is blocked until we answer, so this may wait freely.
-                lease_wait_ms += leases.acquire(self.gpu_id, self)
-                held_since = time.monotonic()
-                self._conn.send({"__lease__": "granted"})
-            else:
-                # A release; the child did not wait for an answer and has moved on.
-                if held_since is not None:
-                    lease_held_ms += (time.monotonic() - held_since) * 1000
-                    held_since = None
-                leases.release(self.gpu_id, self)
+            except Exception:
+                pass
+            crash = WorkerCrashed(f"worker on GPU {self.gpu_id} pipe failed: {exc}")
+            crash.instruction_index = instruction_index
+            crash.exitcode = self._proc.exitcode
+            crash.lease_wait_ms = lease_wait_ms
+            crash.lease_held_ms = lease_held_ms
+            self._abandon_and_respawn(leases)
+            raise crash from exc
 
     def _abandon_and_respawn(self, leases: GPULeases) -> None:
         """Free the GPU before respawning: the dead worker cannot do it itself,
@@ -175,6 +205,10 @@ class Worker:
     def _kill(self) -> None:
         try:
             _terminate_process_tree(self._proc, self._termination_grace_seconds)
+        except Exception:
+            pass
+        try:
+            self._conn.close()
         except Exception:
             pass
 

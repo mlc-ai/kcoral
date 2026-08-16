@@ -326,6 +326,26 @@ def test_timeout_and_worker_crash_statuses():
     }
 
 
+def test_poisoned_context_returns_runtime_then_next_request_recovers():
+    poison_program = {"instructions": [{"op": "run", "id": "bad", "fn": "builtin.poison"}]}
+    app = create_app(
+        ServerConfig(gpus=[0], workers_per_gpu=1), runtime_factory=fake_runtime_factory
+    )
+    with TestClient(app) as client:
+        original_pid = app.state.pool._workers[0]._proc.pid
+        failed = post_program(client, poison_program)
+        replacement_pid = app.state.pool._workers[0]._proc.pid
+        recovered = post_program(client, scalar_program())
+
+    assert failed.status_code == 200
+    assert failed.json()["status"] == "FAILED"
+    assert failed.json()["error"]["kind"] == "runtime"
+    assert replacement_pid != original_pid
+    assert recovered.status_code == 200
+    assert recovered.json()["status"] == "COMPLETED"
+    assert recovered.json()["results"]["answer"]["value"] == 42
+
+
 SPAWN_AND_HANG = (
     "import subprocess, time\n"
     "def main(pid_file):\n"
@@ -439,6 +459,26 @@ void scale(tvm::ffi::TensorView x, tvm::ffi::TensorView y) {
   scale_kernel<<<(n + 255) / 256, 256>>>(static_cast<const float*>(x.data_ptr()),
                                          static_cast<float*>(y.data_ptr()), n);
 }
+"""
+
+ILLEGAL_ACCESS_KERNEL = """
+__global__ void illegal_access_kernel() {
+  *reinterpret_cast<volatile int*>(1) = 1;
+}
+
+void illegal_access() {
+  illegal_access_kernel<<<1, 1>>>();
+}
+"""
+
+CUDA_SYNC = """
+def main():
+    import torch
+    from benchmark_server.errors import ExecutionError
+    try:
+        torch.cuda.synchronize()
+    except RuntimeError as exc:
+        raise ExecutionError("runtime", str(exc)) from exc
 """
 
 
@@ -566,6 +606,64 @@ def test_cuda_c_kernel_end_to_end():
     assert result["status"] == "COMPLETED", result.get("error")
     returned = np.frombuffer(binary["return:0"], dtype=np.float32)
     np.testing.assert_allclose(returned, np.arange(256, dtype=np.float32) * 3.0)
+
+
+@pytest.mark.skipif(
+    os.environ.get("BENCH_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
+)
+def test_illegal_access_replaces_only_worker_and_next_gpu_request_recovers():
+    poison_program = {
+        "instructions": [
+            {
+                "op": "upload",
+                "id": "kernel",
+                "kind": "module",
+                "language": "cuda",
+                "source": ILLEGAL_ACCESS_KERNEL,
+                "entry": "illegal_access",
+            },
+            {"op": "upload", "id": "sync_fn", "kind": "module", "source": CUDA_SYNC},
+            {
+                "op": "run",
+                "id": "compiled",
+                "fn": "builtin.compile_cuda",
+                "args": [{"$ref": "kernel"}],
+            },
+            {"op": "run", "id": "invoke", "fn": {"$ref": "compiled"}},
+            {"op": "run", "id": "sync", "fn": {"$ref": "sync_fn"}},
+        ],
+        "options": {"timeout_seconds": 300},
+    }
+    healthy_program = {
+        "instructions": [
+            {
+                "op": "run",
+                "id": "q",
+                "fn": "builtin.zeros",
+                "args": [{"shape": [16], "dtype": "float32"}],
+            },
+            {"op": "return", "key": "q", "value": {"$ref": "q"}},
+        ],
+        "options": {"timeout_seconds": 60},
+    }
+    app = gpu_app()
+    with TestClient(app) as client:
+        original_pid = app.state.pool._workers[0]._proc.pid
+        failed = post_program(client, poison_program)
+        replacement_pid = app.state.pool._workers[0]._proc.pid
+        recovered = post_program(client, healthy_program)
+
+    failed_result, _ = response_parts(failed)
+    recovered_result, recovered_binary = response_parts(recovered)
+    assert failed.status_code == 200
+    assert failed_result["status"] == "FAILED"
+    assert failed_result["error"]["kind"] == "runtime"
+    assert failed_result["error"]["instruction_id"] == "sync"
+    assert replacement_pid != original_pid
+    assert recovered.status_code == 200
+    assert recovered_result["status"] == "COMPLETED", recovered_result.get("error")
+    assert recovered_binary["return:0"] == bytes(16 * 4)
 
 
 @pytest.mark.skipif(

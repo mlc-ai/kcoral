@@ -3,10 +3,11 @@ import time
 
 import pytest
 
+from benchmark_server.lease import GPULeases
 from benchmark_server.pool import PoolBusy, WorkerPool
 from benchmark_server.schemas import Program, Ref, Return, Run
 from benchmark_server.testing import fake_runtime_factory
-from benchmark_server.worker import WorkerCrashed, WorkerTimeout
+from benchmark_server.worker import Worker, WorkerCrashed, WorkerTimeout
 
 
 def prog(*instrs):
@@ -43,6 +44,54 @@ def test_crash_replaces_worker_and_recovers(pool):
     assert exc_info.value.instruction_index == 0 and exc_info.value.exitcode == 1
     # worker was respawned; the next request succeeds on the fresh worker
     assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
+
+
+def test_poisoned_context_replaces_worker_and_recovers(pool):
+    original_pid = pool._workers[0]._proc.pid
+    outcome = pool.submit(prog(Run("bad", "builtin.poison", [])), timeout=10)
+    assert outcome.execution.status == "FAILED"
+    assert outcome.execution.error["kind"] == "runtime"
+    assert outcome.execution.error["message"] == "simulated illegal memory access"
+    assert outcome.worker_restart_reason == "poisoned_context"
+    assert pool._workers[0]._proc.pid != original_pid
+    assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
+
+
+class _FailedPipe:
+    def __init__(self, exc):
+        self._exc = exc
+
+    def send(self, _message):
+        raise self._exc
+
+
+class _ExitedProcess:
+    exitcode = 1
+
+    def join(self, timeout=None):
+        pass
+
+
+@pytest.mark.parametrize(
+    "pipe_error",
+    [EOFError("eof"), ConnectionResetError("reset"), BrokenPipeError("broken"), OSError("io")],
+    ids=["eof", "connection-reset", "broken-pipe", "os-error"],
+)
+def test_run_replaces_worker_on_pipe_failures(pipe_error):
+    worker = object.__new__(Worker)
+    worker.gpu_id = 0
+    worker._conn = _FailedPipe(pipe_error)
+    worker._proc = _ExitedProcess()
+    replacements = []
+    worker._abandon_and_respawn = replacements.append
+    leases = GPULeases([0])
+
+    with pytest.raises(WorkerCrashed) as exc_info:
+        worker.run(successful_program(), timeout=10, leases=leases)
+
+    assert exc_info.value.__cause__ is pipe_error
+    assert exc_info.value.exitcode == 1
+    assert replacements == [leases]
 
 
 def test_timeout_kills_and_replaces_worker(pool):
@@ -148,6 +197,16 @@ def test_killing_a_worker_frees_the_gpu_it_held(shared_gpu_pool):
     assert shared_gpu_pool.health()["gpus"] == [{"gpu_id": 0, "lease_depth": 0}]
     # The other worker can still reach the GPU.
     assert shared_gpu_pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
+
+
+def test_poison_replaces_only_the_corresponding_worker(shared_gpu_pool):
+    before = [worker._proc.pid for worker in shared_gpu_pool._workers]
+    outcome = shared_gpu_pool.submit(prog(Run("bad", "builtin.poison", [])), timeout=10)
+    after = [worker._proc.pid for worker in shared_gpu_pool._workers]
+
+    assert outcome.execution.error["kind"] == "runtime"
+    assert outcome.worker_restart_reason == "poisoned_context"
+    assert sum(old != new for old, new in zip(before, after, strict=True)) == 1
 
 
 class _LeaseRecorder:

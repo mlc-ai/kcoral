@@ -187,6 +187,13 @@ def create_app(
         finally:
             cache.unpin(cache_keys)
 
+        if outcome.worker_restart_reason is not None:
+            events.emit(
+                "worker_restarted",
+                request_id=request_id,
+                gpu_id=outcome.gpu_id,
+                reason=outcome.worker_restart_reason,
+            )
         execution = outcome.execution
         if not isinstance(execution, ProgramOutcome):
             finished(500, level="ERROR", error="invalid_worker_response")
