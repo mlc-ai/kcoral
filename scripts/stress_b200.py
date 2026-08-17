@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import math
@@ -27,19 +28,63 @@ LANGUAGES = ("cuda", "triton")
 KERNEL_GLOBS = {"cuda": "kernel_t*.cu", "triton": "*.py"}
 
 
-def kernel_path_key(path: Path, language: str) -> tuple[int, str]:
-    """Prefer known-success Triton sources for bounded/default selections."""
-    relative = path.as_posix()
+def corpus_metadata(corpus: Path, language: str) -> dict[str, dict[str, Any]]:
+    manifest_path = corpus / "manifest.jsonl"
+    if not manifest_path.is_file():
+        return {}
+    metadata: dict[str, dict[str, Any]] = {}
+    with manifest_path.open(encoding="utf-8") as stream:
+        for line in stream:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            path = record.get("path")
+            if isinstance(path, str):
+                metadata[path] = record
+
+    if language == "cuda":
+        correct_turns: set[tuple[str, str, int]] = set()
+        correctness_dir = corpus / "turn_correctness_arch"
+        for path in correctness_dir.glob("*.csv"):
+            with path.open(encoding="utf-8", newline="") as stream:
+                for row in csv.DictReader(stream):
+                    try:
+                        turn = int(row.get("turn", ""))
+                    except ValueError:
+                        continue
+                    if row.get("correctness") == "Correct":
+                        correct_turns.add((path.stem, row.get("trajectory_id", ""), turn))
+        for record in metadata.values():
+            record["known_success"] = (
+                record.get("run"),
+                record.get("experiment"),
+                record.get("turn"),
+            ) in correct_turns
+    return metadata
+
+
+def kernel_path_key(
+    path: Path,
+    language: str,
+    corpus: Path,
+    metadata: dict[str, dict[str, Any]],
+) -> tuple[int, int, int, str]:
+    """Prefer target-native, known-correct sources for bounded selections."""
+    relative = path.relative_to(corpus).as_posix()
+    record = metadata.get(relative, {})
     if language != "triton":
-        return (0, relative)
-    source_kind = path.parent.name
+        return (0 if record.get("known_success") else 1, 0, 0, relative)
+    architecture_rank = 0 if record.get("source_arch") == "blackwell" else 1
+    source_kind = record.get("source_kind", path.parent.name)
     if source_kind == "success":
-        rank = 0
+        source_rank = 0
     elif source_kind == "workspace":
-        rank = 1
+        source_rank = 1
     else:
-        rank = 2
-    return (rank, relative)
+        source_rank = 2
+    shape_rank = 0 if record.get("valid_triton_shape", True) else 1
+    return (architecture_rank, source_rank, shape_rank, relative)
 
 
 @dataclass(frozen=True)
@@ -146,6 +191,7 @@ def discover_kernels(
             raise ValueError(f"no corpus configured for language {language!r}")
         if not language_corpus.is_dir():
             raise ValueError(f"missing {language} corpus directory: {language_corpus}")
+        metadata = corpus_metadata(language_corpus, language)
         for workload in names:
             root = language_corpus / workload
             if not root.is_dir():
@@ -154,7 +200,7 @@ def discover_kernels(
             seen: set[str] = set()
             paths = sorted(
                 root.rglob(KERNEL_GLOBS[language]),
-                key=lambda path: kernel_path_key(path, language),
+                key=lambda path: kernel_path_key(path, language, language_corpus, metadata),
             )
             for path in paths:
                 digest = hashlib.sha256(path.read_bytes()).hexdigest()

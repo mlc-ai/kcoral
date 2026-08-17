@@ -32,9 +32,10 @@ uv run python scripts/stress_b200.py --language cuda --workload gemm_n7168_k5120
 
 Repeat `--language` or `--workload` to select several values. Byte-identical
 sources are deduplicated within a language/workload by default;
-`--keep-duplicates` retains every corpus file. Bounded Triton selections prefer
-sources recorded under `success/`, while an unlimited selection includes
-successful, failed, and intermediate attempts.
+`--keep-duplicates` retains every corpus file. Bounded selections prefer CUDA
+turns marked `Correct` by AccRL and target-native Blackwell Triton sources
+recorded under `success/`. An unlimited selection includes successful, failed,
+and intermediate attempts.
 
 CUDA source is uploaded as `language="cuda"` and passed through
 `builtin.compile_cuda`. Triton files contain their own destination-passing

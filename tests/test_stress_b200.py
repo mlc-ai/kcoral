@@ -1,5 +1,6 @@
 import argparse
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -122,6 +123,37 @@ def test_bounded_triton_selection_prefers_success_sources(tmp_path):
     )
 
     assert [kernel.path for kernel in kernels] == [success]
+
+
+def test_bounded_triton_selection_prefers_blackwell_manifest_source(tmp_path):
+    triton_root = tmp_path / "triton"
+    hopper = _write_kernel(triton_root, "gemm_n7168_k5120", "success/kernel_v0.py", "hopper")
+    blackwell = _write_kernel(
+        triton_root, "gemm_n7168_k5120", "other-success/kernel_v0.py", "blackwell"
+    )
+    records = [
+        {
+            "path": hopper.relative_to(triton_root).as_posix(),
+            "source_arch": "hopper",
+            "source_kind": "success",
+        },
+        {
+            "path": blackwell.relative_to(triton_root).as_posix(),
+            "source_arch": "blackwell",
+            "source_kind": "success",
+        },
+    ]
+    (triton_root / "manifest.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records)
+    )
+
+    kernels = stress_b200.discover_kernels(
+        {"triton": triton_root},
+        selected_workloads=["gemm_n7168_k5120"],
+        selected_languages=["triton"],
+    )
+
+    assert [kernel.path for kernel in kernels] == [blackwell]
 
 
 def test_checked_in_default_corpora_select_both_languages():
