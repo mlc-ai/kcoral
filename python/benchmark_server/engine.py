@@ -8,12 +8,12 @@ import sys
 import tempfile
 import traceback
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import IO, Any, Protocol
 
 from .deferred import DeferredGPUResult
-from .errors import ExecutionError
+from .errors import ExecutionError, GPUAccessViolation
 from .keys import compute_blob_hash
 from .lease import Lease
 from .schemas import (
@@ -41,6 +41,7 @@ class Runtime(Protocol):
     def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None: ...
     def builtin(self, name: str) -> Callable: ...
     def is_cpu_only(self, name: str) -> bool: ...
+    def forbid_gpu(self) -> AbstractContextManager[None]: ...
     def synchronize(self) -> None: ...
     def take_last_error(self) -> str | None: ...
     def reset(self) -> None: ...
@@ -63,6 +64,7 @@ def execute(
     results: dict[str, dict[str, Any]] = {}
     encoder = _ValueEncoder(runtime)
     error: dict[str, Any] | None = None
+    gpu_violation_at_ns: int | None = None
     current_index: int | None = None
     current: Instruction | None = None
     captured = CapturedOutput()
@@ -110,7 +112,7 @@ def execute(
                                     "instruction declared gpu='none' but requires GPU finalization",
                                 )
                             # The builtin completed its host-only phase without the
-                            # lease.  Driver/module loading must be serialized with
+                            # lease. Driver/module loading must be serialized with
                             # every other use of this GPU before the instruction is
                             # considered complete.
                             lease.acquire()
@@ -127,6 +129,17 @@ def execute(
                         except BaseException:
                             encoder.rollback(checkpoint)
                             raise
+            except GPUAccessViolation as exc:
+                error = _instruction_error(exc.kind, exc.message, current_index, current)
+                error.update(
+                    {
+                        "cuda_call": exc.cuda_call,
+                        "thread_id": exc.thread_id,
+                        "location": exc.location,
+                        "cuda_traceback": exc.call_traceback,
+                    }
+                )
+                gpu_violation_at_ns = exc.detected_at_ns
             except ExecutionError as exc:
                 error = _instruction_error(exc.kind, exc.message, current_index, current)
             except Exception as exc:
@@ -187,6 +200,7 @@ def execute(
         stderr=captured.stderr,
         stdout_truncated=captured.stdout_truncated,
         stderr_truncated=captured.stderr_truncated,
+        gpu_violation_at_ns=gpu_violation_at_ns,
     )
 
 
@@ -196,7 +210,9 @@ def _invoke(instruction: Run, env: dict[str, Any], runtime: Runtime) -> Any:
     module's namespace alive past the ``runtime.reset()`` meant to free it."""
     fn = _resolve_fn(instruction.fn, env, runtime)
     args = [env[arg.id] if isinstance(arg, Ref) else arg for arg in instruction.args]
-    return fn(*args)
+    guard = runtime.forbid_gpu() if instruction.gpu == "none" else nullcontext()
+    with guard:
+        return fn(*args)
 
 
 def _place(instruction: Instruction, runtime: Runtime, lease: Lease) -> None:

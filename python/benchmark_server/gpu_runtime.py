@@ -16,15 +16,20 @@ import hashlib
 import importlib.metadata
 import linecache
 import os
+import sys
 import tempfile
+import threading
+import time
+import traceback
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from functools import cache
 from pathlib import Path
 from typing import Any
 
 from . import builtin_ops
-from .errors import ExecutionError
+from .errors import ExecutionError, GPUAccessViolation
 
 # The name an uploaded module's entry object takes when the upload names none.
 ENTRY_POINT = "main"
@@ -91,6 +96,93 @@ class GPURuntime:
     def is_cpu_only(self, name: str) -> bool:
         return builtin_ops.is_cpu_only(name)
 
+    @contextmanager
+    def forbid_gpu(self) -> Iterator[None]:
+        """Fail a ``gpu="none"`` call after its first CUDA API entry."""
+
+        try:
+            from cupti import cupti
+        except ImportError as exc:
+            raise ExecutionError(
+                "unavailable",
+                "gpu='none' verification needs cupti-python in the worker environment",
+            ) from exc
+
+        violation: GPUAccessViolation | None = None
+
+        def record_first_call(_userdata, _domain, callback_id, callback_data) -> None:
+            nonlocal violation
+            if (
+                violation is not None
+                or callback_data.callback_site != cupti.ApiCallbackSite.API_ENTER
+            ):
+                return
+            try:
+                call_name = str(callback_data.function_name or f"CUDA callback {callback_id}")
+                violation = GPUAccessViolation(
+                    call_name,
+                    threading.get_ident(),
+                    time.monotonic_ns(),
+                    "Python call site unavailable",
+                    "",
+                )
+            except Exception:
+                # Exceptions must not escape a CUPTI callback into a CUDA call.
+                return
+            try:
+                frames = traceback.extract_stack(limit=32)[:-1]
+                violation.location = _cuda_call_location(frames)
+                violation.call_traceback = "".join(traceback.format_list(frames))
+            except Exception:
+                pass
+
+        subscriber = None
+        enabled_domains = []
+        try:
+            subscriber = cupti.subscribe(record_first_call, 0)
+            for domain in (
+                cupti.CallbackDomain.RUNTIME_API,
+                cupti.CallbackDomain.DRIVER_API,
+            ):
+                cupti.enable_domain(1, subscriber, domain)
+                enabled_domains.append(domain)
+        except cupti.cuptiError as exc:
+            for domain in reversed(enabled_domains):
+                try:
+                    cupti.enable_domain(0, subscriber, domain)
+                except Exception:
+                    pass
+            if subscriber is not None:
+                try:
+                    cupti.unsubscribe(subscriber)
+                except Exception:
+                    pass
+            raise ExecutionError(
+                "unavailable", f"CUPTI CUDA-call verification failed: {exc}"
+            ) from exc
+
+        try:
+            yield
+        finally:
+            active_exception = sys.exc_info()[0] is not None
+            cleanup_error: Exception | None = None
+            for domain in reversed(enabled_domains):
+                try:
+                    cupti.enable_domain(0, subscriber, domain)
+                except Exception as exc:
+                    cleanup_error = cleanup_error or exc
+            try:
+                cupti.unsubscribe(subscriber)
+            except Exception as exc:
+                cleanup_error = cleanup_error or exc
+            if violation is not None:
+                raise violation
+            if cleanup_error is not None and not active_exception:
+                raise ExecutionError(
+                    "unavailable",
+                    f"CUPTI CUDA-call verification cleanup failed: {cleanup_error}",
+                )
+
     def synchronize(self) -> None:
         """Drain the GPU, so no kernel of this request is still running when the
         lease is given up and another worker starts measuring."""
@@ -141,6 +233,20 @@ class GPURuntime:
         except Exception as exc:
             raise ExecutionError("parse", f"{type(exc).__name__}: {exc}") from exc
         return resolve_entry(ns, source, entry)
+
+
+def _cuda_call_location(frames: list[traceback.FrameSummary]) -> str:
+    for frame in reversed(frames):
+        if frame.filename.startswith("<uploaded:"):
+            return traceback.format_list([frame])[0].strip()
+    for frame in reversed(frames):
+        if (
+            frame.filename != __file__
+            and "/site-packages/" not in frame.filename
+            and not frame.filename.endswith("/benchmark_server/engine.py")
+        ):
+            return traceback.format_list([frame])[0].strip()
+    return "Python call site unavailable"
 
 
 class _CUDAErrorAPI:

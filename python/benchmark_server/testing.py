@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -117,6 +118,9 @@ class FakeRuntime:
 
     def is_cpu_only(self, name: str) -> bool:
         return name == "builtin.cpu_sleep"
+
+    def forbid_gpu(self):
+        return nullcontext()
 
     def synchronize(self) -> None:
         pass

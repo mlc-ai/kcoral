@@ -105,6 +105,7 @@ class SubmitOutcome:
     lease_wait_ms: float = 0.0
     lease_held_ms: float = 0.0
     worker_restart_reason: str | None = None
+    interfered_request_id: str | None = None
 
 
 class WorkerPool:
@@ -133,16 +134,33 @@ class WorkerPool:
         self._idle = IdleWorkers(self._workers)
         self._leases = GPULeases(self._gpus)
 
-    def submit(self, program, timeout: float, worker_wait_timeout: float = 0.0) -> SubmitOutcome:
+    def submit(
+        self,
+        program,
+        timeout: float,
+        worker_wait_timeout: float = 0.0,
+        request_id: str | None = None,
+    ) -> SubmitOutcome:
         queue_started = time.monotonic()
         worker = self._idle.acquire(worker_wait_timeout)
         queue_ms = (time.monotonic() - queue_started) * 1000
         if worker is None:
             raise PoolBusy("all workers busy", queue_ms=queue_ms)
+        worker.request_id = request_id
         run_started = time.monotonic()
         try:
             execution, lease_wait_ms, lease_held_ms, restart_reason = worker.run(
                 program, timeout, self._leases
+            )
+            violation_at_ns = getattr(execution, "gpu_violation_at_ns", None)
+            interfered_request_id = (
+                self._leases.request_at(
+                    worker.gpu_id,
+                    violation_at_ns,
+                    exclude_request_id=request_id,
+                )
+                if violation_at_ns is not None
+                else None
             )
             return SubmitOutcome(
                 execution,
@@ -152,6 +170,7 @@ class WorkerPool:
                 lease_wait_ms,
                 lease_held_ms,
                 restart_reason,
+                interfered_request_id,
             )
         except (WorkerTimeout, WorkerCrashed) as exc:
             exc.gpu_id = worker.gpu_id
@@ -160,6 +179,7 @@ class WorkerPool:
             raise
         finally:
             self._leases.abandon(worker.gpu_id, worker)  # no-op unless it still holds
+            worker.request_id = None
             self._idle.release(worker)  # worker was respawned in-place on crash/timeout
 
     def _require_one_target(self) -> None:

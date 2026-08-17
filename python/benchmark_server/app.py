@@ -126,6 +126,7 @@ def create_app(
                 program,
                 timeout,
                 config.worker_wait_timeout_seconds,
+                request_id,
             )
         except PoolBusy as exc:
             finished(503, level="WARNING", error="busy", queue_ms=exc.queue_ms)
@@ -199,6 +200,31 @@ def create_app(
         if not isinstance(execution, ProgramOutcome):
             finished(500, level="ERROR", error="invalid_worker_response")
             return _error_response(500, "engine", "invalid worker response", request_id)
+        if execution.error is not None and execution.error.get("kind") == "gpu_access":
+            interfered_request_id = outcome.interfered_request_id
+            execution.error["interfered_request_id"] = interfered_request_id
+            cuda_call = execution.error.get("cuda_call", "an unknown CUDA call")
+            instruction_id = execution.error.get("instruction_id")
+            if interfered_request_id is None:
+                warning = (
+                    f"task {request_id} instruction {instruction_id!r} called {cuda_call} "
+                    "with gpu='none'; no other task held the GPU"
+                )
+            else:
+                warning = (
+                    f"task {request_id} instruction {instruction_id!r} called {cuda_call} "
+                    f"with gpu='none' and interfered with task {interfered_request_id}"
+                )
+            events.emit(
+                "gpu_access_violation",
+                level="WARNING",
+                request_id=request_id,
+                instruction_id=instruction_id,
+                cuda_call=cuda_call,
+                location=execution.error.get("location"),
+                interfered_request_id=interfered_request_id,
+                message=warning,
+            )
         payload: dict[str, object] = {
             "status": execution.status,
             "request_id": request_id,

@@ -60,6 +60,9 @@ program.run(id="invoke", fn=compiled, args=[src, dst], gpu="required")
 ```
 
 Uploads and returns always hold the GPU lease; only calls customize placement.
+The server watches a `none` call with CUPTI and fails the instruction if it
+enters any CUDA runtime or driver API, including device queries. The failure
+reports the first CUDA call and its Python source location.
 
 Four rules the example relies on:
 

@@ -81,6 +81,10 @@ class GPULeases:
         self._lock = threading.Lock()
         self._holder: dict[int, Worker | None] = {gpu: None for gpu in gpu_ids}
         self._waiters: dict[int, deque[tuple[Worker, Ticket]]] = {gpu: deque() for gpu in gpu_ids}
+        self._held_since_ns: dict[int, int | None] = {gpu: None for gpu in gpu_ids}
+        self._history: dict[int, deque[tuple[int, int, str | None]]] = {
+            gpu: deque(maxlen=256) for gpu in gpu_ids
+        }
 
     def acquire(self, gpu_id: int, holder: Worker) -> float:
         """Block until ``holder`` owns the GPU; returns the wait in milliseconds.
@@ -93,6 +97,7 @@ class GPULeases:
         with self._lock:
             if self._holder[gpu_id] is None and not self._waiters[gpu_id]:
                 self._holder[gpu_id] = holder
+                self._held_since_ns[gpu_id] = time.monotonic_ns()
                 return 0.0
             ticket = Ticket()
             self._waiters[gpu_id].append((holder, ticket))
@@ -122,13 +127,43 @@ class GPULeases:
     def _grant_next_locked(self, gpu_id: int) -> None:
         """Pass the GPU to the longest-waiting worker, or mark it free. Callers
         must already hold ``_lock``."""
+        self._record_holder_locked(gpu_id)
         waiters = self._waiters[gpu_id]
         if waiters:
             holder, ticket = waiters.popleft()
             self._holder[gpu_id] = holder
+            self._held_since_ns[gpu_id] = time.monotonic_ns()
             ticket.event.set()
         else:
             self._holder[gpu_id] = None
+            self._held_since_ns[gpu_id] = None
+
+    def request_at(
+        self, gpu_id: int, timestamp_ns: int, *, exclude_request_id: str | None = None
+    ) -> str | None:
+        """Request holding the GPU at ``timestamp_ns``, excluding the caller."""
+
+        with self._lock:
+            holder = self._holder[gpu_id]
+            held_since = self._held_since_ns[gpu_id]
+            if holder is not None and held_since is not None and held_since <= timestamp_ns:
+                request_id = getattr(holder, "request_id", None)
+                if request_id is not None and request_id != exclude_request_id:
+                    return request_id
+            for started_ns, ended_ns, request_id in reversed(self._history[gpu_id]):
+                if started_ns <= timestamp_ns <= ended_ns:
+                    if request_id is not None and request_id != exclude_request_id:
+                        return request_id
+                    return None
+            return None
+
+    def _record_holder_locked(self, gpu_id: int) -> None:
+        holder = self._holder[gpu_id]
+        started_ns = self._held_since_ns[gpu_id]
+        if holder is not None and started_ns is not None:
+            self._history[gpu_id].append(
+                (started_ns, time.monotonic_ns(), getattr(holder, "request_id", None))
+            )
 
     def depth(self, gpu_id: int) -> int:
         """Workers holding or queued for this GPU."""

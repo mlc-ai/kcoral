@@ -222,6 +222,38 @@ def test_compile_correctness_and_benchmark():
     assert timing["latency_ms_median"] > 0 and timing["repeat"] == 20
 
 
+def test_gpu_none_rejects_cuda_calls_from_uploaded_code():
+    gpu_runtime = runtime()
+    cpu_outcome = execute(
+        Program(
+            [
+                Upload("function", "module", source="def main():\n    return 42\n"),
+                Run("result", ref("function"), [], gpu="none"),
+            ]
+        ),
+        gpu_runtime,
+        UNSHARED_GPU,
+    )
+    assert cpu_outcome.status == "COMPLETED"
+
+    source = "import torch\ndef main():\n    return torch.empty(1, device='cuda')\n"
+    gpu_outcome = execute(
+        Program(
+            [
+                Upload("function", "module", source=source),
+                Run("result", ref("function"), [], gpu="none"),
+            ]
+        ),
+        gpu_runtime,
+        UNSHARED_GPU,
+    )
+
+    assert gpu_outcome.status == "FAILED"
+    assert gpu_outcome.error["kind"] == "gpu_access"
+    assert gpu_outcome.error["cuda_call"].startswith(("cu", "cuda"))
+    assert "<uploaded:" in gpu_outcome.error["location"]
+
+
 def test_cuda_c_compile_correctness_and_benchmark():
     program = Program(
         [

@@ -2,8 +2,8 @@
 
 Each server start creates ``<log_dir>/runs/<utc timestamp>/events.jsonl`` and
 appends one JSON object per event (server lifecycle, request lifecycle, worker
-restarts). Constructing with ``log_dir=None`` disables logging: ``emit`` becomes
-a no-op, so call sites never need to branch.
+restarts, and GPU-access violations). Constructing with ``log_dir=None`` disables
+logging: ``emit`` becomes a no-op, so call sites never need to branch.
 """
 
 from __future__ import annotations

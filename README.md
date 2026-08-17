@@ -28,7 +28,7 @@ depends on which builtins the programs use:
 | `compile_cuda` | `nvcc`, a host C++ compiler, and `ninja` as well |
 | `compile_cutedsl`, or a CuTeDSL library upload | `nvidia-cutlass-dsl` as well |
 | `compile_triton` | `triton`, which the CUDA PyTorch wheels already carry |
-| `benchmark` | `cupti-python` as well |
+| `benchmark`, or verifying a `gpu="none"` call | `cupti-python` as well |
 
 A builtin whose requirement is absent answers `unavailable` and the rest of the
 server is unaffected, so a partial environment is a usable deployment.

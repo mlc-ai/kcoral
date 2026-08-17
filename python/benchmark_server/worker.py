@@ -123,6 +123,7 @@ class Worker:
         max_requests: int = 1,
     ) -> None:
         self.gpu_id = gpu_id
+        self.request_id: str | None = None
         self._factory = runtime_factory
         self._spawn_timeout = spawn_timeout
         self._termination_grace_seconds = termination_grace_seconds

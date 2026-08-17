@@ -483,6 +483,75 @@ def test_real_kernel_end_to_end():
     np.testing.assert_allclose(returned, np.arange(256, dtype=np.float32) + 1)
 
 
+@pytest.mark.skipif(
+    os.environ.get("BENCH_GPU_TEST") != "1",
+    reason="real CUDA-call detection test requires BENCH_GPU_TEST=1",
+)
+def test_gpu_none_warning_names_the_interfered_request(tmp_path):
+    holder_program = {
+        "instructions": [
+            {
+                "op": "upload",
+                "id": "holder",
+                "kind": "module",
+                "source": (
+                    "import torch\n"
+                    "torch.cuda._sleep(2_000_000_000)\n"
+                    "torch.cuda.synchronize()\n"
+                    "def main():\n"
+                    "    return None\n"
+                ),
+            }
+        ],
+        "options": {"timeout_seconds": 60},
+    }
+    violating_program = {
+        "instructions": [
+            {
+                "op": "run",
+                "id": "violating_call",
+                "fn": "builtin.zeros",
+                "args": [{"shape": [1], "dtype": "float32"}],
+                "gpu": "none",
+            }
+        ]
+    }
+    app = gpu_app(
+        workers_per_gpu=2,
+        max_requests_per_worker=0,
+        log_dir=tmp_path,
+    )
+    with TestClient(app) as client:
+        run_dir = app.state.events.run_dir
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            holder_future = executor.submit(post_program, client, holder_program)
+            deadline = time.monotonic() + 10
+            while client.get("/health").json()["gpus"][0]["lease_depth"] == 0:
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            violating_response = post_program(client, violating_program)
+            holder_response = holder_future.result()
+
+    violating_result, _ = response_parts(violating_response)
+    holder_result, _ = response_parts(holder_response)
+    holder_request_id = holder_result["request_id"]
+    assert holder_result["status"] == "COMPLETED"
+    assert violating_result["status"] == "FAILED"
+    assert violating_result["error"]["kind"] == "gpu_access"
+    assert violating_result["error"]["interfered_request_id"] == holder_request_id
+
+    assert run_dir is not None
+    events = [
+        json.loads(line)
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    warning = next(event for event in events if event["event"] == "gpu_access_violation")
+    assert warning["level"] == "WARNING"
+    assert warning["request_id"] == violating_result["request_id"]
+    assert warning["interfered_request_id"] == holder_request_id
+    assert holder_request_id in warning["message"]
+
+
 CUDA_KERNEL = """
 __global__ void scale_kernel(const float* x, float* y, int n) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;

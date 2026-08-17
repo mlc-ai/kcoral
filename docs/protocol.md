@@ -136,8 +136,19 @@ reacquire the lease for a short deferred driver or module-loading phase.
 
 `required` and `none` override those defaults. A `required` host-only builtin
 keeps the lease while it runs; a `none` instruction promises that all of its
-work is GPU-free. The server trusts the promise; `none` is a scheduling
-declaration rather than a security boundary.
+work is GPU-free.
+
+The worker verifies `none` with CUPTI callbacks enabled for the CUDA runtime and
+driver domains. The first CUDA API entry records its function name, thread, and
+Python call site. After the call returns, the instruction fails with error kind
+`gpu_access`. If another request held the lease at that instant, the error names
+its request ID and the server writes a `gpu_access_violation` WARNING event
+naming both requests.
+
+CUPTI observes a forbidden call after it has begun; it does not prevent that
+call from reaching the GPU. This detects accidental placement mistakes and is
+not a security boundary. Child processes also need their own CUPTI subscriber
+to be observed.
 
 Uploads and returns do not accept `gpu`; they always acquire and retain the
 lease. The Python client defaults its run parameter to `auto`, and every
@@ -679,8 +690,11 @@ A `FAILED` response's `error` describes that instruction:
 | `instruction_id` | string \| null | The instruction's `id`; `null` for `return` |
 | `traceback` | string | Server-side traceback, truncated to 8192 bytes |
 
-Instruction error kinds are `parse`, `compile`, `runtime`, `correctness`,
-`serialization`, `unavailable`, and `engine`.
+Instruction error kinds are `parse`, `compile`, `runtime`, `gpu_access`,
+`correctness`, `serialization`, `unavailable`, and `engine`. A `gpu_access`
+error additionally carries `cuda_call`, `thread_id`, `location`,
+`cuda_traceback`, and `interfered_request_id` (which is `null` when no other
+request held the lease).
 
 | HTTP | Body | Meaning |
 |---:|---|---|

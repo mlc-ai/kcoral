@@ -95,6 +95,7 @@ class ProgramOutcome:
     stderr: str = ""
     stdout_truncated: bool = False
     stderr_truncated: bool = False
+    gpu_violation_at_ns: int | None = None
 
 
 def is_ref(value: Any) -> bool:
