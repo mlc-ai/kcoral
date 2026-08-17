@@ -128,7 +128,7 @@ def _write_trace_set(root: Path, solution: Solution, workload: Workload) -> byte
 def _build_program(root: Path, language: str = "python"):
     solution = _solution(language)
     resource_bytes = _write_trace_set(root, solution, _workload())
-    trace_set = TraceSet.from_path(root)
+    trace_set = TraceSet(root)
     client = FlashInferTraceClient(
         config=BenchmarkConfig(warmup_runs=1, iterations=1, num_trials=1)
     )

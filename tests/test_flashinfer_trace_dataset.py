@@ -168,17 +168,23 @@ def test_models_validate_trace_json_and_resolve_configuration() -> None:
 
 
 def test_directory_load_append_and_reload_use_real_files(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        TraceSet(tmp_path / "missing")
+
     definition = _definition()
     solution = _solution(definition)
     workload = _workload()
     _write_dataset_files(tmp_path, definition, solution, workload)
 
-    trace_set = TraceSet.from_path(tmp_path)
+    trace_set = TraceSet(tmp_path)
 
     assert trace_set.definitions[definition.name] == definition
-    assert trace_set.get_solution(solution.name) == solution
+    assert trace_set.solutions[solution.name] == solution
     assert trace_set.workloads[definition.name][0].workload == workload
-    assert trace_set.summary().model_dump() == {"total": 0, "passed": 0, "failed": 0}
+    assert trace_set.traces == {}
+    with pytest.raises(TypeError):
+        trace_set.definitions["other"] = definition  # type: ignore[index]
+    assert isinstance(trace_set.workloads[definition.name], tuple)
 
     passed_trace = Trace(
         definition=definition.name,
@@ -192,7 +198,7 @@ def test_directory_load_append_and_reload_use_real_files(tmp_path: Path) -> None
     )
 
     with pytest.raises(ValueError, match="unknown solution"):
-        trace_set.add_traces([passed_trace, invalid_trace])
+        trace_set.append([passed_trace, invalid_trace])
 
     assert trace_set.traces == {}
     assert not trace_path.exists()
@@ -200,14 +206,12 @@ def test_directory_load_append_and_reload_use_real_files(tmp_path: Path) -> None
     unsafe_solution = solution.model_copy(
         update={"name": "unsafe-solution", "author": "../outside"}
     )
-    unsafe_trace_set = TraceSet(
-        root=tmp_path / "unsafe",
-        definitions={definition.name: definition},
-        solutions={definition.name: [unsafe_solution]},
-    )
+    unsafe_root = tmp_path / "unsafe"
+    _write_dataset_files(unsafe_root, definition, unsafe_solution, workload)
+    unsafe_trace_set = TraceSet(unsafe_root)
     unsafe_trace = passed_trace.model_copy(update={"solution": unsafe_solution.name})
     with pytest.raises(ValueError, match="single path segment"):
-        unsafe_trace_set.add_traces([unsafe_trace])
+        unsafe_trace_set.append([unsafe_trace])
     assert unsafe_trace_set.traces == {}
 
     timeout_trace = Trace(
@@ -216,7 +220,7 @@ def test_directory_load_append_and_reload_use_real_files(tmp_path: Path) -> None
         solution=solution.name,
         evaluation=_evaluation(EvaluationStatus.TIMEOUT),
     )
-    trace_set.add_traces([passed_trace, timeout_trace])
+    trace_set.append([passed_trace, timeout_trace])
 
     persisted_records = [
         json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines() if line
@@ -225,11 +229,11 @@ def test_directory_load_append_and_reload_use_real_files(tmp_path: Path) -> None
     assert persisted_records[1]["evaluation"]["correctness"] is None
     assert persisted_records[1]["evaluation"]["performance"] is None
 
-    reloaded = TraceSet.from_path(tmp_path)
+    reloaded = TraceSet(tmp_path)
 
     assert [trace.workload.uuid for trace in reloaded.traces[definition.name]] == [
         "workload-1",
         "workload-2",
     ]
-    assert reloaded.summary().model_dump() == {"total": 2, "passed": 1, "failed": 1}
-    assert reloaded.to_dict()["traces"][definition.name][1]["evaluation"]["performance"] is None
+    assert reloaded.traces[definition.name][1].evaluation is not None
+    assert reloaded.traces[definition.name][1].evaluation.performance is None

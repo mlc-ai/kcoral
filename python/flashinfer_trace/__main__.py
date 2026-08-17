@@ -18,10 +18,10 @@ def main() -> None:
     parser.add_argument("server_url", nargs="?", default="http://127.0.0.1:8000")
     arguments = parser.parse_args()
 
-    trace_set = TraceSet.from_path(arguments.trace_set)
+    trace_set = TraceSet(arguments.trace_set)
     if arguments.definition not in trace_set.definitions:
         parser.error(f"unknown definition: {arguments.definition!r}")
-    solution = trace_set.get_solution(arguments.solution)
+    solution = trace_set.solutions.get(arguments.solution)
     if solution is None:
         parser.error(f"unknown solution: {arguments.solution!r}")
     definition = trace_set.definitions[arguments.definition]
@@ -32,9 +32,9 @@ def main() -> None:
             definition,
             solution,
             workload_traces,
-            resource_root=trace_set.root,
+            resource_root=trace_set.path,
         )
-    trace_set.add_traces(traces)
+    trace_set.append(traces)
 
     passed = sum(trace.is_successful() for trace in traces)
     print(f"evaluated={len(traces)} passed={passed} failed={len(traces) - passed}")

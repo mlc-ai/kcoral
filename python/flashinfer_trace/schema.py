@@ -514,14 +514,6 @@ class BenchmarkConfig(TraceModel):
         return ResolvedEvalConfig(**merged)
 
 
-class TraceSetSummary(TraceModel):
-    """Aggregate counts for evaluation traces."""
-
-    total: int
-    passed: int
-    failed: int
-
-
 __all__ = [
     "AxisConst",
     "AxisVar",
@@ -545,7 +537,6 @@ __all__ = [
     "SupportedLanguages",
     "TensorSpec",
     "Trace",
-    "TraceSetSummary",
     "Workload",
     "normalize_evaluation",
 ]

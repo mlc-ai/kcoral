@@ -260,7 +260,7 @@ def _write_trace_set(root: Path) -> TraceSet:
         solution_path = root / "solutions" / f"{solution.name}.json"
         solution_path.parent.mkdir(parents=True, exist_ok=True)
         solution_path.write_text(solution.model_dump_json(), encoding="utf-8")
-    return TraceSet.from_path(root)
+    return TraceSet(root)
 
 
 def _request_statuses(log_directory: Path) -> list[str | None]:
@@ -293,23 +293,21 @@ def test_real_python_cuda_safetensors_and_incorrect_solution(
     workload_traces = trace_set.workloads["vector_add"]
 
     def evaluate_solution(client: FlashInferTraceClient, solution_name: str) -> list[Trace]:
-        solution = trace_set.get_solution(solution_name)
-        assert solution is not None
+        solution = trace_set.solutions[solution_name]
         return client.evaluate_many(
             definition,
             solution,
             workload_traces,
-            resource_root=trace_set.root,
+            resource_root=trace_set.path,
         )
 
     with FlashInferTraceClient(gpu_server_url, config=config, max_workers=2) as client:
-        python_solution = trace_set.get_solution("python_add")
-        assert python_solution is not None
+        python_solution = trace_set.solutions["python_add"]
         single_python_trace = client.evaluate(
             definition,
             python_solution,
             workload_traces[0],
-            resource_root=trace_set.root,
+            resource_root=trace_set.path,
         )
         python_traces = evaluate_solution(client, "python_add")
         assert [trace.workload.uuid for trace in python_traces] == [

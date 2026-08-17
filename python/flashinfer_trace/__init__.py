@@ -25,7 +25,6 @@ from .schema import (
     SupportedLanguages,
     TensorSpec,
     Trace,
-    TraceSetSummary,
     Workload,
 )
 
@@ -54,6 +53,5 @@ __all__ = [
     "TensorSpec",
     "Trace",
     "TraceSet",
-    "TraceSetSummary",
     "Workload",
 ]

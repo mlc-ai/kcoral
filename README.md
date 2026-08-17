@@ -149,9 +149,9 @@ returns a new in-memory trace containing the evaluation:
 ```python
 from flashinfer_trace import FlashInferTraceClient, TraceSet
 
-trace_set = TraceSet.from_path("Example-FlashInfer-Trace")
+trace_set = TraceSet("Example-FlashInfer-Trace")
 definition = trace_set.definitions["add_one"]
-solution = trace_set.get_solution("python_add_one")
+solution = trace_set.solutions["python_add_one"]
 input_trace = trace_set.workloads["add_one"][0]
 
 with FlashInferTraceClient("http://localhost:8000") as client:
@@ -159,10 +159,10 @@ with FlashInferTraceClient("http://localhost:8000") as client:
         definition,
         solution,
         input_trace,
-        resource_root=trace_set.root,
+        resource_root=trace_set.path,
     )
 
-trace_set.add_traces([output_trace])
+trace_set.append([output_trace])
 ```
 
 `evaluate_many()` applies the same in-memory contract concurrently while
