@@ -2,7 +2,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-
 _SCRIPT = Path(__file__).parents[1] / "scripts" / "extract_accrl_blackwell_kernels.py"
 _SPEC = importlib.util.spec_from_file_location("extract_accrl_blackwell_kernels", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -14,11 +13,7 @@ _SPEC.loader.exec_module(extractor)
 def test_blackwell_detection_prefers_gencode():
     trajectory = {
         "info": {
-            "config": {
-                "environment": {
-                    "env": {"NVCC_GENCODE": "arch=compute_100a,code=sm_100a"}
-                }
-            }
+            "config": {"environment": {"env": {"NVCC_GENCODE": "arch=compute_100a,code=sm_100a"}}}
         }
     }
 
@@ -41,9 +36,7 @@ def test_definition_comes_from_evaluation_trace():
         ]
     }
 
-    assert (
-        extractor.trajectory_definition(trajectory, {}, None) == "gemm_n7168_k5120"
-    )
+    assert extractor.trajectory_definition(trajectory, {}, None) == "gemm_n7168_k5120"
 
 
 def test_definition_falls_back_to_plan_then_summary():

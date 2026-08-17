@@ -1,0 +1,212 @@
+import torch
+import triton
+import triton.language as tl
+
+def get_autotune_configs():
+    return [
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64}, num_stages=3, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64}, num_stages=3, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128}, num_stages=3, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128}, num_stages=3, num_warps=8),
+    ]
+
+@triton.autotune(configs=get_autotune_configs(), key=['seqlen'])
+@triton.jit
+def bwd_dq_kernel(
+    Q, K, V, O, dO, dQ, L,
+    stride_qb, stride_qh, stride_qs, stride_qd,
+    stride_kb, stride_kh, stride_ks, stride_kd,
+    stride_vb, stride_vh, stride_vs, stride_vd,
+    stride_ob, stride_oh, stride_os, stride_od,
+    stride_dob, stride_doh, stride_dos, stride_dod,
+    stride_dqb, stride_dqh, stride_dqs, stride_dqd,
+    stride_lb, stride_lh, stride_ls,
+    seqlen, softmax_scale,
+    H,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, HEAD_DIM: tl.constexpr
+):
+    pid_m = tl.program_id(0)
+    pid_bh = tl.program_id(1)
+    
+    pid_b = pid_bh // H
+    pid_h = pid_bh % H
+    
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    mask_m = offs_m < seqlen
+    offs_d = tl.arange(0, HEAD_DIM)
+    
+    q_ptrs = Q + pid_b * stride_qb + pid_h * stride_qh + offs_m[:, None] * stride_qs + offs_d[None, :] * stride_qd
+    do_ptrs = dO + pid_b * stride_dob + pid_h * stride_doh + offs_m[:, None] * stride_dos + offs_d[None, :] * stride_dod
+    o_ptrs = O + pid_b * stride_ob + pid_h * stride_oh + offs_m[:, None] * stride_os + offs_d[None, :] * stride_od
+    l_ptrs = L + pid_b * stride_lb + pid_h * stride_lh + offs_m * stride_ls
+    
+    q = tl.load(q_ptrs, mask=mask_m[:, None], other=0.0)
+    do = tl.load(do_ptrs, mask=mask_m[:, None], other=0.0)
+    o = tl.load(o_ptrs, mask=mask_m[:, None], other=0.0)
+    lse = tl.load(l_ptrs, mask=mask_m, other=0.0)
+    
+    # Precompute the rowwise delta for this query block
+    delta = tl.sum(o.to(tl.float32) * do.to(tl.float32), axis=1)
+    
+    dq = tl.zeros((BLOCK_M, HEAD_DIM), tl.float32)
+    
+    # Causal masking setup: kv loops up to the max m in this query block
+    m_max = tl.maximum(tl.max(offs_m), 0)
+    kv_len = tl.minimum(m_max + 1, seqlen)
+    num_kv_tiles = tl.cdiv(kv_len, BLOCK_N)
+    
+    for kv_tile in range(0, num_kv_tiles):
+        offs_n = kv_tile * BLOCK_N + tl.arange(0, BLOCK_N)
+        mask_n = offs_n < seqlen
+        
+        k_ptrs = K + pid_b * stride_kb + pid_h * stride_kh + offs_n[:, None] * stride_ks + offs_d[None, :] * stride_kd
+        v_ptrs = V + pid_b * stride_vb + pid_h * stride_vh + offs_n[:, None] * stride_vs + offs_d[None, :] * stride_vd
+        
+        k = tl.load(k_ptrs, mask=mask_n[:, None], other=0.0)
+        v = tl.load(v_ptrs, mask=mask_n[:, None], other=0.0)
+        
+        scores = tl.dot(q, k.T) * softmax_scale
+        
+        causal_mask = offs_m[:, None] >= offs_n[None, :]
+        valid_mask = causal_mask & mask_n[None, :] & mask_m[:, None]
+        
+        scores = tl.where(valid_mask, scores, float('-inf'))
+        p = tl.exp(scores - lse[:, None])
+        
+        dp = tl.dot(do, v.T)
+        ds = p * (dp - delta[:, None]) * softmax_scale
+        ds = tl.where(valid_mask, ds, 0.0)
+        
+        dq += tl.dot(ds.to(tl.bfloat16), k)
+        
+    dq_ptrs = dQ + pid_b * stride_dqb + pid_h * stride_dqh + offs_m[:, None] * stride_dqs + offs_d[None, :] * stride_dqd
+    tl.store(dq_ptrs, dq.to(tl.bfloat16), mask=mask_m[:, None])
+
+
+@triton.autotune(configs=get_autotune_configs(), key=['seqlen'])
+@triton.jit
+def bwd_dk_dv_kernel(
+    Q, K, V, O, dO, dK, dV, L,
+    stride_qb, stride_qh, stride_qs, stride_qd,
+    stride_kb, stride_kh, stride_ks, stride_kd,
+    stride_vb, stride_vh, stride_vs, stride_vd,
+    stride_ob, stride_oh, stride_os, stride_od,
+    stride_dob, stride_doh, stride_dos, stride_dod,
+    stride_dkb, stride_dkh, stride_dks, stride_dkd,
+    stride_dvb, stride_dvh, stride_dvs, stride_dvd,
+    stride_lb, stride_lh, stride_ls,
+    seqlen, softmax_scale,
+    H,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, HEAD_DIM: tl.constexpr
+):
+    pid_n = tl.program_id(0)
+    pid_bh = tl.program_id(1)
+    
+    pid_b = pid_bh // H
+    pid_h = pid_bh % H
+    
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    mask_n = offs_n < seqlen
+    offs_d = tl.arange(0, HEAD_DIM)
+    
+    k_ptrs = K + pid_b * stride_kb + pid_h * stride_kh + offs_n[:, None] * stride_ks + offs_d[None, :] * stride_kd
+    v_ptrs = V + pid_b * stride_vb + pid_h * stride_vh + offs_n[:, None] * stride_vs + offs_d[None, :] * stride_vd
+    
+    k = tl.load(k_ptrs, mask=mask_n[:, None], other=0.0)
+    v = tl.load(v_ptrs, mask=mask_n[:, None], other=0.0)
+    
+    dk = tl.zeros((BLOCK_N, HEAD_DIM), tl.float32)
+    dv = tl.zeros((BLOCK_N, HEAD_DIM), tl.float32)
+    
+    # Causal masking setup: query blocks that attend to this kv block start from q_start
+    n_min = pid_n * BLOCK_N
+    q_start = n_min // BLOCK_M
+    num_q_tiles = tl.cdiv(seqlen, BLOCK_M)
+    
+    for q_tile in range(q_start, num_q_tiles):
+        offs_m = q_tile * BLOCK_M + tl.arange(0, BLOCK_M)
+        mask_m = offs_m < seqlen
+        
+        q_ptrs = Q + pid_b * stride_qb + pid_h * stride_qh + offs_m[:, None] * stride_qs + offs_d[None, :] * stride_qd
+        do_ptrs = dO + pid_b * stride_dob + pid_h * stride_doh + offs_m[:, None] * stride_dos + offs_d[None, :] * stride_dod
+        o_ptrs = O + pid_b * stride_ob + pid_h * stride_oh + offs_m[:, None] * stride_os + offs_d[None, :] * stride_od
+        l_ptrs = L + pid_b * stride_lb + pid_h * stride_lh + offs_m * stride_ls
+        
+        q = tl.load(q_ptrs, mask=mask_m[:, None], other=0.0)
+        do = tl.load(do_ptrs, mask=mask_m[:, None], other=0.0)
+        o = tl.load(o_ptrs, mask=mask_m[:, None], other=0.0)
+        lse = tl.load(l_ptrs, mask=mask_m, other=0.0)
+        
+        # Precompute delta on the fly to bypass unsupported device memory allocations
+        delta = tl.sum(o.to(tl.float32) * do.to(tl.float32), axis=1)
+        
+        scores_t = tl.dot(k, q.T) * softmax_scale
+        
+        causal_mask_t = offs_m[None, :] >= offs_n[:, None]
+        valid_mask_t = causal_mask_t & mask_m[None, :] & mask_n[:, None]
+        
+        scores_t = tl.where(valid_mask_t, scores_t, float('-inf'))
+        p_t = tl.exp(scores_t - lse[None, :])
+        
+        dv += tl.dot(p_t.to(tl.bfloat16), do)
+        
+        dp_t = tl.dot(v, do.T)
+        ds_t = p_t * (dp_t - delta[None, :]) * softmax_scale
+        ds_t = tl.where(valid_mask_t, ds_t, 0.0)
+        
+        dk += tl.dot(ds_t.to(tl.bfloat16), q)
+        
+    dk_ptrs = dK + pid_b * stride_dkb + pid_h * stride_dkh + offs_n[:, None] * stride_dks + offs_d[None, :] * stride_dkd
+    dv_ptrs = dV + pid_b * stride_dvb + pid_h * stride_dvh + offs_n[:, None] * stride_dvs + offs_d[None, :] * stride_dvd
+    
+    tl.store(dk_ptrs, dk.to(tl.bfloat16), mask=mask_n[:, None])
+    tl.store(dv_ptrs, dv.to(tl.bfloat16), mask=mask_n[:, None])
+
+
+def run(Q, K, V, O, dO, L, dQ, dK, dV):
+    torch.cuda.set_device(Q.device)
+    
+    B, H, S, D = Q.shape
+    softmax_scale = 1.0 / (D ** 0.5)
+    
+    # Launch configuration mapping for split output ownership
+    grid_dq = lambda META: (
+        triton.cdiv(S, META['BLOCK_M']),
+        B * H,
+    )
+    
+    # Region 1: Compute dQ reducing over KV tiles
+    bwd_dq_kernel[grid_dq](
+        Q, K, V, O, dO, dQ, L,
+        Q.stride(0), Q.stride(1), Q.stride(2), Q.stride(3),
+        K.stride(0), K.stride(1), K.stride(2), K.stride(3),
+        V.stride(0), V.stride(1), V.stride(2), V.stride(3),
+        O.stride(0), O.stride(1), O.stride(2), O.stride(3),
+        dO.stride(0), dO.stride(1), dO.stride(2), dO.stride(3),
+        dQ.stride(0), dQ.stride(1), dQ.stride(2), dQ.stride(3),
+        L.stride(0), L.stride(1), L.stride(2),
+        S, softmax_scale,
+        H, HEAD_DIM=D,
+    )
+    
+    grid_dkdv = lambda META: (
+        triton.cdiv(S, META['BLOCK_N']),
+        B * H,
+    )
+    
+    # Region 2: Compute dK and dV reducing over Q tiles
+    bwd_dk_dv_kernel[grid_dkdv](
+        Q, K, V, O, dO, dK, dV, L,
+        Q.stride(0), Q.stride(1), Q.stride(2), Q.stride(3),
+        K.stride(0), K.stride(1), K.stride(2), K.stride(3),
+        V.stride(0), V.stride(1), V.stride(2), V.stride(3),
+        O.stride(0), O.stride(1), O.stride(2), O.stride(3),
+        dO.stride(0), dO.stride(1), dO.stride(2), dO.stride(3),
+        dK.stride(0), dK.stride(1), dK.stride(2), dK.stride(3),
+        dV.stride(0), dV.stride(1), dV.stride(2), dV.stride(3),
+        L.stride(0), L.stride(1), L.stride(2),
+        S, softmax_scale,
+        H, HEAD_DIM=D,
+    )

@@ -10,12 +10,12 @@ import json
 import shutil
 import sys
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
-
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ACCRL_ROOT = Path("/home/yixind/dev/AccRL")
+DEFAULT_ACCRL_ROOT = Path("/home/yixind/AccRL")
 DEFAULT_EVAL_ROOT = Path("/home/yixind/AccRL-exps/eval_runs")
 DEFAULT_OUTPUT = REPO_ROOT / "b200_cuda_kernels"
 CORRECTNESS_DIR = "turn_correctness_arch"
@@ -101,9 +101,7 @@ def trajectory_definition(
     return summary_definition
 
 
-def copy_turn_correctness_csvs(
-    *, eval_root: Path, output: Path, runs: set[str]
-) -> dict[str, int]:
+def copy_turn_correctness_csvs(*, eval_root: Path, output: Path, runs: set[str]) -> dict[str, int]:
     """Copy the run-level correctness/architecture tables available in AccRL."""
     destination = output / CORRECTNESS_DIR
     destination.mkdir(parents=True, exist_ok=True)
@@ -125,9 +123,7 @@ def copy_turn_correctness_csvs(
                 "source": source.relative_to(eval_root).as_posix(),
                 "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
             }
-            manifest.write(
-                json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
-            )
+            manifest.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
             copied += 1
     missing_path.write_text("".join(f"{run}\n" for run in missing), encoding="utf-8")
     return {"copied": copied, "missing": len(missing)}
@@ -168,9 +164,7 @@ def extract_corpus(
                 if not turns:
                     skipped["no_cuda_turns"] += 1
                     continue
-                definition = trajectory_definition(
-                    trajectory, plan, summaries.get(exp_name)
-                )
+                definition = trajectory_definition(trajectory, plan, summaries.get(exp_name))
                 if not definition:
                     skipped["unknown_definition"] += len(turns)
                     continue
@@ -216,9 +210,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--accrl-root", type=Path, default=DEFAULT_ACCRL_ROOT)
     result.add_argument("--eval-root", type=Path, default=DEFAULT_EVAL_ROOT)
     result.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    result.add_argument(
-        "--force", action="store_true", help="replace an existing output directory"
-    )
+    result.add_argument("--force", action="store_true", help="replace an existing output directory")
     return result
 
 

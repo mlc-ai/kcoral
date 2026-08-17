@@ -1,0 +1,291 @@
+import torch
+import triton
+import triton.language as tl
+import math
+
+
+@triton.jit
+def _dQ_kernel_persistent(
+    Q_ptr, K_ptr, V_ptr, O_ptr, dO_ptr, L_ptr, dQ_ptr,
+    stride_qb, stride_qh, stride_qs, stride_qd,
+    stride_kb, stride_kh, stride_ks, stride_kd,
+    stride_vb, stride_vh, stride_vs, stride_vd,
+    stride_ob, stride_oh, stride_os, stride_od,
+    stride_dob, stride_doh, stride_dos, stride_dod,
+    stride_dqb, stride_dqh, stride_dqs, stride_dqd,
+    stride_lsb, stride_lsh, stride_lss,
+    B, H, S,
+    scale,
+    NUM_SMS: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    
+    num_pid_bh = B * H
+    num_pid_m = tl.cdiv(S, BLOCK_M)
+    total_tiles = num_pid_bh * num_pid_m
+    
+    # Persistent loop: each CTA handles multiple tiles
+    for idx in range(pid, total_tiles, NUM_SMS):
+        pid_bh = idx // num_pid_m
+        pid_m = idx % num_pid_m
+        
+        batch = pid_bh // H
+        head = pid_bh % H
+        
+        offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        offs_d = tl.arange(0, BLOCK_D)
+        
+        m_boundary = offs_m < S
+        m_mask = m_boundary[:, None]
+        
+        base_Q = Q_ptr + batch * stride_qb + head * stride_qh
+        base_K = K_ptr + batch * stride_kb + head * stride_kh
+        base_V = V_ptr + batch * stride_vb + head * stride_vh
+        base_O = O_ptr + batch * stride_ob + head * stride_oh
+        base_dO = dO_ptr + batch * stride_dob + head * stride_doh
+        base_L = L_ptr + batch * stride_lsb + head * stride_lsh
+        base_dQ = dQ_ptr + batch * stride_dqb + head * stride_dqh
+        
+        # Load Q tile [BLOCK_M, BLOCK_D]
+        q_ptrs = base_Q + offs_m[:, None] * stride_qs + offs_d[None, :] * stride_qd
+        Q_tile = tl.load(q_ptrs, mask=m_mask, other=0.0)
+        
+        # Load dO tile [BLOCK_M, BLOCK_D]
+        do_ptrs = base_dO + offs_m[:, None] * stride_dos + offs_d[None, :] * stride_dod
+        dO_tile = tl.load(do_ptrs, mask=m_mask, other=0.0)
+        
+        # Load O tile [BLOCK_M, BLOCK_D]
+        o_ptrs = base_O + offs_m[:, None] * stride_os + offs_d[None, :] * stride_od
+        O_tile = tl.load(o_ptrs, mask=m_mask, other=0.0)
+        
+        # D[i] = sum(dO[i,k] * O[i,k]) -> [BLOCK_M]
+        D = tl.sum(dO_tile * O_tile, axis=1)
+        
+        # Load L for this Q block -> [BLOCK_M]
+        l_ptrs = base_L + offs_m * stride_lss
+        L_tile = tl.load(l_ptrs, mask=m_boundary, other=float("inf"))
+        
+        # Accumulator for dQ [BLOCK_M, BLOCK_D]
+        dQ_acc = tl.zeros((BLOCK_M, BLOCK_D), dtype=tl.float32)
+        
+        # Iterate over all KV blocks
+        num_n_blocks = tl.cdiv(S, BLOCK_N)
+        for pid_n in range(num_n_blocks):
+            offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+            n_boundary = offs_n < S
+            n_mask = n_boundary[:, None]
+            
+            # Load K tile [BLOCK_N, BLOCK_D]
+            k_ptrs = base_K + offs_n[:, None] * stride_ks + offs_d[None, :] * stride_kd
+            K_tile = tl.load(k_ptrs, mask=n_mask, other=0.0)
+            
+            # Load V tile [BLOCK_N, BLOCK_D]
+            v_ptrs = base_V + offs_n[:, None] * stride_vs + offs_d[None, :] * stride_vd
+            V_tile = tl.load(v_ptrs, mask=n_mask, other=0.0)
+            
+            # S = Q @ K^T * scale -> [BLOCK_M, BLOCK_N]
+            S_tile = tl.dot(Q_tile, K_tile.T) * scale
+            
+            # P = exp(S - L) -> [BLOCK_M, BLOCK_N]
+            P = tl.exp(S_tile - L_tile[:, None])
+            
+            # dP = dO @ V^T -> [BLOCK_M, BLOCK_N]
+            dP = tl.dot(dO_tile, V_tile.T)
+            
+            # dS = P * (dP - D) * scale -> [BLOCK_M, BLOCK_N]
+            dS = P * (dP - D[:, None]) * scale
+            
+            # dQ += dS @ K -> [BLOCK_M, BLOCK_D]
+            dQ_acc = tl.dot(dS.to(tl.bfloat16), K_tile, dQ_acc)
+        
+        # Store dQ result
+        dq_ptrs = base_dQ + offs_m[:, None] * stride_dqs + offs_d[None, :] * stride_dqd
+        tl.store(dq_ptrs, dQ_acc.to(tl.bfloat16), mask=m_mask)
+
+
+@triton.jit
+def _dKV_kernel_persistent(
+    Q_ptr, K_ptr, V_ptr, O_ptr, dO_ptr, L_ptr, dK_ptr, dV_ptr,
+    stride_qb, stride_qh, stride_qs, stride_qd,
+    stride_kb, stride_kh, stride_ks, stride_kd,
+    stride_vb, stride_vh, stride_vs, stride_vd,
+    stride_ob, stride_oh, stride_os, stride_od,
+    stride_dob, stride_doh, stride_dos, stride_dod,
+    stride_dkb, stride_dkh, stride_dks, stride_dkd,
+    stride_dvb, stride_dvh, stride_dvs, stride_dvd,
+    stride_lsb, stride_lsh, stride_lss,
+    B, H, S,
+    scale,
+    NUM_SMS: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    
+    num_pid_bh = B * H
+    num_pid_n = tl.cdiv(S, BLOCK_N)
+    total_tiles = num_pid_bh * num_pid_n
+    
+    for idx in range(pid, total_tiles, NUM_SMS):
+        pid_bh = idx // num_pid_n
+        pid_n = idx % num_pid_n
+        
+        batch = pid_bh // H
+        head = pid_bh % H
+        
+        offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        offs_d = tl.arange(0, BLOCK_D)
+        
+        n_boundary = offs_n < S
+        n_mask = n_boundary[:, None]
+        
+        base_K = K_ptr + batch * stride_kb + head * stride_kh
+        base_V = V_ptr + batch * stride_vb + head * stride_vh
+        base_dK = dK_ptr + batch * stride_dkb + head * stride_dkh
+        base_dV = dV_ptr + batch * stride_dvb + head * stride_dvh
+        
+        # Load K and V tiles upfront (reused across inner loop)
+        k_ptrs = base_K + offs_n[:, None] * stride_ks + offs_d[None, :] * stride_kd
+        K_tile = tl.load(k_ptrs, mask=n_mask, other=0.0)
+        
+        v_ptrs = base_V + offs_n[:, None] * stride_vs + offs_d[None, :] * stride_vd
+        V_tile = tl.load(v_ptrs, mask=n_mask, other=0.0)
+        
+        # Accumulators [BLOCK_N, BLOCK_D] in fp32
+        dK_acc = tl.zeros((BLOCK_N, BLOCK_D), dtype=tl.float32)
+        dV_acc = tl.zeros((BLOCK_N, BLOCK_D), dtype=tl.float32)
+        
+        num_m_blocks = tl.cdiv(S, BLOCK_M)
+        
+        for pid_m in range(num_m_blocks):
+            offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+            m_boundary = offs_m < S
+            m_mask = m_boundary[:, None]
+            
+            base_Q = Q_ptr + batch * stride_qb + head * stride_qh
+            base_dO = dO_ptr + batch * stride_dob + head * stride_doh
+            base_O = O_ptr + batch * stride_ob + head * stride_oh
+            base_L = L_ptr + batch * stride_lsb + head * stride_lsh
+            
+            # Load Q tile
+            q_ptrs = base_Q + offs_m[:, None] * stride_qs + offs_d[None, :] * stride_qd
+            Q_tile = tl.load(q_ptrs, mask=m_mask, other=0.0)
+            
+            # Load dO tile
+            do_ptrs = base_dO + offs_m[:, None] * stride_dos + offs_d[None, :] * stride_dod
+            dO_tile = tl.load(do_ptrs, mask=m_mask, other=0.0)
+            
+            # Load O tile (for D computation)
+            o_ptrs = base_O + offs_m[:, None] * stride_os + offs_d[None, :] * stride_od
+            O_tile = tl.load(o_ptrs, mask=m_mask, other=0.0)
+            
+            # D[i] = sum(dO[i,k] * O[i,k])
+            D = tl.sum(dO_tile * O_tile, axis=1)
+            
+            # Load L
+            l_ptrs = base_L + offs_m * stride_lss
+            L_tile = tl.load(l_ptrs, mask=m_boundary, other=float("inf"))
+            
+            # S = Q @ K^T * scale
+            S_tile = tl.dot(Q_tile, K_tile.T) * scale
+            
+            # P = exp(S - L)
+            P = tl.exp(S_tile - L_tile[:, None])
+            
+            # dP = dO @ V^T
+            dP = tl.dot(dO_tile, V_tile.T)
+            
+            # dS = P * (dP - D) * scale
+            dS = P * (dP - D[:, None]) * scale
+            
+            # dK += dS^T @ Q
+            dK_acc = tl.dot(dS.T.to(tl.bfloat16), Q_tile, dK_acc)
+            
+            # dV += P^T @ dO
+            dV_acc = tl.dot(P.T.to(tl.bfloat16), dO_tile, dV_acc)
+        
+        # Store dK
+        dk_ptrs = base_dK + offs_n[:, None] * stride_dks + offs_d[None, :] * stride_dkd
+        tl.store(dk_ptrs, dK_acc.to(tl.bfloat16), mask=n_mask)
+        
+        # Store dV
+        dv_ptrs = base_dV + offs_n[:, None] * stride_dvs + offs_d[None, :] * stride_dvd
+        tl.store(dv_ptrs, dV_acc.to(tl.bfloat16), mask=n_mask)
+
+
+def run(Q, K, V, O, dO, L, dQ, dK, dV):
+    """Multi-head attention backward pass using persistent scheduling."""
+    torch.cuda.set_device(Q.device)
+
+    B, H, S, D = Q.shape
+    scale = 1.0 / math.sqrt(D)
+
+    # Use larger tiles for better utilization
+    BLOCK_M = 128
+    BLOCK_N = 128
+    BLOCK_D = 128
+
+    qs = Q.stride()
+    ks = K.stride()
+    vs = V.stride()
+    os_s = O.stride()
+    dos = dO.stride()
+    dqs = dQ.stride()
+    dks = dK.stride()
+    dvs = dV.stride()
+    ls = L.stride()
+
+    NUM_SMS = 132
+    
+    # Cap grid at NUM_SMS for persistent scheduling
+    num_m_blocks = triton.cdiv(S, BLOCK_M)
+    num_n_blocks = triton.cdiv(S, BLOCK_N)
+    
+    total_tiles_dQ = B * H * num_m_blocks
+    grid_size_dQ = min(NUM_SMS, max(1, total_tiles_dQ))
+    
+    total_tiles_dKV = B * H * num_n_blocks
+    grid_size_dKV = min(NUM_SMS, max(1, total_tiles_dKV))
+
+    # Kernel 1: compute dQ
+    if total_tiles_dQ > 0:
+        grid_dQ = (grid_size_dQ,)
+        _dQ_kernel_persistent[grid_dQ](
+            Q, K, V, O, dO, L, dQ,
+            qs[0], qs[1], qs[2], qs[3],
+            ks[0], ks[1], ks[2], ks[3],
+            vs[0], vs[1], vs[2], vs[3],
+            os_s[0], os_s[1], os_s[2], os_s[3],
+            dos[0], dos[1], dos[2], dos[3],
+            dqs[0], dqs[1], dqs[2], dqs[3],
+            ls[0], ls[1], ls[2],
+            B, H, S,
+            scale,
+            NUM_SMS=NUM_SMS,
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_D=BLOCK_D,
+            num_warps=8, num_stages=4,
+        )
+
+    # Kernel 2: compute dK and dV together
+    if total_tiles_dKV > 0:
+        grid_dKV = (grid_size_dKV,)
+        _dKV_kernel_persistent[grid_dKV](
+            Q, K, V, O, dO, L, dK, dV,
+            qs[0], qs[1], qs[2], qs[3],
+            ks[0], ks[1], ks[2], ks[3],
+            vs[0], vs[1], vs[2], vs[3],
+            os_s[0], os_s[1], os_s[2], os_s[3],
+            dos[0], dos[1], dos[2], dos[3],
+            dks[0], dks[1], dks[2], dks[3],
+            dvs[0], dvs[1], dvs[2], dvs[3],
+            ls[0], ls[1], ls[2],
+            B, H, S,
+            scale,
+            NUM_SMS=NUM_SMS,
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_D=BLOCK_D,
+            num_warps=8, num_stages=4,
+        )

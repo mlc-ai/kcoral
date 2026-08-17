@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive benchmark-server with CUDA kernels from the AccRL B200 corpus."""
+"""Drive benchmark-server with CUDA and Triton kernels from AccRL corpora."""
 
 from __future__ import annotations
 
@@ -20,9 +20,26 @@ from typing import Any
 from benchmark_server import Client, Program
 from benchmark_server.client import BenchmarkServerError, ProtocolError, TransportError
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CORPUS = REPO_ROOT / "b200_cuda_kernels"
+DEFAULT_CUDA_CORPUS = REPO_ROOT / "b200_cuda_kernels"
+DEFAULT_TRITON_CORPUS = REPO_ROOT / "b200_triton_kernels"
+LANGUAGES = ("cuda", "triton")
+KERNEL_GLOBS = {"cuda": "kernel_t*.cu", "triton": "*.py"}
+
+
+def kernel_path_key(path: Path, language: str) -> tuple[int, str]:
+    """Prefer known-success Triton sources for bounded/default selections."""
+    relative = path.as_posix()
+    if language != "triton":
+        return (0, relative)
+    source_kind = path.parent.name
+    if source_kind == "success":
+        rank = 0
+    elif source_kind == "workspace":
+        rank = 1
+    else:
+        rank = 2
+    return (rank, relative)
 
 
 @dataclass(frozen=True)
@@ -74,9 +91,7 @@ WORKLOADS: dict[str, WorkloadSpec] = {
             ("lse", _LSE_SHAPE, "float32"),
         ),
         # Some backward kernels accumulate into dK/dV, so initialize every output.
-        empty_tensors=tuple(
-            (name, _MHA_SHAPE, "bfloat16", True) for name in ("dq", "dk", "dv")
-        ),
+        empty_tensors=tuple((name, _MHA_SHAPE, "bfloat16", True) for name in ("dq", "dk", "dv")),
         argument_names=("q", "k", "v", "o", "do", "lse", "dq", "dk", "dv"),
     ),
     "mha_bwd_d128_causal": WorkloadSpec(
@@ -84,9 +99,7 @@ WORKLOADS: dict[str, WorkloadSpec] = {
             *((name, _MHA_SHAPE, "bfloat16") for name in ("q", "k", "v", "o", "do")),
             ("lse", _LSE_SHAPE, "float32"),
         ),
-        empty_tensors=tuple(
-            (name, _MHA_SHAPE, "bfloat16", True) for name in ("dq", "dk", "dv")
-        ),
+        empty_tensors=tuple((name, _MHA_SHAPE, "bfloat16", True) for name in ("dq", "dk", "dv")),
         argument_names=("q", "k", "v", "o", "do", "lse", "dq", "dk", "dv"),
     ),
 }
@@ -98,15 +111,17 @@ class Kernel:
     path: Path
     relative_path: str
     sha256: str
+    language: str = "cuda"
 
 
 def discover_kernels(
-    corpus: Path,
+    corpus: Path | dict[str, Path],
     selected_workloads: list[str] | None = None,
     kernels_per_workload: int = 1,
     keep_duplicates: bool = False,
+    selected_languages: list[str] | None = None,
 ) -> list[Kernel]:
-    """Return an interleaved, deterministic selection from each workload."""
+    """Return a deterministic selection interleaved by workload and language."""
     names = selected_workloads or sorted(WORKLOADS)
     unknown = sorted(set(names) - set(WORKLOADS))
     if unknown:
@@ -114,37 +129,71 @@ def discover_kernels(
     if kernels_per_workload < 0:
         raise ValueError("kernels_per_workload must be non-negative")
 
-    by_workload: dict[str, list[Kernel]] = {}
-    for workload in names:
-        root = corpus / workload
-        if not root.is_dir():
-            raise ValueError(f"missing workload directory: {root}")
-        kernels: list[Kernel] = []
-        seen: set[str] = set()
-        for path in sorted(root.rglob("kernel_t*.cu")):
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            if not keep_duplicates and digest in seen:
-                continue
-            seen.add(digest)
-            kernels.append(
-                Kernel(
-                    workload=workload,
-                    path=path,
-                    relative_path=path.relative_to(corpus).as_posix(),
-                    sha256=digest,
-                )
-            )
-            if kernels_per_workload and len(kernels) >= kernels_per_workload:
-                break
-        if not kernels:
-            raise ValueError(f"no CUDA kernels found for workload {workload!r}")
-        by_workload[workload] = kernels
+    if isinstance(corpus, Path):
+        corpora = {"cuda": corpus}
+        languages = selected_languages or ["cuda"]
+    else:
+        corpora = corpus
+        languages = selected_languages or list(LANGUAGES)
+    unknown_languages = sorted(set(languages) - set(LANGUAGES))
+    if unknown_languages:
+        raise ValueError(f"unsupported language(s): {', '.join(unknown_languages)}")
 
-    # Avoid running every kernel from one workload before touching the next.
-    interleaved: list[Kernel] = []
-    for index in range(max(len(items) for items in by_workload.values())):
+    by_group: dict[tuple[str, str], list[Kernel]] = {}
+    for language in languages:
+        language_corpus = corpora.get(language)
+        if language_corpus is None:
+            raise ValueError(f"no corpus configured for language {language!r}")
+        if not language_corpus.is_dir():
+            raise ValueError(f"missing {language} corpus directory: {language_corpus}")
         for workload in names:
-            items = by_workload[workload]
+            root = language_corpus / workload
+            if not root.is_dir():
+                continue
+            kernels: list[Kernel] = []
+            seen: set[str] = set()
+            paths = sorted(
+                root.rglob(KERNEL_GLOBS[language]),
+                key=lambda path: kernel_path_key(path, language),
+            )
+            for path in paths:
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                if not keep_duplicates and digest in seen:
+                    continue
+                seen.add(digest)
+                kernels.append(
+                    Kernel(
+                        workload=workload,
+                        path=path,
+                        relative_path=path.relative_to(language_corpus).as_posix(),
+                        sha256=digest,
+                        language=language,
+                    )
+                )
+                if kernels_per_workload and len(kernels) >= kernels_per_workload:
+                    break
+            if kernels:
+                by_group[(language, workload)] = kernels
+
+    for language in languages:
+        if not any(group_language == language for group_language, _ in by_group):
+            raise ValueError(f"no {language} kernels found in selected workloads")
+    if selected_workloads is not None:
+        for workload in names:
+            if not any(group_workload == workload for _, group_workload in by_group):
+                raise ValueError(f"no kernels found for workload {workload!r}")
+
+    # Avoid running every kernel from one language/workload before touching the next.
+    groups = [
+        (language, workload)
+        for workload in names
+        for language in languages
+        if (language, workload) in by_group
+    ]
+    interleaved: list[Kernel] = []
+    for index in range(max(len(items) for items in by_group.values())):
+        for group in groups:
+            items = by_group[group]
             if index < len(items):
                 interleaved.append(items[index])
     return interleaved
@@ -164,10 +213,12 @@ def build_program(
         id="source",
         kind="module",
         source=kernel.path.read_text(encoding="utf-8"),
-        language="cuda",
+        language="cuda" if kernel.language == "cuda" else "python",
         entry="run",
     )
-    compiled = program.run(id="compiled", fn="builtin.compile_cuda", args=[source])
+    callable_kernel = source
+    if kernel.language == "cuda":
+        callable_kernel = program.run(id="compiled", fn="builtin.compile_cuda", args=[source])
 
     tensors: dict[str, Any] = {}
     for offset, (name, shape, dtype) in enumerate(spec.random_tensors):
@@ -183,11 +234,9 @@ def build_program(
             args=[{"shape": list(shape), "dtype": dtype}],
         )
 
-    benchmark_args = [compiled]
+    benchmark_args = [callable_kernel]
     benchmark_args.extend(tensors[name] for name in spec.argument_names)
-    benchmark_args.append(
-        {"warmup": warmup, "repeat": repeat, "flush_l2": flush_l2}
-    )
+    benchmark_args.append({"warmup": warmup, "repeat": repeat, "flush_l2": flush_l2})
     timing = program.run(id="timing", fn="builtin.benchmark", args=benchmark_args)
     program.return_(key="timing", value=timing)
     return program
@@ -237,15 +286,12 @@ def summarize(records: list[dict[str, Any]], elapsed_seconds: float) -> dict[str
         "errors": dict(
             sorted(
                 Counter(
-                    str(record.get("error_kind"))
-                    for record in records
-                    if record.get("error_kind")
+                    str(record.get("error_kind")) for record in records if record.get("error_kind")
                 ).items()
             )
         ),
-        "by_workload": dict(
-            sorted(Counter(record["workload"] for record in records).items())
-        ),
+        "by_workload": dict(sorted(Counter(record["workload"] for record in records).items())),
+        "by_language": dict(sorted(Counter(record["language"] for record in records).items())),
         "client_elapsed_ms": distribution(client_ms),
         "queue_ms": distribution(queue_ms),
         "lease_wait_ms": distribution(lease_wait_ms),
@@ -291,6 +337,7 @@ def execute_one(
         "timestamp": utc_now(),
         "sequence": sequence,
         "worker_slot": worker_slot,
+        "language": kernel.language,
         "workload": kernel.workload,
         "kernel": kernel.relative_path,
         "sha256": kernel.sha256,
@@ -432,7 +479,21 @@ def prewarm(args: argparse.Namespace, kernels: list[Kernel]) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--url", default="http://127.0.0.1:8000")
-    result.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
+    result.add_argument(
+        "--cuda-corpus",
+        "--corpus",
+        dest="cuda_corpus",
+        type=Path,
+        default=DEFAULT_CUDA_CORPUS,
+        help="CUDA corpus root (--corpus is retained as an alias)",
+    )
+    result.add_argument("--triton-corpus", type=Path, default=DEFAULT_TRITON_CORPUS)
+    result.add_argument(
+        "--language",
+        action="append",
+        choices=LANGUAGES,
+        help="kernel language to include; repeat the flag (default: both)",
+    )
     result.add_argument(
         "--workload",
         action="append",
@@ -443,7 +504,7 @@ def parser() -> argparse.ArgumentParser:
         "--kernels-per-workload",
         type=int,
         default=1,
-        help="number selected per workload; 0 uses every kernel (default: 1)",
+        help=("number selected per language/workload; 0 uses every kernel (default: 1)"),
     )
     result.add_argument(
         "--keep-duplicates",
@@ -500,14 +561,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         validate_args(args)
         kernels = discover_kernels(
-            args.corpus.resolve(),
+            {
+                "cuda": args.cuda_corpus.resolve(),
+                "triton": args.triton_corpus.resolve(),
+            },
             args.workload,
             args.kernels_per_workload,
             args.keep_duplicates,
+            args.language,
         )
         if args.list:
             for kernel in kernels:
-                print(f"{kernel.workload}\t{kernel.sha256}\t{kernel.relative_path}")
+                print(
+                    f"{kernel.language}\t{kernel.workload}\t{kernel.sha256}\t{kernel.relative_path}"
+                )
             return 0
 
         with Client(args.url, connect_timeout_seconds=args.connect_timeout_seconds) as client:
@@ -529,6 +596,9 @@ def main(argv: list[str] | None = None) -> int:
                 "url": args.url,
                 "health": health,
                 "kernel_count": len(kernels),
+                "kernel_count_by_language": dict(
+                    sorted(Counter(kernel.language for kernel in kernels).items())
+                ),
                 "concurrency": args.concurrency,
                 "rate": args.rate,
                 "duration_seconds": args.duration_seconds,

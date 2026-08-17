@@ -81,6 +81,10 @@ GPU it is not using; they take turns through a per-GPU lease and never run on it
 at once. Raising `--workers-per-gpu` keeps the GPUs busier at the cost of dividing
 their memory among more concurrent benchmarks.
 
+For sustained B200 validation with the checked-in AccRL CUDA and Triton corpora,
+see [`docs/stress_b200.md`](docs/stress_b200.md). The stress driver selects both
+languages by default.
+
 ## Python client
 
 The client builds the protocol JSON and binary parts. Byte uploads preserve

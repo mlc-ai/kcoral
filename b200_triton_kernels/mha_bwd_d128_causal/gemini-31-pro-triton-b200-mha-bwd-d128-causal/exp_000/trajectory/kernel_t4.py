@@ -1,0 +1,257 @@
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def _bwd_kernel_dq(
+    Q, K, V, O, sm_scale,
+    DO, DQ, L,
+    S, H,
+    stride_qb, stride_qh, stride_qs, stride_qd,
+    stride_kb, stride_kh, stride_ks, stride_kd,
+    stride_vb, stride_vh, stride_vs, stride_vd,
+    stride_ob, stride_oh, stride_os, stride_od,
+    stride_dob, stride_doh, stride_dos, stride_dod,
+    stride_dqb, stride_dqh, stride_dqs, stride_dqd,
+    stride_lb, stride_lh, stride_ls,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, D_HEAD: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_bh = tl.program_id(1)
+    
+    # Boundary early exit
+    if pid_m * BLOCK_M >= S:
+        return
+        
+    b = (pid_bh // H).to(tl.int64)
+    h = (pid_bh % H).to(tl.int64)
+    
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    mask_m = offs_m < S
+    offs_m_safe = tl.where(mask_m, offs_m, 0).to(tl.int64)
+    offs_d = tl.arange(0, D_HEAD).to(tl.int64)
+    
+    q_ptrs = Q + b * stride_qb + h * stride_qh + offs_m_safe[:, None] * stride_qs + offs_d[None, :] * stride_qd
+    do_ptrs = DO + b * stride_dob + h * stride_doh + offs_m_safe[:, None] * stride_dos + offs_d[None, :] * stride_dod
+    o_ptrs = O + b * stride_ob + h * stride_oh + offs_m_safe[:, None] * stride_os + offs_d[None, :] * stride_od
+    
+    q = tl.load(q_ptrs, mask=mask_m[:, None], other=0.0)
+    do = tl.load(do_ptrs, mask=mask_m[:, None], other=0.0)
+    o = tl.load(o_ptrs, mask=mask_m[:, None], other=0.0)
+    
+    l_ptrs = L + b * stride_lb + h * stride_lh + offs_m_safe * stride_ls
+    # Pad out-of-bounds L with inf to safely clamp evaluation to p=0
+    lse = tl.load(l_ptrs, mask=mask_m, other=float('inf'))
+    
+    # Compute Delta scalar row metrics inline locally 
+    delta = tl.sum(o.to(tl.float32) * do.to(tl.float32), axis=1)
+    dq = tl.zeros([BLOCK_M, D_HEAD], dtype=tl.float32)
+    
+    n_max = tl.minimum(S, pid_m * BLOCK_M + BLOCK_M)
+    n_steps = tl.cdiv(n_max, BLOCK_N)
+    
+    n_safe_steps = (pid_m * BLOCK_M) // BLOCK_N
+    n_safe_steps = tl.minimum(n_safe_steps, n_steps)
+    
+    # SAFE LOOP: Fast path executing causality-exempt blocks
+    for n_idx in tl.range(0, n_safe_steps, num_stages=2):
+        offs_n = n_idx * BLOCK_N + tl.arange(0, BLOCK_N)
+        
+        k_ptrs = K + b * stride_kb + h * stride_kh + offs_n[:, None] * stride_ks + offs_d[None, :] * stride_kd
+        v_ptrs = V + b * stride_vb + h * stride_vh + offs_n[:, None] * stride_vs + offs_d[None, :] * stride_vd
+        
+        k = tl.load(k_ptrs)
+        v = tl.load(v_ptrs)
+        
+        qk = tl.dot(q, tl.trans(k)) * sm_scale
+        p = tl.exp(qk - lse[:, None])
+        
+        dp = tl.dot(do, tl.trans(v))
+        ds = p * (dp - delta[:, None])
+        
+        dq += tl.dot((ds * sm_scale).to(q.dtype), k)
+        
+    # UNSAFE LOOP: Trailing blocks spanning causality cutoffs
+    for n_idx in range(n_safe_steps, n_steps):
+        offs_n = n_idx * BLOCK_N + tl.arange(0, BLOCK_N)
+        mask_n = offs_n < S
+        offs_n_safe = tl.where(mask_n, offs_n, 0).to(tl.int64)
+        
+        k_ptrs = K + b * stride_kb + h * stride_kh + offs_n_safe[:, None] * stride_ks + offs_d[None, :] * stride_kd
+        v_ptrs = V + b * stride_vb + h * stride_vh + offs_n_safe[:, None] * stride_vs + offs_d[None, :] * stride_vd
+        
+        k = tl.load(k_ptrs, mask=mask_n[:, None], other=0.0)
+        v = tl.load(v_ptrs, mask=mask_n[:, None], other=0.0)
+        
+        qk = tl.dot(q, tl.trans(k)) * sm_scale
+        p = tl.exp(qk - lse[:, None])
+        
+        causal_mask = mask_m[:, None] & (offs_m[:, None] >= offs_n[None, :])
+        p = tl.where(causal_mask, p, 0.0)
+        
+        dp = tl.dot(do, tl.trans(v))
+        ds = p * (dp - delta[:, None])
+        
+        dq += tl.dot((ds * sm_scale).to(q.dtype), k)
+        
+    dq_ptrs = DQ + b * stride_dqb + h * stride_dqh + offs_m_safe[:, None] * stride_dqs + offs_d[None, :] * stride_dqd
+    tl.store(dq_ptrs, dq.to(q.dtype), mask=mask_m[:, None])
+
+@triton.jit
+def _bwd_kernel_dk_dv(
+    Q, K, V, O, sm_scale,
+    DO, DK, DV, L,
+    S, H,
+    stride_qb, stride_qh, stride_qs, stride_qd,
+    stride_kb, stride_kh, stride_ks, stride_kd,
+    stride_vb, stride_vh, stride_vs, stride_vd,
+    stride_ob, stride_oh, stride_os, stride_od,
+    stride_dob, stride_doh, stride_dos, stride_dod,
+    stride_dkb, stride_dkh, stride_dks, stride_dkd,
+    stride_dvb, stride_dvh, stride_dvs, stride_dvd,
+    stride_lb, stride_lh, stride_ls,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, D_HEAD: tl.constexpr,
+):
+    pid_n = tl.program_id(0)
+    pid_bh = tl.program_id(1)
+    
+    if pid_n * BLOCK_N >= S:
+        return
+        
+    b = (pid_bh // H).to(tl.int64)
+    h = (pid_bh % H).to(tl.int64)
+    
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    mask_n = offs_n < S
+    offs_n_safe = tl.where(mask_n, offs_n, 0).to(tl.int64)
+    offs_d = tl.arange(0, D_HEAD).to(tl.int64)
+    
+    k_ptrs = K + b * stride_kb + h * stride_kh + offs_n_safe[:, None] * stride_ks + offs_d[None, :] * stride_kd
+    v_ptrs = V + b * stride_vb + h * stride_vh + offs_n_safe[:, None] * stride_vs + offs_d[None, :] * stride_vd
+    
+    k = tl.load(k_ptrs, mask=mask_n[:, None], other=0.0)
+    v = tl.load(v_ptrs, mask=mask_n[:, None], other=0.0)
+    
+    dk = tl.zeros([BLOCK_N, D_HEAD], dtype=tl.float32)
+    dv = tl.zeros([BLOCK_N, D_HEAD], dtype=tl.float32)
+    
+    m_start = (pid_n * BLOCK_N) // BLOCK_M
+    m_steps = tl.cdiv(S, BLOCK_M)
+    m_safe_start = tl.cdiv(pid_n * BLOCK_N + BLOCK_N, BLOCK_M)
+    m_safe_start = tl.minimum(m_safe_start, m_steps)
+    
+    # UNSAFE LOOP: Initial blocks spanning causality cutoffs 
+    for m_idx in range(m_start, m_safe_start):
+        offs_m = m_idx * BLOCK_M + tl.arange(0, BLOCK_M)
+        mask_m = offs_m < S
+        offs_m_safe = tl.where(mask_m, offs_m, 0).to(tl.int64)
+        
+        q_ptrs = Q + b * stride_qb + h * stride_qh + offs_m_safe[:, None] * stride_qs + offs_d[None, :] * stride_qd
+        do_ptrs = DO + b * stride_dob + h * stride_doh + offs_m_safe[:, None] * stride_dos + offs_d[None, :] * stride_dod
+        o_ptrs = O + b * stride_ob + h * stride_oh + offs_m_safe[:, None] * stride_os + offs_d[None, :] * stride_od
+        
+        q = tl.load(q_ptrs, mask=mask_m[:, None], other=0.0)
+        do = tl.load(do_ptrs, mask=mask_m[:, None], other=0.0)
+        o = tl.load(o_ptrs, mask=mask_m[:, None], other=0.0)
+        
+        l_ptrs = L + b * stride_lb + h * stride_lh + offs_m_safe * stride_ls
+        lse = tl.load(l_ptrs, mask=mask_m, other=float('inf'))
+        
+        delta = tl.sum(o.to(tl.float32) * do.to(tl.float32), axis=1)
+        
+        qk = tl.dot(q, tl.trans(k)) * sm_scale
+        p = tl.exp(qk - lse[:, None])
+        
+        causal_mask = mask_m[:, None] & (offs_m[:, None] >= offs_n[None, :])
+        p = tl.where(causal_mask, p, 0.0)
+        
+        dp = tl.dot(do, tl.trans(v))
+        ds = p * (dp - delta[:, None])
+        
+        dv += tl.dot(tl.trans(p.to(k.dtype)), do)
+        dk += tl.dot(tl.trans((ds * sm_scale).to(k.dtype)), q)
+        
+    # SAFE LOOP: Fast path executing strict fully valid regions
+    for m_idx in tl.range(m_safe_start, m_steps, num_stages=3):
+        offs_m = m_idx * BLOCK_M + tl.arange(0, BLOCK_M)
+        mask_m = offs_m < S
+        offs_m_safe = tl.where(mask_m, offs_m, 0).to(tl.int64)
+        
+        q_ptrs = Q + b * stride_qb + h * stride_qh + offs_m_safe[:, None] * stride_qs + offs_d[None, :] * stride_qd
+        do_ptrs = DO + b * stride_dob + h * stride_doh + offs_m_safe[:, None] * stride_dos + offs_d[None, :] * stride_dod
+        o_ptrs = O + b * stride_ob + h * stride_oh + offs_m_safe[:, None] * stride_os + offs_d[None, :] * stride_od
+        
+        q = tl.load(q_ptrs, mask=mask_m[:, None], other=0.0)
+        do = tl.load(do_ptrs, mask=mask_m[:, None], other=0.0)
+        o = tl.load(o_ptrs, mask=mask_m[:, None], other=0.0)
+        
+        l_ptrs = L + b * stride_lb + h * stride_lh + offs_m_safe * stride_ls
+        lse = tl.load(l_ptrs, mask=mask_m, other=float('inf'))
+        
+        delta = tl.sum(o.to(tl.float32) * do.to(tl.float32), axis=1)
+        
+        qk = tl.dot(q, tl.trans(k)) * sm_scale
+        p = tl.exp(qk - lse[:, None])
+        
+        dp = tl.dot(do, tl.trans(v))
+        ds = p * (dp - delta[:, None])
+        
+        dv += tl.dot(tl.trans(p.to(k.dtype)), do)
+        dk += tl.dot(tl.trans((ds * sm_scale).to(k.dtype)), q)
+        
+    dk_ptrs = DK + b * stride_dkb + h * stride_dkh + offs_n_safe[:, None] * stride_dks + offs_d[None, :] * stride_dkd
+    dv_ptrs = DV + b * stride_dvb + h * stride_dvh + offs_n_safe[:, None] * stride_dvs + offs_d[None, :] * stride_dvd
+    
+    tl.store(dk_ptrs, dk.to(k.dtype), mask=mask_n[:, None])
+    tl.store(dv_ptrs, dv.to(k.dtype), mask=mask_n[:, None])
+
+
+def run(Q, K, V, O, dO, L, dQ, dK, dV):
+    """
+    Evaluates causal multi-head attention backward gradients.
+    Destination passing coordinates exclusively manage mapping inputs and memory references.
+    """
+    with torch.cuda.device(Q.device):
+        B, H, S, d = Q.shape
+        sm_scale = 1.0 / (d ** 0.5)
+
+        stride_lb = L.stride(0)
+        stride_lh = L.stride(1)
+        stride_ls = L.stride(2) if L.dim() >= 3 else 1
+        
+        BLOCK_M_DQ, BLOCK_N_DQ = 128, 128
+        grid_dq = (triton.cdiv(S, BLOCK_M_DQ), B * H)
+        
+        _bwd_kernel_dq[grid_dq](
+            Q, K, V, O, sm_scale,
+            dO, dQ, L,
+            S, H,
+            Q.stride(0), Q.stride(1), Q.stride(2), Q.stride(3),
+            K.stride(0), K.stride(1), K.stride(2), K.stride(3),
+            V.stride(0), V.stride(1), V.stride(2), V.stride(3),
+            O.stride(0), O.stride(1), O.stride(2), O.stride(3),
+            dO.stride(0), dO.stride(1), dO.stride(2), dO.stride(3),
+            dQ.stride(0), dQ.stride(1), dQ.stride(2), dQ.stride(3),
+            stride_lb, stride_lh, stride_ls,
+            BLOCK_M=BLOCK_M_DQ, BLOCK_N=BLOCK_N_DQ, D_HEAD=d,
+            num_warps=8, num_stages=2
+        )
+
+        BLOCK_M_DK, BLOCK_N_DK = 64, 128
+        grid_dkdv = (triton.cdiv(S, BLOCK_N_DK), B * H)
+        
+        _bwd_kernel_dk_dv[grid_dkdv](
+            Q, K, V, O, sm_scale,
+            dO, dK, dV, L,
+            S, H,
+            Q.stride(0), Q.stride(1), Q.stride(2), Q.stride(3),
+            K.stride(0), K.stride(1), K.stride(2), K.stride(3),
+            V.stride(0), V.stride(1), V.stride(2), V.stride(3),
+            O.stride(0), O.stride(1), O.stride(2), O.stride(3),
+            dO.stride(0), dO.stride(1), dO.stride(2), dO.stride(3),
+            dK.stride(0), dK.stride(1), dK.stride(2), dK.stride(3),
+            dV.stride(0), dV.stride(1), dV.stride(2), dV.stride(3),
+            stride_lb, stride_lh, stride_ls,
+            BLOCK_M=BLOCK_M_DK, BLOCK_N=BLOCK_N_DK, D_HEAD=d,
+            num_warps=8, num_stages=3
+        )
