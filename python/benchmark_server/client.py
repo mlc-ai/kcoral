@@ -14,7 +14,12 @@ import numpy as np
 
 from .keys import compute_blob_hash, is_blob_hash, verify_blob
 from .multipart import parse_multipart
-from .schemas import DTYPE_ITEM_SIZES, expected_tensor_nbytes, strict_json_loads
+from .schemas import (
+    DTYPE_ITEM_SIZES,
+    GPURequirement,
+    expected_tensor_nbytes,
+    strict_json_loads,
+)
 
 
 class BenchmarkServerError(Exception):
@@ -70,6 +75,7 @@ class Program:
         value: Any = None,
         dtype: str | None = None,
         shape: list[int] | None = None,
+        gpu: GPURequirement = "auto",
     ) -> Register:
         if kind == "module":
             if not isinstance(source, str):
@@ -146,23 +152,37 @@ class Program:
             }
         else:
             raise ValueError("upload kind must be 'module', 'tensor', 'bytes', or 'library'")
+        _set_gpu(instruction, gpu)
         self._add_id(id)
         self._instructions.append(instruction)
         return Register(id)
 
     def run(
-        self, *, id: str, fn: str | Register | dict[str, str], args: list[Any] | None = None
+        self,
+        *,
+        id: str,
+        fn: str | Register | dict[str, str],
+        args: list[Any] | None = None,
+        gpu: GPURequirement = "auto",
     ) -> Register:
-        self._add_id(id)
         wire_fn: Any = _reference(fn) if isinstance(fn, Register) else fn
         wire_args = [
             _reference(argument) if isinstance(argument, Register) else argument
             for argument in (args or [])
         ]
-        self._instructions.append({"op": "run", "id": id, "fn": wire_fn, "args": wire_args})
+        instruction = {"op": "run", "id": id, "fn": wire_fn, "args": wire_args}
+        _set_gpu(instruction, gpu)
+        self._add_id(id)
+        self._instructions.append(instruction)
         return Register(id)
 
-    def return_(self, *, key: str, value: Register | dict[str, str]) -> None:
+    def return_(
+        self,
+        *,
+        key: str,
+        value: Register | dict[str, str],
+        gpu: GPURequirement = "auto",
+    ) -> None:
         if not isinstance(key, str) or not key:
             raise ValueError("return key must be a non-empty string")
         if key in self._return_keys:
@@ -176,8 +196,10 @@ class Program:
             raise TypeError("return value must be a Register or {'$ref': id}")
         if reference["$ref"] not in self._ids:
             raise ValueError(f"return {key!r} references unknown handle {reference['$ref']!r}")
+        instruction = {"op": "return", "key": key, "value": reference}
+        _set_gpu(instruction, gpu)
         self._return_keys.add(key)
-        self._instructions.append({"op": "return", "key": key, "value": reference})
+        self._instructions.append(instruction)
 
     def _add_id(self, instruction_id: str) -> None:
         if not isinstance(instruction_id, str) or not instruction_id:
@@ -185,6 +207,13 @@ class Program:
         if instruction_id in self._ids:
             raise ValueError(f"duplicate instruction id: {instruction_id!r}")
         self._ids.add(instruction_id)
+
+
+def _set_gpu(instruction: dict[str, Any], gpu: GPURequirement) -> None:
+    if gpu not in ("auto", "required", "none"):
+        raise ValueError("gpu must be 'auto', 'required', or 'none'")
+    if gpu != "auto":
+        instruction["gpu"] = gpu
 
 
 @dataclass

@@ -16,6 +16,7 @@ def test_parse_complete_program():
                     "kind": "module",
                     "source": "def kernel(x):\n    return x\n",
                     "entry": "kernel",
+                    "gpu": "none",
                 },
                 {
                     "op": "upload",
@@ -25,8 +26,19 @@ def test_parse_complete_program():
                     "dtype": "float32",
                     "shape": [2, 3],
                 },
-                {"op": "run", "id": "result", "fn": {"$ref": "module"}, "args": [1]},
-                {"op": "return", "key": "answer", "value": {"$ref": "result"}},
+                {
+                    "op": "run",
+                    "id": "result",
+                    "fn": {"$ref": "module"},
+                    "args": [1],
+                    "gpu": "required",
+                },
+                {
+                    "op": "return",
+                    "key": "answer",
+                    "value": {"$ref": "result"},
+                    "gpu": "none",
+                },
             ],
             "options": {"timeout_seconds": 12, "output_limit_bytes": 0},
         }
@@ -34,8 +46,11 @@ def test_parse_complete_program():
     assert isinstance(program.instructions[0], Upload)
     assert program.instructions[0].entry == "kernel"
     assert program.instructions[0].language == "python"  # the default when unset
+    assert program.instructions[0].gpu == "none"
     assert isinstance(program.instructions[2], Run)
+    assert program.instructions[2].gpu == "required"
     assert isinstance(program.instructions[3], Return)
+    assert program.instructions[3].gpu == "none"
     # References are resolved to ``Ref`` at parse time; literals stay untouched.
     assert program.instructions[2].fn == Ref("module")
     assert program.instructions[2].args == [1]
@@ -61,6 +76,7 @@ def test_parse_cuda_module_upload():
     )
     assert program.instructions[0].language == "cuda"
     assert program.instructions[0].entry == "add"
+    assert program.instructions[0].gpu == "auto"
 
 
 def test_parse_library_upload():
@@ -129,6 +145,14 @@ def test_parse_bytes_upload():
             "unsupported dtype",
         ),
         ({"op": "run", "id": "x", "fn": "builtin.zeros", "extra": 1}, "unknown field"),
+        (
+            {"op": "run", "id": "x", "fn": "builtin.zeros", "gpu": False},
+            "'gpu' must be",
+        ),
+        (
+            {"op": "run", "id": "x", "fn": "builtin.zeros", "gpu": "sometimes"},
+            "'gpu' must be",
+        ),
         ({"op": "unknown", "id": "x"}, "unknown op"),
         (
             {"op": "upload", "id": "x", "kind": "module", "source": "", "entry": "not an id"},

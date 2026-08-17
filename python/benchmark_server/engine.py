@@ -56,9 +56,9 @@ def execute(
 ) -> ProgramOutcome:
     """Run a program and serialize only values selected by return instructions.
 
-    The GPU is claimed on the first instruction that needs it and given up around
-    each CPU-only builtin, so a worker compiling does not keep a GPU that another
-    worker could be measuring on.
+    An instruction may require the GPU, release it, or leave placement to the
+    existing safe defaults. The lease stays held across adjacent GPU instructions
+    and is given up around CPU-only work.
     """
     env: dict[str, Any] = {}
     results: dict[str, dict[str, Any]] = {}
@@ -105,6 +105,11 @@ def execute(
                     elif isinstance(instruction, Run):
                         value = _invoke(instruction, env, runtime)
                         if isinstance(value, DeferredGPUResult):
+                            if instruction.gpu == "none":
+                                raise ExecutionError(
+                                    "runtime",
+                                    "instruction declared gpu='none' but requires GPU finalization",
+                                )
                             # The builtin completed its host-only phase without the
                             # lease.  Driver/module loading must be serialized with
                             # every other use of this GPU before the instruction is
@@ -197,6 +202,12 @@ def _invoke(instruction: Run, env: dict[str, Any], runtime: Runtime) -> Any:
 
 def _place(instruction: Instruction, runtime: Runtime, lease: Lease) -> None:
     """Hold or drop the GPU for the instruction about to run."""
+    if instruction.gpu == "required":
+        lease.acquire()
+        return
+    if instruction.gpu == "none":
+        _drop_gpu(runtime, lease)
+        return
     if isinstance(instruction, Run) and isinstance(instruction.fn, str):
         # A compile: hand the GPU over so another worker can measure on it.
         if runtime.is_cpu_only(instruction.fn):

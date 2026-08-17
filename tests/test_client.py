@@ -239,6 +239,31 @@ def test_program_builder_allows_interleaved_returns():
         Program().return_(key="missing", value=Register("nope"))
 
 
+def test_program_builder_emits_explicit_gpu_placement():
+    program = Program()
+    function = program.upload(
+        id="function",
+        kind="module",
+        source="def main(): return 1\n",
+        gpu="none",
+    )
+    result = program.run(id="result", fn=function, gpu="required")
+    program.return_(key="result", value=result, gpu="none")
+
+    assert [instruction["gpu"] for instruction in program.instructions] == [
+        "none",
+        "required",
+        "none",
+    ]
+
+    automatic = Program()
+    automatic.run(id="result", fn="builtin.structural")
+    assert "gpu" not in automatic.instructions[0]
+
+    with pytest.raises(ValueError, match="gpu must be"):
+        Program().run(id="bad", fn="builtin.structural", gpu="sometimes")
+
+
 def test_program_builder_validates_ids_and_tensor_metadata():
     with pytest.raises(ValueError, match="expects 4 bytes"):
         Program().upload(id="bad", kind="tensor", value=b"abc", dtype="float32", shape=[1])

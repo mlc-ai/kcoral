@@ -11,7 +11,8 @@ _CPU_ONLY: set[str] = set()
 def register_builtin(name: str, cpu_only: bool = False) -> Callable:
     """Register a module-level function as the builtin ``builtin.<name>``.
 
-    ``cpu_only`` marks a builtin that touches no GPU, so a worker may drop its GPU
+    ``cpu_only`` supplies the placement default when an instruction uses
+    ``gpu="auto"``. It marks work that touches no GPU, so a worker may drop its
     lease for the duration. Only worth declaring for builtins expensive enough to
     pay for the reacquisition; the default is the safe answer.
     """

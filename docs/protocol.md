@@ -120,6 +120,31 @@ and response decoding.
 Each `upload` and `run` has a unique string `id`. A reference has the exact form
 `{"$ref": "<id>"}` and must point to an earlier instruction.
 
+### GPU placement
+
+Every instruction accepts an optional `gpu` field:
+
+| Value | Behaviour |
+|---|---|
+| `"auto"` | Use the server's safe default; this is also the default when omitted |
+| `"required"` | Acquire the worker's GPU lease before the instruction |
+| `"none"` | Synchronize and release a held GPU lease before the instruction |
+
+`auto` preserves the behaviour of programs written before this field existed.
+Known host-only compile builtins release the lease, byte and CUDA-source uploads
+leave its current state unchanged, and other instructions acquire it. A compile
+may reacquire the lease for a short deferred driver or module-loading phase.
+
+`required` and `none` override those defaults. A `required` host-only builtin
+keeps the lease while it runs; a `none` instruction promises that all of its
+work is GPU-free. This promise applies separately to a Python module's upload
+(which executes its top-level source) and each later call through its handle.
+The server trusts the promise; `none` is a scheduling declaration rather than a
+security boundary.
+
+The Python client exposes the same values on `Program.upload()`, `Program.run()`,
+and `Program.return_()`. It omits `gpu` from the wire when its value is `auto`.
+
 ---
 
 ## `upload`

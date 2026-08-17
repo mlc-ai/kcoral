@@ -10,6 +10,8 @@ from typing import Any, Literal
 from .errors import ValidationError
 from .keys import is_blob_hash
 
+GPURequirement = Literal["auto", "required", "none"]
+
 DTYPE_ITEM_SIZES: dict[str, int] = {
     "bool": 1,
     "uint8": 1,
@@ -30,6 +32,7 @@ DTYPE_ITEM_SIZES: dict[str, int] = {
 class Upload:
     id: str
     kind: Literal["module", "tensor", "bytes", "library"]
+    gpu: GPURequirement = "auto"
     source: str | None = None
     entry: str | None = None
     language: Literal["python", "cuda"] = "python"
@@ -51,6 +54,7 @@ class Run:
     id: str
     fn: str | Ref
     args: list[Any] = field(default_factory=list)  # ``Ref`` or a JSON literal
+    gpu: GPURequirement = "auto"
     op: Literal["run"] = "run"
 
 
@@ -58,6 +62,7 @@ class Run:
 class Return:
     key: str
     value: Ref
+    gpu: GPURequirement = "auto"
     op: Literal["return"] = "return"
 
 
@@ -207,11 +212,12 @@ def _parse_options(value: Any) -> dict[str, Any]:
 
 
 def _parse_upload(item: dict[str, Any], index: int) -> Upload:
+    gpu = _parse_gpu(item, index)
     kind = item.get("kind")
     if kind == "module":
         _check_fields(
             item,
-            {"op", "id", "kind", "source", "entry", "language"},
+            {"op", "id", "kind", "source", "entry", "language", "gpu"},
             {"op", "id", "kind", "source"},
             f"instruction {index}",
         )
@@ -236,11 +242,18 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
                 raise ValidationError(
                     f"module upload {item['id']!r}: C++ reserves 'main'; name the entry otherwise"
                 )
-        return Upload(id=item["id"], kind="module", source=source, entry=entry, language=language)
+        return Upload(
+            id=item["id"],
+            kind="module",
+            gpu=gpu,
+            source=source,
+            entry=entry,
+            language=language,
+        )
     if kind == "tensor":
         _check_fields(
             item,
-            {"op", "id", "kind", "blob", "dtype", "shape"},
+            {"op", "id", "kind", "blob", "dtype", "shape", "gpu"},
             {"op", "id", "kind", "blob", "dtype", "shape"},
             f"instruction {index}",
         )
@@ -260,11 +273,11 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
             raise ValidationError(
                 f"tensor upload {item['id']!r}: 'shape' must be an array of non-negative integers"
             )
-        return Upload(id=item["id"], kind="tensor", blob=blob, dtype=dtype, shape=shape)
+        return Upload(id=item["id"], kind="tensor", gpu=gpu, blob=blob, dtype=dtype, shape=shape)
     if kind == "bytes":
         _check_fields(
             item,
-            {"op", "id", "kind", "blob"},
+            {"op", "id", "kind", "blob", "gpu"},
             {"op", "id", "kind", "blob"},
             f"instruction {index}",
         )
@@ -273,11 +286,11 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
             raise ValidationError(
                 f"bytes upload {item['id']!r}: 'blob' must be a lowercase SHA-256 digest"
             )
-        return Upload(id=item["id"], kind="bytes", blob=blob)
+        return Upload(id=item["id"], kind="bytes", gpu=gpu, blob=blob)
     if kind == "library":
         _check_fields(
             item,
-            {"op", "id", "kind", "blob", "entry"},
+            {"op", "id", "kind", "blob", "entry", "gpu"},
             {"op", "id", "kind", "blob", "entry"},
             f"instruction {index}",
         )
@@ -289,12 +302,15 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
             )
         if not (isinstance(entry, str) and entry.isidentifier()):
             raise ValidationError(f"library upload {item['id']!r}: 'entry' must be an identifier")
-        return Upload(id=item["id"], kind="library", blob=blob, entry=entry)
+        return Upload(id=item["id"], kind="library", gpu=gpu, blob=blob, entry=entry)
     raise ValidationError(f"upload {item.get('id')!r}: unknown kind {kind!r}")
 
 
 def _parse_run(item: dict[str, Any], index: int, handles: set[str]) -> Run:
-    _check_fields(item, {"op", "id", "fn", "args"}, {"op", "id", "fn"}, f"instruction {index}")
+    _check_fields(
+        item, {"op", "id", "fn", "args", "gpu"}, {"op", "id", "fn"}, f"instruction {index}"
+    )
+    gpu = _parse_gpu(item, index)
     raw_fn = item["fn"]
     fn: str | Ref
     if isinstance(raw_fn, str):
@@ -318,13 +334,15 @@ def _parse_run(item: dict[str, Any], index: int, handles: set[str]) -> Run:
         else:
             _validate_json_value(argument, f"run {item['id']!r} argument")
             args.append(argument)
-    return Run(id=item["id"], fn=fn, args=args)
+    return Run(id=item["id"], fn=fn, args=args, gpu=gpu)
 
 
 def _parse_return(
     item: dict[str, Any], index: int, handles: set[str], return_keys: set[str]
 ) -> Return:
-    _check_fields(item, {"op", "key", "value"}, {"op", "key", "value"}, f"instruction {index}")
+    _check_fields(
+        item, {"op", "key", "value", "gpu"}, {"op", "key", "value"}, f"instruction {index}"
+    )
     key = item["key"]
     if not isinstance(key, str) or not key:
         raise ValidationError(f"return instruction {index} needs a non-empty string 'key'")
@@ -333,7 +351,18 @@ def _parse_return(
     value = item["value"]
     if not is_ref(value):
         raise ValidationError(f"return {key!r}: 'value' must be {{'$ref': id}}")
-    return Return(key=key, value=_resolve_ref(value, handles, f"return {key!r}"))
+    return Return(
+        key=key,
+        value=_resolve_ref(value, handles, f"return {key!r}"),
+        gpu=_parse_gpu(item, index),
+    )
+
+
+def _parse_gpu(item: dict[str, Any], index: int) -> GPURequirement:
+    gpu = item.get("gpu", "auto")
+    if gpu not in ("auto", "required", "none"):
+        raise ValidationError(f"instruction {index}: 'gpu' must be 'auto', 'required', or 'none'")
+    return gpu
 
 
 def _resolve_ref(reference: dict[str, Any], handles: set[str], owner: str) -> Ref:

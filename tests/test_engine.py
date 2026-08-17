@@ -109,6 +109,16 @@ def test_cpu_only_builtin_finalizes_deferred_gpu_result_under_lease():
     assert outcome.status == "COMPLETED"
     assert events == ["acquire", "finalize", "release"]
 
+    events.clear()
+    outcome = execute(
+        Program([Run("compiled", "builtin.deferred", [], gpu="none")]),
+        DeferredRuntime(),
+        lease,
+    )
+    assert outcome.status == "FAILED"
+    assert "declared gpu='none'" in outcome.error["message"]
+    assert events == []
+
 
 @pytest.mark.parametrize(
     "source,entry",
@@ -339,6 +349,7 @@ class RecordingLease:
     def __init__(self) -> None:
         self.held = False
         self.acquires = 0
+        self.releases = 0
 
     def acquire(self) -> None:
         if not self.held:
@@ -346,6 +357,7 @@ class RecordingLease:
         self.held = True
 
     def release(self) -> None:
+        self.releases += 1
         self.held = False
 
 
@@ -373,3 +385,21 @@ def test_which_module_uploads_take_the_gpu(language, source, entry, acquires):
     outcome = execute(program, CudaAwareRuntime(), lease)
     assert outcome.status == "COMPLETED"
     assert lease.acquires == acquires
+
+
+def test_explicit_gpu_placement_overrides_automatic_placement():
+    lease = RecordingLease()
+    program = Program(
+        [
+            Run("first", "builtin.structural", [], gpu="required"),
+            Run("second", "builtin.structural", [], gpu="none"),
+            Run("automatic", "builtin.cpu_sleep", []),
+            Run("forced", "builtin.cpu_sleep", [], gpu="required"),
+        ]
+    )
+
+    outcome = execute(program, FakeRuntime(), lease)
+
+    assert outcome.status == "COMPLETED"
+    assert lease.acquires == 2
+    assert lease.releases == 2
