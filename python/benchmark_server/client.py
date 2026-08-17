@@ -75,7 +75,6 @@ class Program:
         value: Any = None,
         dtype: str | None = None,
         shape: list[int] | None = None,
-        gpu: GPURequirement = "auto",
     ) -> Register:
         if kind == "module":
             if not isinstance(source, str):
@@ -152,7 +151,6 @@ class Program:
             }
         else:
             raise ValueError("upload kind must be 'module', 'tensor', 'bytes', or 'library'")
-        _set_gpu(instruction, gpu)
         self._add_id(id)
         self._instructions.append(instruction)
         return Register(id)
@@ -181,7 +179,6 @@ class Program:
         *,
         key: str,
         value: Register | dict[str, str],
-        gpu: GPURequirement = "auto",
     ) -> None:
         if not isinstance(key, str) or not key:
             raise ValueError("return key must be a non-empty string")
@@ -196,10 +193,8 @@ class Program:
             raise TypeError("return value must be a Register or {'$ref': id}")
         if reference["$ref"] not in self._ids:
             raise ValueError(f"return {key!r} references unknown handle {reference['$ref']!r}")
-        instruction = {"op": "return", "key": key, "value": reference}
-        _set_gpu(instruction, gpu)
         self._return_keys.add(key)
-        self._instructions.append(instruction)
+        self._instructions.append({"op": "return", "key": key, "value": reference})
 
     def _add_id(self, instruction_id: str) -> None:
         if not isinstance(instruction_id, str) or not instruction_id:

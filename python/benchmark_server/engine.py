@@ -56,9 +56,8 @@ def execute(
 ) -> ProgramOutcome:
     """Run a program and serialize only values selected by return instructions.
 
-    An instruction may require the GPU, release it, or leave placement to the
-    existing safe defaults. The lease stays held across adjacent GPU instructions
-    and is given up around CPU-only work.
+    A run may require the GPU, release it, or leave placement to the existing
+    safe defaults. Uploads and returns always acquire the lease.
     """
     env: dict[str, Any] = {}
     results: dict[str, dict[str, Any]] = {}
@@ -202,23 +201,16 @@ def _invoke(instruction: Run, env: dict[str, Any], runtime: Runtime) -> Any:
 
 def _place(instruction: Instruction, runtime: Runtime, lease: Lease) -> None:
     """Hold or drop the GPU for the instruction about to run."""
-    if instruction.gpu == "required":
-        lease.acquire()
-        return
-    if instruction.gpu == "none":
-        _drop_gpu(runtime, lease)
-        return
-    if isinstance(instruction, Run) and isinstance(instruction.fn, str):
-        # A compile: hand the GPU over so another worker can measure on it.
-        if runtime.is_cpu_only(instruction.fn):
+    if isinstance(instruction, Run):
+        if instruction.gpu == "required":
+            lease.acquire()
+            return
+        if instruction.gpu == "none":
             _drop_gpu(runtime, lease)
             return
-    if isinstance(instruction, Upload) and instruction.kind == "bytes":
-        return
-    if isinstance(instruction, Upload) and instruction.kind == "module":
-        # Binding CUDA source runs nothing, and is far too brief to be worth
-        # dropping the lease over; exec'ing Python could touch the GPU.
-        if instruction.language == "cuda":
+        if isinstance(instruction.fn, str) and runtime.is_cpu_only(instruction.fn):
+            # A compile: hand the GPU over so another worker can measure on it.
+            _drop_gpu(runtime, lease)
             return
     lease.acquire()
 

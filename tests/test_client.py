@@ -245,16 +245,13 @@ def test_program_builder_emits_explicit_gpu_placement():
         id="function",
         kind="module",
         source="def main(): return 1\n",
-        gpu="none",
     )
     result = program.run(id="result", fn=function, gpu="required")
-    program.return_(key="result", value=result, gpu="none")
+    program.return_(key="result", value=result)
 
-    assert [instruction["gpu"] for instruction in program.instructions] == [
-        "none",
-        "required",
-        "none",
-    ]
+    assert "gpu" not in program.instructions[0]
+    assert program.instructions[1]["gpu"] == "required"
+    assert "gpu" not in program.instructions[2]
 
     automatic = Program()
     automatic.run(id="result", fn="builtin.structural")

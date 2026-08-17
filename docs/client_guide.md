@@ -49,19 +49,17 @@ with Client("http://localhost:8000") as client:
 print(result.results["timing"]["latency_ms_median"])
 ```
 
-Each instruction accepts `gpu="auto"`, `"required"`, or `"none"`. The default
-`auto` keeps the server's built-in placement rules. Use `required` when uploaded
-code must hold the GPU, and `none` when it is safe to release the lease for that
-instruction:
+Each `run` accepts `gpu="auto"`, `"required"`, or `"none"`. The default `auto`
+keeps the server's built-in placement rules. Use `required` when uploaded code
+must hold the GPU, and `none` when it is safe to release the lease for that
+call:
 
 ```python
 compiled = program.run(id="compiled", fn=compiler, args=[source], gpu="none")
 program.run(id="invoke", fn=compiled, args=[src, dst], gpu="required")
 ```
 
-Module upload and module invocation are separate instructions. If top-level
-module code and its entry have different requirements, declare them separately
-on `upload()` and `run()`.
+Uploads and returns always hold the GPU lease; only calls customize placement.
 
 Four rules the example relies on:
 

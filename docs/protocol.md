@@ -122,7 +122,7 @@ Each `upload` and `run` has a unique string `id`. A reference has the exact form
 
 ### GPU placement
 
-Every instruction accepts an optional `gpu` field:
+Every `run` instruction accepts an optional `gpu` field:
 
 | Value | Behaviour |
 |---|---|
@@ -131,19 +131,18 @@ Every instruction accepts an optional `gpu` field:
 | `"none"` | Synchronize and release a held GPU lease before the instruction |
 
 `auto` preserves the behaviour of programs written before this field existed.
-Known host-only compile builtins release the lease, byte and CUDA-source uploads
-leave its current state unchanged, and other instructions acquire it. A compile
-may reacquire the lease for a short deferred driver or module-loading phase.
+Known host-only compile builtins release the lease, while other calls acquire
+it. A compile may reacquire the lease for a short deferred driver or
+module-loading phase.
 
 `required` and `none` override those defaults. A `required` host-only builtin
 keeps the lease while it runs; a `none` instruction promises that all of its
-work is GPU-free. This promise applies separately to a Python module's upload
-(which executes its top-level source) and each later call through its handle.
-The server trusts the promise; `none` is a scheduling declaration rather than a
-security boundary.
+work is GPU-free. The server trusts the promise; `none` is a scheduling
+declaration rather than a security boundary.
 
-The Python client exposes the same values on `Program.upload()`, `Program.run()`,
-and `Program.return_()`. It omits `gpu` from the wire when its value is `auto`.
+Uploads and returns do not accept `gpu`; they always acquire and retain the
+lease. The Python client exposes the field on `Program.run()` and omits it from
+the wire when its value is `auto`.
 
 ---
 

@@ -373,13 +373,12 @@ class CudaAwareRuntime(FakeRuntime):
 @pytest.mark.parametrize(
     "language,source,entry,acquires",
     [
-        # A CUDA upload runs nothing, so it never waits for a GPU.
-        ("cuda", "void go() {}", "go", 0),
-        # A Python upload execs the client's source, which could touch one.
+        # Uploads always hold the GPU, even when binding CUDA source runs nothing.
+        ("cuda", "void go() {}", "go", 1),
         ("python", "def main(x):\n    return x\n", None, 1),
     ],
 )
-def test_which_module_uploads_take_the_gpu(language, source, entry, acquires):
+def test_module_uploads_take_the_gpu(language, source, entry, acquires):
     lease = RecordingLease()
     program = Program([Upload("k", "module", source=source, entry=entry, language=language)])
     outcome = execute(program, CudaAwareRuntime(), lease)
