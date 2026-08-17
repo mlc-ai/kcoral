@@ -85,10 +85,13 @@ their memory among more concurrent benchmarks.
 Workers serve one request by default, then the pool replaces them before making
 the slot idle again. This gives submitted native code a fresh CUDA context and
 allocator state, so an out-of-bounds or race-sensitive kernel cannot make a later
-request depend on its process history. Trusted deployments can set
-`--max-requests-per-worker 0` to reuse workers for higher throughput; reset and
-poison detection still run, but CUDA undefined behaviour is then not guaranteed
-to reproduce identically across requests.
+request depend on its process history. The isolation applies to all CUDA-backed
+code, including Triton. Keep the default for untrusted submissions and error
+corpora. Use `--max-requests-per-worker 0` only for validated throughput
+benchmarks where worker reuse is intentional; reset and poison detection still
+run, but CUDA undefined behaviour is then not guaranteed to reproduce identically
+across requests. Record this setting when comparing throughput because replacing
+workers is especially visible for short requests.
 
 ## Python client
 

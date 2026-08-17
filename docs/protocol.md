@@ -693,6 +693,14 @@ launch error found while draining the request also answers `FAILED`, but the
 server clears the error and keeps that healthy worker. A timeout, a worker
 failure outside an instruction, or a server failure answers `ERROR`.
 
+By default, a worker is also replaced after every completed request, whether or
+not an error was detected. The fresh-process isolation covers all CUDA-backed
+code, including Triton, and should remain enabled for untrusted submissions and
+error corpora. `max_requests_per_worker: 0` reuses workers and is intended only
+for validated throughput benchmarks. Record the setting with throughput results:
+process replacement has a measurable cost for short requests, while reuse lets
+undetected CUDA undefined behaviour influence a later request.
+
 ---
 
 ## Example

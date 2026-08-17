@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
@@ -30,7 +31,7 @@ def gpu_app(**overrides):
     return create_app(
         ServerConfig(
             gpus=[gpu_id],
-            workers_per_gpu=1,
+            workers_per_gpu=overrides.pop("workers_per_gpu", 1),
             max_requests_per_worker=overrides.pop("max_requests_per_worker", 0),
             **overrides,
         ),
@@ -496,6 +497,37 @@ def main():
         raise ExecutionError("runtime", str(exc)) from exc
 """
 
+TRITON_ILLEGAL_ACCESS = """
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def _bad(x):
+    offsets = tl.arange(0, 256)
+    tl.store(x + offsets + 1_000_000_000_000, 1.0)
+
+def run(x):
+    torch.cuda.set_device(x.device)
+    _bad[(1,)](x)
+"""
+
+TRITON_FILL = """
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def _fill(x):
+    offsets = tl.arange(0, 256)
+    tl.store(x + offsets, offsets.to(tl.float32))
+
+def run(x):
+    torch.cuda.set_device(x.device)
+    _fill[(1,)](x)
+    return x
+"""
+
 
 @pytest.mark.skipif(
     os.environ.get("BENCH_GPU_TEST") != "1",
@@ -679,6 +711,71 @@ def test_illegal_access_replaces_only_worker_and_next_gpu_request_recovers():
     assert recovered.status_code == 200
     assert recovered_result["status"] == "COMPLETED", recovered_result.get("error")
     assert recovered_binary["return:0"] == bytes(16 * 4)
+
+
+@pytest.mark.skipif(
+    os.environ.get("BENCH_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
+)
+def test_parallel_triton_illegal_accesses_match_and_workers_recover(tmp_path, monkeypatch):
+    import numpy as np
+
+    monkeypatch.setenv("TRITON_CACHE_DIR", str(tmp_path / "triton-cache"))
+
+    def triton_program(source, *, return_output=False):
+        instructions = [
+            {"op": "upload", "id": "kernel", "kind": "module", "source": source, "entry": "run"},
+            {
+                "op": "run",
+                "id": "output",
+                "fn": "builtin.empty",
+                "args": [{"shape": [256], "dtype": "float32"}],
+            },
+            {
+                "op": "run",
+                "id": "invoke",
+                "fn": {"$ref": "kernel"},
+                "args": [{"$ref": "output"}],
+            },
+        ]
+        if return_output:
+            instructions.append({"op": "return", "key": "output", "value": {"$ref": "invoke"}})
+        return {"instructions": instructions, "options": {"timeout_seconds": 300}}
+
+    poison_program = triton_program(TRITON_ILLEGAL_ACCESS)
+    healthy_program = triton_program(TRITON_FILL, return_output=True)
+    app = gpu_app(
+        workers_per_gpu=2,
+        max_requests_per_worker=0,
+        worker_wait_timeout_seconds=300,
+    )
+    with TestClient(app) as client:
+        original_pids = [worker._proc.pid for worker in app.state.pool._workers]
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            failed = list(executor.map(lambda _: post_program(client, poison_program), range(8)))
+        replacement_pids = [worker._proc.pid for worker in app.state.pool._workers]
+        recovered = post_program(client, healthy_program)
+
+    failed_results = [response_parts(response)[0] for response in failed]
+    error_signatures = {json.dumps(result["error"], sort_keys=True) for result in failed_results}
+    assert all(response.status_code == 200 for response in failed)
+    assert all(result["status"] == "FAILED" for result in failed_results)
+    assert len(error_signatures) == 1
+    error = failed_results[0]["error"]
+    assert error["kind"] == "runtime", error
+    assert error["instruction_id"] == "invoke"
+    assert "illegal memory access" in error["message"].lower()
+    assert all(new_pid != old_pid for old_pid, new_pid in zip(original_pids, replacement_pids))
+
+    recovered_result, recovered_binary = response_parts(recovered)
+    assert recovered.status_code == 200
+    assert recovered_result["status"] == "COMPLETED", json.dumps(
+        recovered_result.get("error"), sort_keys=True
+    )
+    np.testing.assert_array_equal(
+        np.frombuffer(recovered_binary["return:0"], dtype=np.float32),
+        np.arange(256, dtype=np.float32),
+    )
 
 
 @pytest.mark.skipif(
