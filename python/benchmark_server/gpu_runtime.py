@@ -382,6 +382,20 @@ def _library_dir() -> Path:
     return _LIBRARY_DIR
 
 
-def gpu_runtime_factory() -> GPURuntime:
-    """Picklable factory so a spawned worker can build the runtime."""
-    return GPURuntime()
+class _GPURuntimeFactory:
+    """Two-phase, picklable factory used by spawned GPU workers."""
+
+    def prepare(self) -> Callable[[], GPURuntime]:
+        """Import mandatory dependencies without creating a CUDA context."""
+        _require_torch_and_ffi()
+        import torch
+
+        if torch.cuda.is_initialized():  # guard future changes to preparation
+            raise RuntimeError("GPU runtime preparation unexpectedly initialized CUDA")
+        return GPURuntime
+
+    def __call__(self) -> GPURuntime:
+        return GPURuntime()
+
+
+gpu_runtime_factory = _GPURuntimeFactory()
