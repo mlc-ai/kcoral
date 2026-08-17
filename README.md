@@ -81,9 +81,9 @@ GPU it is not using; they take turns through a per-GPU lease and never run on it
 at once. Raising `--workers-per-gpu` keeps the GPUs busier at the cost of dividing
 their memory among more concurrent benchmarks.
 
-For sustained B200 validation with the checked-in AccRL CUDA and Triton corpora,
-see [`docs/stress_b200.md`](docs/stress_b200.md). The stress driver selects both
-languages by default.
+For sustained H100 or B200 validation with the checked-in AccRL CUDA and Triton
+corpora, see [`docs/stress_gpu.md`](docs/stress_gpu.md). The stress driver keeps
+the kernel's source architecture separate from the GPU it runs on.
 
 ## Python client
 

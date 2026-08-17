@@ -17,7 +17,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ACCRL_ROOT = Path("/home/yixind/AccRL")
 DEFAULT_EVAL_ROOT = Path("/home/yixind/AccRL-exps/eval_runs")
-DEFAULT_OUTPUT = REPO_ROOT / "b200_triton_kernels"
+DEFAULT_OUTPUT = REPO_ROOT / "triton_kernels"
 
 
 def load_accrl_extractor(accrl_root: Path) -> Callable[..., str]:
@@ -118,11 +118,35 @@ def trajectory_definition(
     return summary_definition
 
 
-def source_architecture(trajectory: dict) -> str | None:
+def source_architecture(trajectory: dict, plan: dict[str, Any] | None = None) -> str | None:
     environment = trajectory.get("info", {}).get("config", {}).get("environment", {})
     variables = environment.get("env", {}) if isinstance(environment, dict) else {}
-    value = variables.get("TRITON_GPU_ARCH")
-    return str(value) if value else None
+    value = str(variables.get("TRITON_GPU_ARCH", "")).strip().lower()
+    aliases = {
+        "b200": "b200",
+        "blackwell": "b200",
+        "sm_100a": "b200",
+        "h100": "h100",
+        "hopper": "h100",
+        "sm_90a": "h100",
+    }
+    if value in aliases:
+        return aliases[value]
+    prompt_tag = str((plan or {}).get("prompt_tag", "")).lower()
+    if prompt_tag.startswith("triton-blackwell"):
+        return "b200"
+    if prompt_tag.startswith("triton-hopper"):
+        return "h100"
+    return None
+
+
+def require_source_architecture(trajectory: dict, plan: dict[str, Any]) -> str:
+    source_arch = source_architecture(trajectory, plan)
+    if source_arch is None:
+        raise ValueError(
+            f"cannot determine Triton source architecture for prompt {plan.get('prompt_tag')!r}"
+        )
+    return source_arch
 
 
 def extract_turns(
@@ -200,7 +224,7 @@ def record_source(
             else None
         ),
         "prompt_tag": plan.get("prompt_tag"),
-        "source_arch": source_architecture(trajectory),
+        "source_arch": require_source_architecture(trajectory, plan),
         "exit_status": trajectory.get("info", {}).get("exit_status"),
         "evaluation_status": evaluation_status,
         "valid_triton_shape": "@triton.jit" in source and "def run(" in source,
@@ -273,7 +297,7 @@ def extract_corpus(
                         "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
                         "trajectory": trajectory_path.relative_to(eval_root).as_posix(),
                         "prompt_tag": plan.get("prompt_tag"),
-                        "source_arch": source_architecture(trajectory),
+                        "source_arch": require_source_architecture(trajectory, plan),
                         "exit_status": trajectory.get("info", {}).get("exit_status"),
                         "evaluation_status": None,
                         "valid_triton_shape": "@triton.jit" in source and "def run(" in source,

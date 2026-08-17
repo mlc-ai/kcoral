@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract every CUDA turn from Blackwell trajectories using AccRL's extractor."""
+"""Extract CUDA turns from explicitly selected GPU architectures."""
 
 from __future__ import annotations
 
@@ -17,8 +17,9 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ACCRL_ROOT = Path("/home/yixind/AccRL")
 DEFAULT_EVAL_ROOT = Path("/home/yixind/AccRL-exps/eval_runs")
-DEFAULT_OUTPUT = REPO_ROOT / "b200_cuda_kernels"
+DEFAULT_OUTPUT = REPO_ROOT / "cuda_kernels"
 CORRECTNESS_DIR = "turn_correctness_arch"
+SOURCE_ARCHITECTURES = ("b200", "h100")
 
 
 def load_accrl_extractor(accrl_root: Path) -> Callable[[dict], list[tuple[int, str, str]]]:
@@ -72,14 +73,25 @@ def summary_definitions(run_dir: Path) -> dict[str, str]:
     }
 
 
-def is_blackwell_trajectory(trajectory: dict, plan: dict[str, Any]) -> bool:
+def source_architecture(trajectory: dict, plan: dict[str, Any]) -> str | None:
     environment = trajectory.get("info", {}).get("config", {}).get("environment", {})
     variables = environment.get("env", {}) if isinstance(environment, dict) else {}
     gencode = str(variables.get("NVCC_GENCODE", "")).lower()
     if "compute_100a" in gencode or "sm_100a" in gencode:
-        return True
+        return "b200"
+    if "compute_90a" in gencode or "sm_90a" in gencode:
+        return "h100"
     prompt_tag = str(plan.get("prompt_tag", "")).lower()
-    return prompt_tag == "b200" or prompt_tag.startswith("b200-")
+    if prompt_tag == "b200" or prompt_tag.startswith("b200-"):
+        return "b200"
+    if (
+        prompt_tag == "h100"
+        or prompt_tag.startswith("h100-")
+        or prompt_tag == "hopper"
+        or prompt_tag.startswith("hopper-")
+    ):
+        return "h100"
+    return None
 
 
 def trajectory_definition(
@@ -134,7 +146,9 @@ def extract_corpus(
     accrl_root: Path,
     eval_root: Path,
     output: Path,
+    source_arches: set[str] | None = None,
 ) -> dict[str, Any]:
+    selected_arches = source_arches or {"b200"}
     extract_turns = load_accrl_extractor(accrl_root)
     output.mkdir(parents=True, exist_ok=False)
     manifest_path = output / "manifest.jsonl"
@@ -158,7 +172,8 @@ def extract_corpus(
                     skipped["unreadable_trajectory"] += 1
                     continue
                 plan = plans.get(exp_name, {})
-                if not is_blackwell_trajectory(trajectory, plan):
+                source_arch = source_architecture(trajectory, plan)
+                if source_arch not in selected_arches:
                     continue
                 turns = extract_turns(trajectory)
                 if not turns:
@@ -177,6 +192,8 @@ def extract_corpus(
                     kernel_path.write_text(kernel_source, encoding="utf-8")
                     digest = hashlib.sha256(kernel_source.encode("utf-8")).hexdigest()
                     record = {
+                        "language": "cuda",
+                        "source_arch": source_arch,
                         "workload": definition,
                         "run": run_dir.name,
                         "experiment": exp_name,
@@ -191,15 +208,20 @@ def extract_corpus(
                         json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
                     )
                     counts[definition] += 1
+                    counts[f"source_arch:{source_arch}"] += 1
     finally:
         manifest.close()
     correctness_csvs = copy_turn_correctness_csvs(
         eval_root=eval_root, output=output, runs=represented_runs
     )
+    by_workload = {
+        name: count for name, count in counts.items() if not name.startswith("source_arch:")
+    }
     return {
         "trajectories": trajectories,
-        "kernels": sum(counts.values()),
-        "by_workload": dict(sorted(counts.items())),
+        "kernels": sum(by_workload.values()),
+        "by_workload": dict(sorted(by_workload.items())),
+        "by_source_arch": {arch: counts[f"source_arch:{arch}"] for arch in sorted(selected_arches)},
         "skipped": dict(sorted(skipped.items())),
         "turn_correctness_arch_csvs": correctness_csvs,
     }
@@ -210,6 +232,15 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--accrl-root", type=Path, default=DEFAULT_ACCRL_ROOT)
     result.add_argument("--eval-root", type=Path, default=DEFAULT_EVAL_ROOT)
     result.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    result.add_argument(
+        "--source-arch",
+        action="append",
+        choices=SOURCE_ARCHITECTURES,
+        help=(
+            "architecture to extract; repeat to include both "
+            "(default: b200, because the H100 corpus is much larger)"
+        ),
+    )
     result.add_argument("--force", action="store_true", help="replace an existing output directory")
     return result
 
@@ -231,12 +262,13 @@ def main(argv: list[str] | None = None) -> int:
             accrl_root=args.accrl_root.resolve(),
             eval_root=args.eval_root.resolve(),
             output=output,
+            source_arches=set(args.source_arch or ["b200"]),
         )
         print(json.dumps(summary, indent=2, sort_keys=True))
         print(f"Output: {output}", file=sys.stderr)
         return 0
     except (OSError, ValueError) as exc:
-        print(f"extract_accrl_blackwell_kernels: {exc}", file=sys.stderr)
+        print(f"extract_accrl_cuda_kernels: {exc}", file=sys.stderr)
         return 2
 
 

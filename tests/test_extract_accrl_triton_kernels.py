@@ -130,7 +130,7 @@ def test_extract_corpus_includes_trajectory_success_and_workspace(tmp_path, monk
         "success",
         "workspace",
     }
-    assert all(record["source_arch"] == "hopper" for record in records)
+    assert all(record["source_arch"] == "h100" for record in records)
     assert all(record["language"] == "triton" for record in records)
     assert records[0]["turn"] == 1
     assert any(record["evaluation_status"] == "PASSED" for record in records)
@@ -138,7 +138,7 @@ def test_extract_corpus_includes_trajectory_success_and_workspace(tmp_path, monk
 
 
 def test_checked_in_manifest_covers_all_triton_sources():
-    corpus = Path(__file__).parents[1] / "b200_triton_kernels"
+    corpus = Path(__file__).parents[1] / "triton_kernels"
     records = [
         json.loads(line)
         for line in (corpus / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
@@ -150,7 +150,7 @@ def test_checked_in_manifest_covers_all_triton_sources():
         "success",
         "workspace",
     }
-    assert {record["source_arch"] for record in records} == {"hopper", "blackwell"}
+    assert {record["source_arch"] for record in records} == {"h100", "b200"}
     assert len({record["run"] for record in records}) >= 30
     paths = {record["path"] for record in records}
     assert paths == {path.relative_to(corpus).as_posix() for path in corpus.rglob("*.py")}

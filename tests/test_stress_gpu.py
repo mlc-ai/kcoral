@@ -4,12 +4,14 @@ import json
 import sys
 from pathlib import Path
 
-_SCRIPT = Path(__file__).parents[1] / "scripts" / "stress_b200.py"
-_SPEC = importlib.util.spec_from_file_location("stress_b200", _SCRIPT)
+import pytest
+
+_SCRIPT = Path(__file__).parents[1] / "scripts" / "stress_gpu.py"
+_SPEC = importlib.util.spec_from_file_location("stress_gpu", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
-stress_b200 = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = stress_b200
-_SPEC.loader.exec_module(stress_b200)
+stress_gpu = importlib.util.module_from_spec(_SPEC)
+sys.modules[_SPEC.name] = stress_gpu
+_SPEC.loader.exec_module(stress_gpu)
 
 
 CUDA_SOURCE = """
@@ -30,10 +32,24 @@ def run(a, b, c):
 """
 
 
-def _write_kernel(root: Path, workload: str, name: str, source: str = CUDA_SOURCE) -> Path:
+def _write_kernel(
+    root: Path,
+    workload: str,
+    name: str,
+    source: str = CUDA_SOURCE,
+    *,
+    source_arch: str = "b200",
+) -> Path:
     path = root / workload / "run" / "success" / "exp_000" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(source)
+    record = {
+        "path": path.relative_to(root).as_posix(),
+        "source_arch": source_arch,
+        "source_kind": path.parent.name,
+    }
+    with (root / "manifest.jsonl").open("a", encoding="utf-8") as manifest:
+        manifest.write(json.dumps(record) + "\n")
     return path
 
 
@@ -43,7 +59,7 @@ def test_discover_kernels_deduplicates_and_interleaves(tmp_path):
     _write_kernel(tmp_path, "mha_with_lse_d128", "kernel_t0.cu", "mha zero")
     _write_kernel(tmp_path, "mha_with_lse_d128", "kernel_t1.cu", "mha zero")
 
-    kernels = stress_b200.discover_kernels(
+    kernels = stress_gpu.discover_kernels(
         tmp_path,
         ["gemm_n7168_k5120", "mha_with_lse_d128"],
         kernels_per_workload=0,
@@ -61,7 +77,7 @@ def test_discover_kernels_can_keep_duplicates(tmp_path):
     _write_kernel(tmp_path, "gemm_n7168_k5120", "kernel_t0.cu")
     _write_kernel(tmp_path, "gemm_n7168_k5120", "kernel_t1.cu")
 
-    kernels = stress_b200.discover_kernels(
+    kernels = stress_gpu.discover_kernels(
         tmp_path,
         ["gemm_n7168_k5120"],
         kernels_per_workload=0,
@@ -72,6 +88,15 @@ def test_discover_kernels_can_keep_duplicates(tmp_path):
     assert kernels[0].sha256 == kernels[1].sha256
 
 
+def test_discover_kernels_requires_architecture_manifest(tmp_path):
+    path = tmp_path / "gemm_n7168_k5120" / "kernel_t0.cu"
+    path.parent.mkdir(parents=True)
+    path.write_text(CUDA_SOURCE)
+
+    with pytest.raises(ValueError, match="architecture manifest"):
+        stress_gpu.discover_kernels(tmp_path)
+
+
 def test_discover_kernels_interleaves_cuda_and_triton_without_cross_dedup(tmp_path):
     cuda_root = tmp_path / "cuda"
     triton_root = tmp_path / "triton"
@@ -80,7 +105,7 @@ def test_discover_kernels_interleaves_cuda_and_triton_without_cross_dedup(tmp_pa
     _write_kernel(triton_root, "gemm_n7168_k5120", "kernel_t0.py", "same source")
     _write_kernel(triton_root, "mha_with_lse_d128", "kernel_t0.py", "triton mha")
 
-    kernels = stress_b200.discover_kernels(
+    kernels = stress_gpu.discover_kernels(
         {"cuda": cuda_root, "triton": triton_root},
         ["gemm_n7168_k5120", "mha_with_lse_d128"],
         kernels_per_workload=0,
@@ -99,7 +124,7 @@ def test_triton_only_default_skips_workloads_missing_from_that_corpus(tmp_path):
     triton_root = tmp_path / "triton"
     _write_kernel(triton_root, "gemm_n7168_k5120", "kernel_t0.py", TRITON_SOURCE)
 
-    kernels = stress_b200.discover_kernels({"triton": triton_root}, selected_languages=["triton"])
+    kernels = stress_gpu.discover_kernels({"triton": triton_root}, selected_languages=["triton"])
 
     assert [(kernel.language, kernel.workload) for kernel in kernels] == [
         ("triton", "gemm_n7168_k5120")
@@ -116,7 +141,7 @@ def test_bounded_triton_selection_prefers_success_sources(tmp_path):
     )
     success = _write_kernel(triton_root, "gemm_n7168_k5120", "success/kernel_v0.py", "success")
 
-    kernels = stress_b200.discover_kernels(
+    kernels = stress_gpu.discover_kernels(
         {"triton": triton_root},
         selected_workloads=["gemm_n7168_k5120"],
         selected_languages=["triton"],
@@ -125,7 +150,7 @@ def test_bounded_triton_selection_prefers_success_sources(tmp_path):
     assert [kernel.path for kernel in kernels] == [success]
 
 
-def test_bounded_triton_selection_prefers_blackwell_manifest_source(tmp_path):
+def test_source_arch_filter_normalizes_legacy_triton_manifest_values(tmp_path):
     triton_root = tmp_path / "triton"
     hopper = _write_kernel(triton_root, "gemm_n7168_k5120", "success/kernel_v0.py", "hopper")
     blackwell = _write_kernel(
@@ -147,21 +172,23 @@ def test_bounded_triton_selection_prefers_blackwell_manifest_source(tmp_path):
         "".join(json.dumps(record) + "\n" for record in records)
     )
 
-    kernels = stress_b200.discover_kernels(
+    kernels = stress_gpu.discover_kernels(
         {"triton": triton_root},
         selected_workloads=["gemm_n7168_k5120"],
         selected_languages=["triton"],
+        selected_source_arches=["b200"],
     )
 
     assert [kernel.path for kernel in kernels] == [blackwell]
 
 
 def test_checked_in_default_corpora_select_both_languages():
-    kernels = stress_b200.discover_kernels(
+    kernels = stress_gpu.discover_kernels(
         {
-            "cuda": stress_b200.DEFAULT_CUDA_CORPUS,
-            "triton": stress_b200.DEFAULT_TRITON_CORPUS,
-        }
+            "cuda": stress_gpu.DEFAULT_CUDA_CORPUS,
+            "triton": stress_gpu.DEFAULT_TRITON_CORPUS,
+        },
+        selected_source_arches=["b200"],
     )
 
     assert {kernel.language for kernel in kernels} == {"cuda", "triton"}
@@ -169,11 +196,29 @@ def test_checked_in_default_corpora_select_both_languages():
     assert sum(kernel.language == "triton" for kernel in kernels) == 5
 
 
+def test_h100_selection_uses_available_triton_and_rejects_explicit_missing_cuda():
+    corpora = {
+        "cuda": stress_gpu.DEFAULT_CUDA_CORPUS,
+        "triton": stress_gpu.DEFAULT_TRITON_CORPUS,
+    }
+
+    kernels = stress_gpu.discover_kernels(corpora, selected_source_arches=["h100"])
+
+    assert {kernel.language for kernel in kernels} == {"triton"}
+    assert len(kernels) == 5
+    with pytest.raises(ValueError, match="no cuda kernels"):
+        stress_gpu.discover_kernels(
+            corpora,
+            selected_languages=["cuda"],
+            selected_source_arches=["h100"],
+        )
+
+
 def test_build_gemm_program_compiles_allocates_and_benchmarks(tmp_path):
     path = _write_kernel(tmp_path, "gemm_n7168_k5120", "kernel_t0.cu")
-    kernel = stress_b200.Kernel("gemm_n7168_k5120", path, "kernel_t0.cu", "digest")
+    kernel = stress_gpu.Kernel("gemm_n7168_k5120", path, "kernel_t0.cu", "digest")
 
-    instructions = stress_b200.build_program(
+    instructions = stress_gpu.build_program(
         kernel, seed=7, warmup=2, repeat=9, flush_l2=True
     ).instructions
 
@@ -199,7 +244,7 @@ def test_build_gemm_program_compiles_allocates_and_benchmarks(tmp_path):
 
 def test_build_triton_program_uploads_python_without_cuda_compilation(tmp_path):
     path = _write_kernel(tmp_path, "gemm_n7168_k5120", "kernel_t0.py", TRITON_SOURCE)
-    kernel = stress_b200.Kernel(
+    kernel = stress_gpu.Kernel(
         "gemm_n7168_k5120",
         path,
         "kernel_t0.py",
@@ -207,7 +252,7 @@ def test_build_triton_program_uploads_python_without_cuda_compilation(tmp_path):
         language="triton",
     )
 
-    instructions = stress_b200.build_program(
+    instructions = stress_gpu.build_program(
         kernel, seed=7, warmup=2, repeat=9, flush_l2=True
     ).instructions
 
@@ -229,9 +274,9 @@ def test_build_triton_program_uploads_python_without_cuda_compilation(tmp_path):
 
 def test_backward_program_zeroes_accumulation_outputs(tmp_path):
     path = _write_kernel(tmp_path, "mha_bwd_d128", "kernel_t0.cu")
-    kernel = stress_b200.Kernel("mha_bwd_d128", path, "kernel_t0.cu", "digest")
+    kernel = stress_gpu.Kernel("mha_bwd_d128", path, "kernel_t0.cu", "digest")
 
-    instructions = stress_b200.build_program(
+    instructions = stress_gpu.build_program(
         kernel, seed=0, warmup=1, repeat=1, flush_l2=False
     ).instructions
 
@@ -244,7 +289,7 @@ def test_backward_program_zeroes_accumulation_outputs(tmp_path):
 
 
 def test_request_allocator_honors_fixed_request_count():
-    allocator = stress_b200.RequestAllocator(
+    allocator = stress_gpu.RequestAllocator(
         started=100.0, duration_seconds=None, requests=3, rate=0.0
     )
 
@@ -257,6 +302,8 @@ def test_summarize_reports_distributions_and_failures():
         {
             "status": "COMPLETED",
             "language": "cuda",
+            "source_arch": "b200",
+            "target_arch": "b200",
             "workload": "gemm",
             "client_elapsed_ms": 10,
             "queue_ms": 1,
@@ -268,13 +315,15 @@ def test_summarize_reports_distributions_and_failures():
         {
             "status": "HTTP_503",
             "language": "triton",
+            "source_arch": "h100",
+            "target_arch": "b200",
             "workload": "gemm",
             "client_elapsed_ms": 20,
             "error_kind": "busy",
         },
     ]
 
-    summary = stress_b200.summarize(records, elapsed_seconds=2)
+    summary = stress_gpu.summarize(records, elapsed_seconds=2)
 
     assert summary["requests"] == 2
     assert summary["completed"] == 1
@@ -283,6 +332,10 @@ def test_summarize_reports_distributions_and_failures():
     assert summary["statuses"] == {"COMPLETED": 1, "HTTP_503": 1}
     assert summary["errors"] == {"busy": 1}
     assert summary["by_language"] == {"cuda": 1, "triton": 1}
+    assert summary["by_source_arch"] == {"b200": 1, "h100": 1}
+    assert summary["by_target_arch"] == {"b200": 2}
+    assert summary["by_language_source_arch"] == {"cuda/b200": 1, "triton/h100": 1}
+    assert summary["by_source_target_arch"] == {"b200->b200": 1, "h100->b200": 1}
     assert summary["client_elapsed_ms"]["p50"] == 15
     assert summary["lease_held_ms"]["p99"] == 3
 
@@ -300,14 +353,21 @@ def test_validate_args_supplies_default_duration():
         kernels_per_workload=1,
     )
 
-    stress_b200.validate_args(args)
+    stress_gpu.validate_args(args)
 
     assert args.duration_seconds == 60.0
 
 
 def test_parser_selects_both_languages_by_default():
-    args = stress_b200.parser().parse_args([])
+    args = stress_gpu.parser().parse_args([])
 
     assert args.language is None
-    assert args.cuda_corpus == stress_b200.DEFAULT_CUDA_CORPUS
-    assert args.triton_corpus == stress_b200.DEFAULT_TRITON_CORPUS
+    assert args.source_arch is None
+    assert args.cuda_corpus == stress_gpu.DEFAULT_CUDA_CORPUS
+    assert args.triton_corpus == stress_gpu.DEFAULT_TRITON_CORPUS
+
+
+def test_target_architecture_distinguishes_h100_and_b200():
+    assert stress_gpu.target_architecture("sm_90a") == "h100"
+    assert stress_gpu.target_architecture("sm_100a") == "b200"
+    assert stress_gpu.target_architecture("sm_80") is None

@@ -22,16 +22,35 @@ from benchmark_server import Client, Program
 from benchmark_server.client import BenchmarkServerError, ProtocolError, TransportError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CUDA_CORPUS = REPO_ROOT / "b200_cuda_kernels"
-DEFAULT_TRITON_CORPUS = REPO_ROOT / "b200_triton_kernels"
+DEFAULT_CUDA_CORPUS = REPO_ROOT / "cuda_kernels"
+DEFAULT_TRITON_CORPUS = REPO_ROOT / "triton_kernels"
 LANGUAGES = ("cuda", "triton")
+SOURCE_ARCHITECTURES = ("b200", "h100")
+TARGET_TO_SOURCE_ARCH = {"sm_100a": "b200", "sm_90a": "h100"}
 KERNEL_GLOBS = {"cuda": "kernel_t*.cu", "triton": "*.py"}
+
+
+def normalize_source_arch(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    aliases = {
+        "b200": "b200",
+        "blackwell": "b200",
+        "sm_100a": "b200",
+        "compute_100a": "b200",
+        "h100": "h100",
+        "hopper": "h100",
+        "sm_90a": "h100",
+        "compute_90a": "h100",
+    }
+    return aliases.get(normalized)
 
 
 def corpus_metadata(corpus: Path, language: str) -> dict[str, dict[str, Any]]:
     manifest_path = corpus / "manifest.jsonl"
     if not manifest_path.is_file():
-        return {}
+        raise ValueError(f"missing architecture manifest: {manifest_path}")
     metadata: dict[str, dict[str, Any]] = {}
     with manifest_path.open(encoding="utf-8") as stream:
         for line in stream:
@@ -41,6 +60,10 @@ def corpus_metadata(corpus: Path, language: str) -> dict[str, dict[str, Any]]:
                 continue
             path = record.get("path")
             if isinstance(path, str):
+                source_arch = normalize_source_arch(record.get("source_arch"))
+                if source_arch is None:
+                    raise ValueError(f"{manifest_path}: {path!r} has no supported source_arch")
+                record["source_arch"] = source_arch
                 metadata[path] = record
 
     if language == "cuda":
@@ -69,13 +92,12 @@ def kernel_path_key(
     language: str,
     corpus: Path,
     metadata: dict[str, dict[str, Any]],
-) -> tuple[int, int, int, str]:
-    """Prefer target-native, known-correct sources for bounded selections."""
+) -> tuple[int, int, str]:
+    """Prefer known-correct, directly runnable sources for bounded selections."""
     relative = path.relative_to(corpus).as_posix()
     record = metadata.get(relative, {})
     if language != "triton":
-        return (0 if record.get("known_success") else 1, 0, 0, relative)
-    architecture_rank = 0 if record.get("source_arch") == "blackwell" else 1
+        return (0 if record.get("known_success") else 1, 0, relative)
     source_kind = record.get("source_kind", path.parent.name)
     if source_kind == "success":
         source_rank = 0
@@ -84,7 +106,7 @@ def kernel_path_key(
     else:
         source_rank = 2
     shape_rank = 0 if record.get("valid_triton_shape", True) else 1
-    return (architecture_rank, source_rank, shape_rank, relative)
+    return (source_rank, shape_rank, relative)
 
 
 @dataclass(frozen=True)
@@ -157,6 +179,7 @@ class Kernel:
     relative_path: str
     sha256: str
     language: str = "cuda"
+    source_arch: str = "unknown"
 
 
 def discover_kernels(
@@ -165,8 +188,9 @@ def discover_kernels(
     kernels_per_workload: int = 1,
     keep_duplicates: bool = False,
     selected_languages: list[str] | None = None,
+    selected_source_arches: list[str] | None = None,
 ) -> list[Kernel]:
-    """Return a deterministic selection interleaved by workload and language."""
+    """Return a deterministic selection interleaved by workload, language, and arch."""
     names = selected_workloads or sorted(WORKLOADS)
     unknown = sorted(set(names) - set(WORKLOADS))
     if unknown:
@@ -183,8 +207,12 @@ def discover_kernels(
     unknown_languages = sorted(set(languages) - set(LANGUAGES))
     if unknown_languages:
         raise ValueError(f"unsupported language(s): {', '.join(unknown_languages)}")
+    source_arches = selected_source_arches or list(SOURCE_ARCHITECTURES)
+    unknown_arches = sorted(set(source_arches) - set(SOURCE_ARCHITECTURES))
+    if unknown_arches:
+        raise ValueError(f"unsupported source architecture(s): {', '.join(unknown_arches)}")
 
-    by_group: dict[tuple[str, str], list[Kernel]] = {}
+    by_group: dict[tuple[str, str, str], list[Kernel]] = {}
     for language in languages:
         language_corpus = corpora.get(language)
         if language_corpus is None:
@@ -192,49 +220,62 @@ def discover_kernels(
         if not language_corpus.is_dir():
             raise ValueError(f"missing {language} corpus directory: {language_corpus}")
         metadata = corpus_metadata(language_corpus, language)
-        for workload in names:
-            root = language_corpus / workload
-            if not root.is_dir():
-                continue
-            kernels: list[Kernel] = []
-            seen: set[str] = set()
-            paths = sorted(
-                root.rglob(KERNEL_GLOBS[language]),
-                key=lambda path: kernel_path_key(path, language, language_corpus, metadata),
-            )
-            for path in paths:
-                digest = hashlib.sha256(path.read_bytes()).hexdigest()
-                if not keep_duplicates and digest in seen:
+        for source_arch in source_arches:
+            for workload in names:
+                root = language_corpus / workload
+                if not root.is_dir():
                     continue
-                seen.add(digest)
-                kernels.append(
-                    Kernel(
-                        workload=workload,
-                        path=path,
-                        relative_path=path.relative_to(language_corpus).as_posix(),
-                        sha256=digest,
-                        language=language,
-                    )
+                kernels: list[Kernel] = []
+                seen: set[str] = set()
+                paths = sorted(
+                    root.rglob(KERNEL_GLOBS[language]),
+                    key=lambda path: kernel_path_key(path, language, language_corpus, metadata),
                 )
-                if kernels_per_workload and len(kernels) >= kernels_per_workload:
-                    break
-            if kernels:
-                by_group[(language, workload)] = kernels
+                for path in paths:
+                    relative = path.relative_to(language_corpus).as_posix()
+                    record = metadata.get(relative)
+                    path_source_arch = (
+                        record.get("source_arch") if record is not None else "unknown"
+                    )
+                    if path_source_arch != source_arch:
+                        continue
+                    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                    if not keep_duplicates and digest in seen:
+                        continue
+                    seen.add(digest)
+                    kernels.append(
+                        Kernel(
+                            workload=workload,
+                            path=path,
+                            relative_path=relative,
+                            sha256=digest,
+                            language=language,
+                            source_arch=source_arch,
+                        )
+                    )
+                    if kernels_per_workload and len(kernels) >= kernels_per_workload:
+                        break
+                if kernels:
+                    by_group[(language, source_arch, workload)] = kernels
 
-    for language in languages:
-        if not any(group_language == language for group_language, _ in by_group):
-            raise ValueError(f"no {language} kernels found in selected workloads")
+    if selected_languages is not None:
+        for language in languages:
+            if not any(group_language == language for group_language, _, _ in by_group):
+                raise ValueError(f"no {language} kernels found in selected workloads")
     if selected_workloads is not None:
         for workload in names:
-            if not any(group_workload == workload for _, group_workload in by_group):
+            if not any(group_workload == workload for _, _, group_workload in by_group):
                 raise ValueError(f"no kernels found for workload {workload!r}")
+    if not by_group:
+        raise ValueError("no kernels found for the selected languages and source architectures")
 
-    # Avoid running every kernel from one language/workload before touching the next.
+    # Avoid exhausting one language/architecture/workload before touching the next.
     groups = [
-        (language, workload)
+        (language, source_arch, workload)
         for workload in names
         for language in languages
-        if (language, workload) in by_group
+        for source_arch in source_arches
+        if (language, source_arch, workload) in by_group
     ]
     interleaved: list[Kernel] = []
     for index in range(max(len(items) for items in by_group.values())):
@@ -338,6 +379,26 @@ def summarize(records: list[dict[str, Any]], elapsed_seconds: float) -> dict[str
         ),
         "by_workload": dict(sorted(Counter(record["workload"] for record in records).items())),
         "by_language": dict(sorted(Counter(record["language"] for record in records).items())),
+        "by_source_arch": dict(
+            sorted(Counter(record["source_arch"] for record in records).items())
+        ),
+        "by_target_arch": dict(
+            sorted(Counter(record["target_arch"] for record in records).items())
+        ),
+        "by_language_source_arch": dict(
+            sorted(
+                Counter(
+                    f"{record['language']}/{record['source_arch']}" for record in records
+                ).items()
+            )
+        ),
+        "by_source_target_arch": dict(
+            sorted(
+                Counter(
+                    f"{record['source_arch']}->{record['target_arch']}" for record in records
+                ).items()
+            )
+        ),
         "client_elapsed_ms": distribution(client_ms),
         "queue_ms": distribution(queue_ms),
         "lease_wait_ms": distribution(lease_wait_ms),
@@ -384,6 +445,9 @@ def execute_one(
         "sequence": sequence,
         "worker_slot": worker_slot,
         "language": kernel.language,
+        "source_arch": kernel.source_arch,
+        "target_arch": args.target_arch,
+        "target_sm": args.target_sm,
         "workload": kernel.workload,
         "kernel": kernel.relative_path,
         "sha256": kernel.sha256,
@@ -541,6 +605,15 @@ def parser() -> argparse.ArgumentParser:
         help="kernel language to include; repeat the flag (default: both)",
     )
     result.add_argument(
+        "--source-arch",
+        action="append",
+        choices=SOURCE_ARCHITECTURES,
+        help=(
+            "source GPU architecture; repeat to include both "
+            "(default: match server; --list shows both)"
+        ),
+    )
+    result.add_argument(
         "--workload",
         action="append",
         choices=sorted(WORKLOADS),
@@ -550,7 +623,9 @@ def parser() -> argparse.ArgumentParser:
         "--kernels-per-workload",
         type=int,
         default=1,
-        help=("number selected per language/workload; 0 uses every kernel (default: 1)"),
+        help=(
+            "number selected per language/source-arch/workload; 0 uses every kernel (default: 1)"
+        ),
     )
     result.add_argument(
         "--keep-duplicates",
@@ -571,7 +646,13 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--timeout-seconds", type=float, default=300.0)
     result.add_argument("--connect-timeout-seconds", type=float, default=10.0)
     result.add_argument("--seed", type=int, default=0)
-    result.add_argument("--allow-non-b200", action="store_true")
+    result.add_argument(
+        "--allow-unsupported-target",
+        "--allow-non-b200",
+        dest="allow_unsupported_target",
+        action="store_true",
+        help="allow a target other than H100 (sm_90a) or B200 (sm_100a)",
+    )
     result.add_argument("--allow-errors", action="store_true")
     result.add_argument("--list", action="store_true", help="list selected kernels and exit")
     result.add_argument("--output", type=Path)
@@ -597,43 +678,66 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("kernels-per-workload must be non-negative")
 
 
-def default_output() -> Path:
+def default_output(target_arch: str) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return REPO_ROOT / "stress-results" / f"b200-{stamp}.jsonl"
+    return REPO_ROOT / "stress-results" / f"{target_arch}-{stamp}.jsonl"
+
+
+def target_architecture(target_sm: Any) -> str | None:
+    return TARGET_TO_SOURCE_ARCH.get(target_sm) if isinstance(target_sm, str) else None
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         validate_args(args)
-        kernels = discover_kernels(
-            {
-                "cuda": args.cuda_corpus.resolve(),
-                "triton": args.triton_corpus.resolve(),
-            },
-            args.workload,
-            args.kernels_per_workload,
-            args.keep_duplicates,
-            args.language,
-        )
+        corpora = {
+            "cuda": args.cuda_corpus.resolve(),
+            "triton": args.triton_corpus.resolve(),
+        }
         if args.list:
+            kernels = discover_kernels(
+                corpora,
+                args.workload,
+                args.kernels_per_workload,
+                args.keep_duplicates,
+                args.language,
+                args.source_arch,
+            )
             for kernel in kernels:
                 print(
-                    f"{kernel.language}\t{kernel.workload}\t{kernel.sha256}\t{kernel.relative_path}"
+                    f"{kernel.language}\t{kernel.source_arch}\t{kernel.workload}\t"
+                    f"{kernel.sha256}\t{kernel.relative_path}"
                 )
             return 0
 
         with Client(args.url, connect_timeout_seconds=args.connect_timeout_seconds) as client:
             health = client.health()
-        arch = (health.get("target") or {}).get("arch")
-        if arch != "sm_100a" and not args.allow_non_b200:
-            raise RuntimeError(f"server target is {arch!r}; expected B200 target 'sm_100a'")
+        target_sm = (health.get("target") or {}).get("arch")
+        target_arch = target_architecture(target_sm)
+        if target_arch is None and not args.allow_unsupported_target:
+            raise RuntimeError(
+                f"server target is {target_sm!r}; expected H100 'sm_90a' or B200 'sm_100a'"
+            )
+        args.target_arch = target_arch or "unknown"
+        args.target_sm = target_sm
+        source_arches = args.source_arch or ([target_arch] if target_arch is not None else [])
+        if not source_arches:
+            raise ValueError("--source-arch is required for an unsupported target")
+        kernels = discover_kernels(
+            corpora,
+            args.workload,
+            args.kernels_per_workload,
+            args.keep_duplicates,
+            args.language,
+            source_arches,
+        )
 
         if args.prewarm:
             print(f"Prewarming {len(kernels)} kernels...", file=sys.stderr)
             prewarm(args, kernels)
 
-        output = (args.output or default_output()).resolve()
+        output = (args.output or default_output(args.target_arch)).resolve()
         sink = JsonlSink(output)
         sink.write(
             {
@@ -641,9 +745,22 @@ def main(argv: list[str] | None = None) -> int:
                 "timestamp": utc_now(),
                 "url": args.url,
                 "health": health,
+                "target_arch": args.target_arch,
+                "target_sm": args.target_sm,
+                "source_arches": source_arches,
                 "kernel_count": len(kernels),
                 "kernel_count_by_language": dict(
                     sorted(Counter(kernel.language for kernel in kernels).items())
+                ),
+                "kernel_count_by_source_arch": dict(
+                    sorted(Counter(kernel.source_arch for kernel in kernels).items())
+                ),
+                "kernel_count_by_language_source_arch": dict(
+                    sorted(
+                        Counter(
+                            f"{kernel.language}/{kernel.source_arch}" for kernel in kernels
+                        ).items()
+                    )
                 ),
                 "concurrency": args.concurrency,
                 "rate": args.rate,
@@ -671,7 +788,7 @@ def main(argv: list[str] | None = None) -> int:
         ValueError,
         RuntimeError,
     ) as exc:
-        print(f"stress_b200: {exc}", file=sys.stderr)
+        print(f"stress_gpu: {exc}", file=sys.stderr)
         return 2
 
 

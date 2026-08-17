@@ -1,23 +1,26 @@
-# AccRL Blackwell CUDA turn corpus
+# AccRL CUDA turn corpus
 
 This directory contains every CUDA kernel that AccRL could extract from every
-assistant turn of the locally available Blackwell experiments. Kernels are not
-filtered by evaluation outcome: compile errors, incorrect results, runtime
-errors, timeouts, and successful turns are all retained.
+assistant turn of the selected architecture cohort. The checked-in corpus is the
+B200 cohort; every manifest row says `source_arch: "b200"` explicitly. Kernels
+are not filtered by evaluation outcome: compile errors, incorrect results,
+runtime errors, timeouts, and successful turns are all retained.
 
 ## Extraction
 
 The corpus is generated with AccRL's
 `fib_runtime/mini_swe_agent_docker/plots/analyze_kernel_per_turn.py` utility.
-The wrapper in this repository selects trajectories whose environment targets
-`compute_100a`/`sm_100a`, with `b200-*` experiment tags as a fallback, and calls
-AccRL's `extract_turns_from_trajectory()` function:
+The wrapper classifies `compute_100a`/`sm_100a` as B200 and
+`compute_90a`/`sm_90a` as H100, with experiment tags as a fallback, then filters
+on the explicitly selected architecture before calling AccRL's
+`extract_turns_from_trajectory()` function:
 
 ```bash
-uv run python scripts/extract_accrl_blackwell_kernels.py \
+uv run python scripts/extract_accrl_cuda_kernels.py \
   --accrl-root /home/yixind/dev/AccRL \
   --eval-root /home/yixind/AccRL-exps/eval_runs \
-  --output ./b200_cuda_kernels \
+  --source-arch b200 \
+  --output ./cuda_kernels \
   --force
 ```
 
@@ -30,7 +33,7 @@ Each workload has one top-level subdirectory. Paths preserve the evaluation run,
 experiment, and assistant-turn index:
 
 ```text
-b200_cuda_kernels/
+cuda_kernels/
   <workload>/
     <evaluation-run>/
       <experiment>/
@@ -40,12 +43,12 @@ b200_cuda_kernels/
 For example:
 
 ```text
-b200_cuda_kernels/gemm_n7168_k5120/glm52-b200-gemm/exp_000/kernel_t0.cu
+cuda_kernels/gemm_n7168_k5120/glm52-b200-gemm/exp_000/kernel_t0.cu
 ```
 
 [`manifest.jsonl`](manifest.jsonl) records the workload, run, experiment, turn,
-relative source trajectory, prompt tag, trajectory exit status, and SHA-256 for
-all extracted files.
+source architecture, relative source trajectory, prompt tag, trajectory exit
+status, and SHA-256 for all extracted files.
 
 Run-level correctness and architecture tables are copied into
 [`turn_correctness_arch/`](turn_correctness_arch/). Files are keyed by evaluation
@@ -74,7 +77,7 @@ Start benchmark-server on the B200, then run a conservative one-minute test
 with one kernel from each workload:
 
 ```bash
-uv run python scripts/stress_b200.py \
+uv run python scripts/stress_gpu.py \
   --url http://127.0.0.1:8000 \
   --duration-seconds 60 \
   --concurrency 8
@@ -83,7 +86,8 @@ uv run python scripts/stress_b200.py \
 Use the entire content-deduplicated turn corpus for a longer run:
 
 ```bash
-uv run python scripts/stress_b200.py \
+uv run python scripts/stress_gpu.py \
+  --source-arch b200 \
   --kernels-per-workload 0 \
   --duration-seconds 3600 \
   --concurrency 16 \
