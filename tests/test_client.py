@@ -255,7 +255,7 @@ def test_program_builder_emits_explicit_gpu_placement():
 
     automatic = Program()
     automatic.run(id="result", fn="builtin.structural")
-    assert "gpu" not in automatic.instructions[0]
+    assert automatic.instructions[0]["gpu"] == "auto"
 
     with pytest.raises(ValueError, match="gpu must be"):
         Program().run(id="bad", fn="builtin.structural", gpu="sometimes")

@@ -168,8 +168,9 @@ class Program:
             _reference(argument) if isinstance(argument, Register) else argument
             for argument in (args or [])
         ]
-        instruction = {"op": "run", "id": id, "fn": wire_fn, "args": wire_args}
-        _set_gpu(instruction, gpu)
+        if gpu not in ("auto", "required", "none"):
+            raise ValueError("gpu must be 'auto', 'required', or 'none'")
+        instruction = {"op": "run", "id": id, "fn": wire_fn, "args": wire_args, "gpu": gpu}
         self._add_id(id)
         self._instructions.append(instruction)
         return Register(id)
@@ -202,13 +203,6 @@ class Program:
         if instruction_id in self._ids:
             raise ValueError(f"duplicate instruction id: {instruction_id!r}")
         self._ids.add(instruction_id)
-
-
-def _set_gpu(instruction: dict[str, Any], gpu: GPURequirement) -> None:
-    if gpu not in ("auto", "required", "none"):
-        raise ValueError("gpu must be 'auto', 'required', or 'none'")
-    if gpu != "auto":
-        instruction["gpu"] = gpu
 
 
 @dataclass

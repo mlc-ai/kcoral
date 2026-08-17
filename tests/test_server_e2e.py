@@ -68,7 +68,13 @@ def scalar_program():
     return {
         "instructions": [
             {"op": "upload", "id": "fn", "kind": "module", "source": ADD_ONE},
-            {"op": "run", "id": "answer", "fn": {"$ref": "fn"}, "args": [41]},
+            {
+                "op": "run",
+                "id": "answer",
+                "fn": {"$ref": "fn"},
+                "args": [41],
+                "gpu": "auto",
+            },
             {"op": "return", "key": "answer", "value": {"$ref": "answer"}},
         ]
     }
@@ -104,9 +110,9 @@ def test_completed_program_returns_only_selected_values():
 def test_failed_instruction_stops_after_a_return_that_already_ran():
     program = {
         "instructions": [
-            {"op": "run", "id": "ok", "fn": "builtin.structural"},
+            {"op": "run", "id": "ok", "fn": "builtin.structural", "gpu": "auto"},
             {"op": "return", "key": "ok", "value": {"$ref": "ok"}},
-            {"op": "run", "id": "bad", "fn": "builtin.nope"},
+            {"op": "run", "id": "bad", "fn": "builtin.nope", "gpu": "auto"},
             {"op": "return", "key": "never", "value": {"$ref": "ok"}},
         ]
     }
@@ -261,7 +267,7 @@ def test_request_and_response_size_limits():
     program = {
         "instructions": [
             {"op": "upload", "id": "fn", "kind": "module", "source": source},
-            {"op": "run", "id": "value", "fn": {"$ref": "fn"}},
+            {"op": "run", "id": "value", "fn": {"$ref": "fn"}, "gpu": "auto"},
             {"op": "return", "key": "value", "value": {"$ref": "value"}},
         ]
     }
@@ -278,7 +284,7 @@ def test_request_and_response_size_limits():
 def test_binary_response_uses_multipart():
     program = {
         "instructions": [
-            {"op": "run", "id": "value", "fn": "builtin.binary"},
+            {"op": "run", "id": "value", "fn": "builtin.binary", "gpu": "auto"},
             {"op": "return", "key": "value", "value": {"$ref": "value"}},
         ]
     }
@@ -302,7 +308,7 @@ def test_stdout_stderr_and_output_limit_are_request_level():
     program = {
         "instructions": [
             {"op": "upload", "id": "fn", "kind": "module", "source": source},
-            {"op": "run", "id": "value", "fn": {"$ref": "fn"}},
+            {"op": "run", "id": "value", "fn": {"$ref": "fn"}, "gpu": "auto"},
         ],
         "options": {"output_limit_bytes": 8},
     }
@@ -314,10 +320,20 @@ def test_stdout_stderr_and_output_limit_are_request_level():
 
 def test_timeout_and_worker_crash_statuses():
     timeout_program = {
-        "instructions": [{"op": "run", "id": "sleep", "fn": "builtin.sleep", "args": [3]}],
+        "instructions": [
+            {
+                "op": "run",
+                "id": "sleep",
+                "fn": "builtin.sleep",
+                "args": [3],
+                "gpu": "auto",
+            }
+        ],
         "options": {"timeout_seconds": 0.5},
     }
-    crash_program = {"instructions": [{"op": "run", "id": "crash", "fn": "builtin.crash"}]}
+    crash_program = {
+        "instructions": [{"op": "run", "id": "crash", "fn": "builtin.crash", "gpu": "auto"}]
+    }
     with make_client() as client:
         timeout = post_program(client, timeout_program)
         crash = post_program(client, crash_program)
@@ -335,7 +351,9 @@ def test_timeout_and_worker_crash_statuses():
 
 
 def test_poisoned_context_returns_runtime_then_next_request_recovers():
-    poison_program = {"instructions": [{"op": "run", "id": "bad", "fn": "builtin.poison"}]}
+    poison_program = {
+        "instructions": [{"op": "run", "id": "bad", "fn": "builtin.poison", "gpu": "auto"}]
+    }
     app = create_app(
         ServerConfig(gpus=[0], workers_per_gpu=1), runtime_factory=fake_runtime_factory
     )
@@ -367,7 +385,13 @@ def _spawner_program(source, pid_file):
     return {
         "instructions": [
             {"op": "upload", "id": "fn", "kind": "module", "source": source},
-            {"op": "run", "id": "call", "fn": {"$ref": "fn"}, "args": [pid_file]},
+            {
+                "op": "run",
+                "id": "call",
+                "fn": {"$ref": "fn"},
+                "args": [pid_file],
+                "gpu": "auto",
+            },
         ],
         "options": {"timeout_seconds": 1},
     }
@@ -430,18 +454,21 @@ def test_real_kernel_end_to_end():
                 "id": "output",
                 "fn": "builtin.empty",
                 "args": [{"shape": [256], "dtype": "float32"}],
+                "gpu": "auto",
             },
             {
                 "op": "run",
                 "id": "compiled",
                 "fn": "builtin.compile_tirx",
                 "args": [{"$ref": "kernel"}, {"N": 256}],
+                "gpu": "auto",
             },
             {
                 "op": "run",
                 "id": "invoke",
                 "fn": {"$ref": "compiled"},
                 "args": [{"$ref": "input"}, {"$ref": "output"}],
+                "gpu": "auto",
             },
             {"op": "return", "key": "output", "value": {"$ref": "output"}},
         ],
@@ -566,12 +593,14 @@ def test_prebuilt_library_is_cached_like_a_tensor(tmp_path):
                 "id": "output",
                 "fn": "builtin.empty",
                 "args": [{"shape": [256], "dtype": "float32"}],
+                "gpu": "auto",
             },
             {
                 "op": "run",
                 "id": "invoke",
                 "fn": {"$ref": "kernel"},
                 "args": [{"$ref": "input"}, {"$ref": "output"}],
+                "gpu": "auto",
             },
             {"op": "return", "key": "output", "value": {"$ref": "output"}},
         ],
@@ -629,18 +658,21 @@ def test_cuda_c_kernel_end_to_end():
                 "id": "output",
                 "fn": "builtin.empty",
                 "args": [{"shape": [256], "dtype": "float32"}],
+                "gpu": "auto",
             },
             {
                 "op": "run",
                 "id": "compiled",
                 "fn": "builtin.compile_cuda",
                 "args": [{"$ref": "kernel"}],
+                "gpu": "auto",
             },
             {
                 "op": "run",
                 "id": "invoke",
                 "fn": {"$ref": "compiled"},
                 "args": [{"$ref": "input"}, {"$ref": "output"}],
+                "gpu": "auto",
             },
             {"op": "return", "key": "output", "value": {"$ref": "output"}},
         ],
@@ -676,9 +708,10 @@ def test_illegal_access_replaces_only_worker_and_next_gpu_request_recovers():
                 "id": "compiled",
                 "fn": "builtin.compile_cuda",
                 "args": [{"$ref": "kernel"}],
+                "gpu": "auto",
             },
-            {"op": "run", "id": "invoke", "fn": {"$ref": "compiled"}},
-            {"op": "run", "id": "sync", "fn": {"$ref": "sync_fn"}},
+            {"op": "run", "id": "invoke", "fn": {"$ref": "compiled"}, "gpu": "auto"},
+            {"op": "run", "id": "sync", "fn": {"$ref": "sync_fn"}, "gpu": "auto"},
         ],
         "options": {"timeout_seconds": 300},
     }
@@ -689,6 +722,7 @@ def test_illegal_access_replaces_only_worker_and_next_gpu_request_recovers():
                 "id": "q",
                 "fn": "builtin.zeros",
                 "args": [{"shape": [16], "dtype": "float32"}],
+                "gpu": "auto",
             },
             {"op": "return", "key": "q", "value": {"$ref": "q"}},
         ],
@@ -730,12 +764,14 @@ def test_parallel_triton_illegal_accesses_match_and_workers_recover(tmp_path, mo
                 "id": "output",
                 "fn": "builtin.empty",
                 "args": [{"shape": [256], "dtype": "float32"}],
+                "gpu": "auto",
             },
             {
                 "op": "run",
                 "id": "invoke",
                 "fn": {"$ref": "kernel"},
                 "args": [{"$ref": "output"}],
+                "gpu": "auto",
             },
         ]
         if return_output:
@@ -798,8 +834,9 @@ def test_cuda_last_error_fails_current_request_without_replacing_worker():
                 "id": "compiled",
                 "fn": "builtin.compile_cuda",
                 "args": [{"$ref": "kernel"}],
+                "gpu": "auto",
             },
-            {"op": "run", "id": "invoke", "fn": {"$ref": "compiled"}},
+            {"op": "run", "id": "invoke", "fn": {"$ref": "compiled"}, "gpu": "auto"},
         ],
         "options": {"timeout_seconds": 300},
     }
@@ -810,6 +847,7 @@ def test_cuda_last_error_fails_current_request_without_replacing_worker():
                 "id": "q",
                 "fn": "builtin.zeros",
                 "args": [{"shape": [16], "dtype": "float32"}],
+                "gpu": "auto",
             },
             {"op": "return", "key": "q", "value": {"$ref": "q"}},
         ],
@@ -852,6 +890,7 @@ def test_compiling_does_not_hold_the_gpu():
                     "id": "compiled",
                     "fn": "builtin.compile_tirx",
                     "args": [{"$ref": "kernel"}, {"N": 256}],
+                    "gpu": "auto",
                 },
                 {"op": "return", "key": "ok", "value": {"$ref": "compiled"}},
             ],

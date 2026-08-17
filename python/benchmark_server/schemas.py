@@ -304,7 +304,10 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
 
 def _parse_run(item: dict[str, Any], index: int, handles: set[str]) -> Run:
     _check_fields(
-        item, {"op", "id", "fn", "args", "gpu"}, {"op", "id", "fn"}, f"instruction {index}"
+        item,
+        {"op", "id", "fn", "args", "gpu"},
+        {"op", "id", "fn", "gpu"},
+        f"instruction {index}",
     )
     gpu = _parse_gpu(item, index)
     raw_fn = item["fn"]
@@ -349,7 +352,7 @@ def _parse_return(
 
 
 def _parse_gpu(item: dict[str, Any], index: int) -> GPURequirement:
-    gpu = item.get("gpu", "auto")
+    gpu = item["gpu"]
     if gpu not in ("auto", "required", "none"):
         raise ValidationError(f"instruction {index}: 'gpu' must be 'auto', 'required', or 'none'")
     return gpu

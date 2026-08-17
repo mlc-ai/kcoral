@@ -148,6 +148,7 @@ def test_parse_bytes_upload():
             {"op": "run", "id": "x", "fn": "builtin.zeros", "gpu": "sometimes"},
             "'gpu' must be",
         ),
+        ({"op": "run", "id": "x", "fn": "builtin.zeros"}, "missing field"),
         (
             {"op": "upload", "id": "x", "kind": "bytes", "blob": TENSOR_HASH, "gpu": "none"},
             "unknown field",
@@ -196,8 +197,8 @@ def test_duplicate_handles_and_return_keys_rejected():
         parse_program(
             {
                 "instructions": [
-                    {"op": "run", "id": "x", "fn": "builtin.zeros"},
-                    {"op": "run", "id": "x", "fn": "builtin.empty"},
+                    {"op": "run", "id": "x", "fn": "builtin.zeros", "gpu": "auto"},
+                    {"op": "run", "id": "x", "fn": "builtin.empty", "gpu": "auto"},
                 ]
             }
         )
@@ -205,7 +206,7 @@ def test_duplicate_handles_and_return_keys_rejected():
         parse_program(
             {
                 "instructions": [
-                    {"op": "run", "id": "x", "fn": "builtin.zeros"},
+                    {"op": "run", "id": "x", "fn": "builtin.zeros", "gpu": "auto"},
                     {"op": "return", "key": "x", "value": {"$ref": "x"}},
                     {"op": "return", "key": "x", "value": {"$ref": "x"}},
                 ]
@@ -217,9 +218,15 @@ def test_returns_may_interleave_with_uploads_and_runs():
     program = parse_program(
         {
             "instructions": [
-                {"op": "run", "id": "x", "fn": "builtin.zeros"},
+                {"op": "run", "id": "x", "fn": "builtin.zeros", "gpu": "auto"},
                 {"op": "return", "key": "x", "value": {"$ref": "x"}},
-                {"op": "run", "id": "y", "fn": "builtin.zeros", "args": [{"$ref": "x"}]},
+                {
+                    "op": "run",
+                    "id": "y",
+                    "fn": "builtin.zeros",
+                    "args": [{"$ref": "x"}],
+                    "gpu": "auto",
+                },
                 {"op": "return", "key": "y", "value": {"$ref": "y"}},
             ]
         }
@@ -233,7 +240,13 @@ def test_forward_references_rejected():
         parse_program(
             {
                 "instructions": [
-                    {"op": "run", "id": "x", "fn": "builtin.zeros", "args": [{"$ref": "y"}]}
+                    {
+                        "op": "run",
+                        "id": "x",
+                        "fn": "builtin.zeros",
+                        "args": [{"$ref": "y"}],
+                        "gpu": "auto",
+                    }
                 ]
             }
         )
@@ -243,7 +256,7 @@ def test_forward_references_rejected():
             {
                 "instructions": [
                     {"op": "return", "key": "x", "value": {"$ref": "x"}},
-                    {"op": "run", "id": "x", "fn": "builtin.zeros"},
+                    {"op": "run", "id": "x", "fn": "builtin.zeros", "gpu": "auto"},
                 ]
             }
         )
@@ -264,7 +277,7 @@ def test_invalid_options_rejected(options):
     with pytest.raises(ValidationError):
         parse_program(
             {
-                "instructions": [{"op": "run", "id": "x", "fn": "builtin.zeros"}],
+                "instructions": [{"op": "run", "id": "x", "fn": "builtin.zeros", "gpu": "auto"}],
                 "options": options,
             }
         )

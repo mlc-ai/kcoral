@@ -122,7 +122,7 @@ Each `upload` and `run` has a unique string `id`. A reference has the exact form
 
 ### GPU placement
 
-Every `run` instruction accepts an optional `gpu` field:
+Every `run` instruction requires a `gpu` field:
 
 | Value | Behaviour |
 |---|---|
@@ -130,10 +130,9 @@ Every `run` instruction accepts an optional `gpu` field:
 | `"required"` | Acquire the worker's GPU lease before the instruction |
 | `"none"` | Synchronize and release a held GPU lease before the instruction |
 
-`auto` preserves the behaviour of programs written before this field existed.
-Known host-only compile builtins release the lease, while other calls acquire
-it. A compile may reacquire the lease for a short deferred driver or
-module-loading phase.
+`auto` applies the server's built-in placement rules. Known host-only compile
+builtins release the lease, while other calls acquire it. A compile may
+reacquire the lease for a short deferred driver or module-loading phase.
 
 `required` and `none` override those defaults. A `required` host-only builtin
 keeps the lease while it runs; a `none` instruction promises that all of its
@@ -141,8 +140,8 @@ work is GPU-free. The server trusts the promise; `none` is a scheduling
 declaration rather than a security boundary.
 
 Uploads and returns do not accept `gpu`; they always acquire and retain the
-lease. The Python client exposes the field on `Program.run()` and omits it from
-the wire when its value is `auto`.
+lease. The Python client defaults its run parameter to `auto`, and every
+serialized run includes the resulting value.
 
 ---
 
@@ -236,9 +235,9 @@ on. What comes back is callable with plain tensors:
 
 ```json
 {"op": "run", "id": "compiled", "fn": "builtin.compile_cutedsl",
- "args": [{"$ref": "kernel"}, {"$ref": "x"}, {"$ref": "y"}]}
+ "args": [{"$ref": "kernel"}, {"$ref": "x"}, {"$ref": "y"}], "gpu": "auto"}
 {"op": "run", "id": "invoke", "fn": {"$ref": "compiled"},
- "args": [{"$ref": "x"}, {"$ref": "y"}]}
+ "args": [{"$ref": "x"}, {"$ref": "y"}], "gpu": "auto"}
 ```
 
 Nothing is cached, so resubmitting a kernel recompiles it. Uploading a prebuilt
@@ -256,9 +255,9 @@ three positive ints.
 ```json
 {"op": "run", "id": "compiled", "fn": "builtin.compile_triton",
  "args": [{"$ref": "kernel"}, {"$ref": "x"}, {"$ref": "y"}, 4096, 256,
-          {"grid": [16], "num_warps": 4}]}
+          {"grid": [16], "num_warps": 4}], "gpu": "auto"}
 {"op": "run", "id": "invoke", "fn": {"$ref": "compiled"},
- "args": [{"$ref": "x"}, {"$ref": "y"}, 4096, 256]}
+ "args": [{"$ref": "x"}, {"$ref": "y"}, 4096, 256], "gpu": "auto"}
 ```
 
 Triton specializes on the arguments — dtypes, `tl.constexpr` values, pointer
@@ -402,7 +401,7 @@ callable, so no compile instruction appears.
 
 ```json
 {"op": "run", "id": "invoke", "fn": {"$ref": "kernel"},
- "args": [{"$ref": "x"}, {"$ref": "y"}]}
+ "args": [{"$ref": "x"}, {"$ref": "y"}], "gpu": "auto"}
 ```
 
 ### Fields
@@ -453,7 +452,8 @@ Calls a function over earlier values and binds its result to a handle.
   "op": "run",
   "id": "compiled",
   "fn": "builtin.compile_tirx",
-  "args": [{"$ref": "kernel"}, {"N": 256}]
+  "args": [{"$ref": "kernel"}, {"N": 256}],
+  "gpu": "auto"
 }
 ```
 
@@ -463,6 +463,7 @@ Calls a function over earlier values and binds its result to a handle.
 | `id` | string | yes | Handle for the result |
 | `fn` | string \| `{"$ref": id}` | yes | Builtin name or callable handle |
 | `args` | array | no | Defaults to `[]` |
+| `gpu` | string | yes | `"auto"`, `"required"`, or `"none"` |
 
 Each argument equal to `{"$ref": "<id>"}` resolves to that handle. Other JSON
 values are passed as literals.
@@ -750,19 +751,22 @@ undetected CUDA undefined behaviour influence a later request.
       "op": "run",
       "id": "output",
       "fn": "builtin.empty",
-      "args": [{"shape": [256], "dtype": "float32"}]
+      "args": [{"shape": [256], "dtype": "float32"}],
+      "gpu": "auto"
     },
     {
       "op": "run",
       "id": "compiled",
       "fn": "builtin.compile_tirx",
-      "args": [{"$ref": "kernel"}, {"N": 256}]
+      "args": [{"$ref": "kernel"}, {"N": 256}],
+      "gpu": "auto"
     },
     {
       "op": "run",
       "id": "invoke",
       "fn": {"$ref": "compiled"},
-      "args": [{"$ref": "input"}, {"$ref": "output"}]
+      "args": [{"$ref": "input"}, {"$ref": "output"}],
+      "gpu": "auto"
     },
     {
       "op": "run",
@@ -773,7 +777,8 @@ undetected CUDA undefined behaviour influence a later request.
         {"$ref": "input"},
         {"$ref": "output"},
         {"warmup": 10, "repeat": 50}
-      ]
+      ],
+      "gpu": "auto"
     },
     {"op": "return", "key": "timing", "value": {"$ref": "timing"}},
     {"op": "return", "key": "output", "value": {"$ref": "output"}}

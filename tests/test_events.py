@@ -8,7 +8,7 @@ from benchmark_server.testing import fake_runtime_factory
 
 STRUCTURAL_PROGRAM = {
     "instructions": [
-        {"op": "run", "id": "value", "fn": "builtin.structural"},
+        {"op": "run", "id": "value", "fn": "builtin.structural", "gpu": "auto"},
         {"op": "return", "key": "value", "value": {"$ref": "value"}},
     ]
 }
@@ -54,7 +54,15 @@ def test_request_lifecycle_events(tmp_path):
 
 def test_worker_restart_event_on_timeout(tmp_path):
     program = {
-        "instructions": [{"op": "run", "id": "sleep", "fn": "builtin.sleep", "args": [5]}],
+        "instructions": [
+            {
+                "op": "run",
+                "id": "sleep",
+                "fn": "builtin.sleep",
+                "args": [5],
+                "gpu": "auto",
+            }
+        ],
         "options": {"timeout_seconds": 0.5},
     }
     with _make_client(tmp_path) as client:
@@ -68,7 +76,7 @@ def test_worker_restart_event_on_timeout(tmp_path):
 
 
 def test_worker_restart_event_on_poisoned_context(tmp_path):
-    program = {"instructions": [{"op": "run", "id": "bad", "fn": "builtin.poison"}]}
+    program = {"instructions": [{"op": "run", "id": "bad", "fn": "builtin.poison", "gpu": "auto"}]}
     with _make_client(tmp_path) as client:
         response = _post(client, program)
     assert response.status_code == 200
