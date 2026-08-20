@@ -51,6 +51,10 @@ def _binary(*_args: Any) -> bytes:
     return b"binary-result"
 
 
+def _pid(*_args: Any) -> int:
+    return os.getpid()
+
+
 def _crash(*_args: Any):
     os._exit(1)
 
@@ -115,8 +119,8 @@ class FakeRuntime:
             raise ExecutionError("runtime", f"unknown function: {name!r}")
         return fn
 
-    def is_cpu_only(self, name: str) -> bool:
-        return name == "builtin.cpu_sleep"
+    def cpu_only_builtins(self) -> frozenset[str]:
+        return frozenset({"builtin.cpu_sleep"})
 
     def synchronize(self) -> None:
         pass

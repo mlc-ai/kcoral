@@ -15,7 +15,21 @@ from __future__ import annotations
 # Imported for their registrations: a builtin exists only once its module runs.
 from . import core, cuda, cutedsl, tirx, triton
 from ._common import torch_dtype
-from ._registry import is_cpu_only, register_builtin, resolve
+from ._registry import (
+    cpu_only_builtins,
+    register_builtin,
+    resolve,
+    restore_registry,
+    snapshot_registry,
+)
 from .cuda import CUDASource
 
-__all__ = ["CUDASource", "is_cpu_only", "register_builtin", "resolve", "torch_dtype"]
+__all__ = [
+    "CUDASource",
+    "cpu_only_builtins",
+    "register_builtin",
+    "resolve",
+    "restore_registry",
+    "snapshot_registry",
+    "torch_dtype",
+]

@@ -40,7 +40,7 @@ class Runtime(Protocol):
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any: ...
     def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None: ...
     def builtin(self, name: str) -> Callable: ...
-    def is_cpu_only(self, name: str) -> bool: ...
+    def cpu_only_builtins(self) -> frozenset[str]: ...
     def synchronize(self) -> None: ...
     def take_last_error(self) -> str | None: ...
     def reset(self) -> None: ...
@@ -50,6 +50,7 @@ def execute(
     program: Program,
     runtime: Runtime,
     lease: Lease,
+    cpu_only: frozenset[str] = frozenset(),
     *,
     progress: Callable[[int], None] | None = None,
     cleanup_failed: Callable[[BaseException], None] | None = None,
@@ -57,8 +58,8 @@ def execute(
     """Run a program and serialize only values selected by return instructions.
 
     The GPU is claimed on the first instruction that needs it and given up around
-    each CPU-only builtin, so a worker compiling does not keep a GPU that another
-    worker could be measuring on.
+    each builtin the caller names in ``cpu_only``, so a worker compiling does not
+    keep a GPU that another worker could be measuring on.
     """
     env: dict[str, Any] = {}
     results: dict[str, dict[str, Any]] = {}
@@ -74,7 +75,7 @@ def execute(
                     current = instruction
                     if progress is not None:
                         progress(current_index)
-                    _place(instruction, runtime, lease)
+                    _place(instruction, cpu_only, runtime, lease)
                     if isinstance(instruction, Upload):
                         if instruction.kind == "module":
                             assert instruction.source is not None
@@ -130,11 +131,9 @@ def execute(
                     "engine", f"{type(exc).__name__}: {exc}", current_index, current
                 )
     finally:
-        # A CUDA fault is often first reported by an instruction-level sync and
-        # then reported again while draining/resetting the runtime. Preserve the
-        # original instruction error, but tell the worker owner that this process
-        # must not serve another request. If cleanup is where an asynchronous
-        # fault first surfaces, attribute it to the active instruction as runtime.
+        # A CUDA fault often surfaces twice: once at an instruction-level sync and
+        # again while draining. Keep the first error, tell the owner this process is
+        # done, and attribute a fault seen only here to the instruction that ran.
         try:
             _drop_gpu(runtime, lease)
         except Exception as exc:
@@ -155,11 +154,9 @@ def execute(
                 if cleanup_failed is not None:
                     cleanup_failed(exc)
             else:
-                # A launch-configuration error can live in CUDA's thread-local
-                # last-error slot without making synchronize fail. Consume it
-                # here so it belongs to this request rather than the next CUDA
-                # API call. Reading it clears the slot; the context is healthy
-                # and must not be replaced.
+                # A launch-configuration error can sit in CUDA's last-error slot
+                # without failing synchronize. Consume it here so it belongs to this
+                # request; reading clears it, and the context is still healthy.
                 if last_error is not None:
                     error = _instruction_error("runtime", last_error, current_index, current)
         env.clear()
@@ -195,11 +192,13 @@ def _invoke(instruction: Run, env: dict[str, Any], runtime: Runtime) -> Any:
     return fn(*args)
 
 
-def _place(instruction: Instruction, runtime: Runtime, lease: Lease) -> None:
+def _place(
+    instruction: Instruction, cpu_only: frozenset[str], runtime: Runtime, lease: Lease
+) -> None:
     """Hold or drop the GPU for the instruction about to run."""
     if isinstance(instruction, Run) and isinstance(instruction.fn, str):
         # A compile: hand the GPU over so another worker can measure on it.
-        if runtime.is_cpu_only(instruction.fn):
+        if instruction.fn in cpu_only:
             _drop_gpu(runtime, lease)
             return
     if isinstance(instruction, Upload) and instruction.kind == "bytes":

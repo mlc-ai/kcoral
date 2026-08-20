@@ -83,15 +83,11 @@ at once. Raising `--workers-per-gpu` keeps the GPUs busier at the cost of dividi
 their memory among more concurrent benchmarks.
 
 Workers serve one request by default, then the pool replaces them before making
-the slot idle again. This gives submitted native code a fresh CUDA context and
-allocator state, so an out-of-bounds or race-sensitive kernel cannot make a later
-request depend on its process history. The isolation applies to all CUDA-backed
-code, including Triton. Keep the default for untrusted submissions and error
-corpora. Use `--max-requests-per-worker 0` only for validated throughput
-benchmarks where worker reuse is intentional; reset and poison detection still
-run, but CUDA undefined behaviour is then not guaranteed to reproduce identically
-across requests. Record this setting when comparing throughput because replacing
-workers is especially visible for short requests.
+the slot idle again, so an out-of-bounds or race-sensitive kernel cannot make a
+later request depend on its process history. `--max-requests-per-worker 0` reuses
+workers instead: reset and poison detection still run, but undefined CUDA
+behaviour is no longer contained, and replacement costs enough on short requests
+that throughput numbers should record the setting.
 
 ## Python client
 

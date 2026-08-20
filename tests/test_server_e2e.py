@@ -342,8 +342,10 @@ def test_poisoned_context_returns_runtime_then_next_request_recovers():
     with TestClient(app) as client:
         original_pid = app.state.pool._workers[0]._proc.pid
         failed = post_program(client, poison_program)
-        replacement_pid = app.state.pool._workers[0]._proc.pid
+        # Read after the recovery request: the replacement is built once the poisoned
+        # worker's answer is out, so only that request proves it landed.
         recovered = post_program(client, scalar_program())
+        replacement_pid = app.state.pool._workers[0]._proc.pid
 
     assert failed.status_code == 200
     assert failed.json()["status"] == "FAILED"
@@ -698,8 +700,10 @@ def test_illegal_access_replaces_only_worker_and_next_gpu_request_recovers():
     with TestClient(app) as client:
         original_pid = app.state.pool._workers[0]._proc.pid
         failed = post_program(client, poison_program)
-        replacement_pid = app.state.pool._workers[0]._proc.pid
+        # Read after the recovery request: the replacement is built once the poisoned
+        # worker's answer is out, so only that request proves it landed.
         recovered = post_program(client, healthy_program)
+        replacement_pid = app.state.pool._workers[0]._proc.pid
 
     failed_result, _ = response_parts(failed)
     recovered_result, recovered_binary = response_parts(recovered)

@@ -23,7 +23,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from . import builtin_ops
+from . import builtin_ops, process_state
 from .errors import ExecutionError
 
 # The name an uploaded module's entry object takes when the upload names none.
@@ -49,6 +49,8 @@ class GPURuntime:
         _require_torch_and_ffi()
         self._seeded_fnames: list[str] = []  # linecache keys to clear on reset
         _warm_up()
+        self._builtins = builtin_ops.snapshot_registry()
+        self._process_state = process_state.snapshot()
 
     def load_module(self, source: str, entry: str | None = None, language: str = "python") -> Any:
         if language == "cuda":
@@ -88,8 +90,8 @@ class GPURuntime:
             raise ExecutionError("runtime", f"unknown function: {name!r}")
         return fn
 
-    def is_cpu_only(self, name: str) -> bool:
-        return builtin_ops.is_cpu_only(name)
+    def cpu_only_builtins(self) -> frozenset[str]:
+        return builtin_ops.cpu_only_builtins()
 
     def synchronize(self) -> None:
         """Drain the GPU, so no kernel of this request is still running when the
@@ -112,6 +114,8 @@ class GPURuntime:
     def reset(self) -> None:
         import torch
 
+        builtin_ops.restore_registry(self._builtins)
+        process_state.restore(self._process_state)
         for fname in self._seeded_fnames:
             linecache.cache.pop(fname, None)
         self._seeded_fnames.clear()
@@ -239,8 +243,9 @@ def _top_level_definitions(source: str) -> list[str]:
 
 def _warm_up() -> None:
     """Pay the once-per-worker costs here rather than inside the first request,
-    which would hold the GPU throughout: creating the CUDA context alone takes
-    about two seconds. Best-effort, since the optional deps may be absent."""
+    which would hold the GPU throughout: creating the CUDA context, and importing
+    tvm and the CuTe DSL runtime, all cost more than a request should. Best-effort,
+    since the optional deps may be absent."""
     try:
         import torch
 

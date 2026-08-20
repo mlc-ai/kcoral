@@ -46,6 +46,17 @@ def test_crash_replaces_worker_and_recovers(pool):
     assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
 
 
+def settled(pool):
+    """Wait out a background replacement, which now happens after the answer."""
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        with pool._replacing_lock:
+            if not pool._replacing:
+                return pool
+        time.sleep(0.01)
+    raise AssertionError("a worker replacement never finished")
+
+
 def test_poisoned_context_replaces_worker_and_recovers(pool):
     original_pid = pool._workers[0]._proc.pid
     outcome = pool.submit(prog(Run("bad", "builtin.poison", [])), timeout=10)
@@ -53,7 +64,7 @@ def test_poisoned_context_replaces_worker_and_recovers(pool):
     assert outcome.execution.error["kind"] == "runtime"
     assert outcome.execution.error["message"] == "simulated illegal memory access"
     assert outcome.worker_restart_reason == "poisoned_context"
-    assert pool._workers[0]._proc.pid != original_pid
+    assert settled(pool)._workers[0]._proc.pid != original_pid
     assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
 
 
@@ -77,7 +88,7 @@ def test_default_request_limit_replaces_worker_after_preserving_outcome():
 
         assert outcome.execution.status == "COMPLETED"
         assert outcome.worker_restart_reason == "request_limit"
-        assert pool._workers[0]._proc.pid != original_pid
+        assert settled(pool)._workers[0]._proc.pid != original_pid
     finally:
         pool.shutdown()
 
@@ -152,7 +163,16 @@ def test_worker_prepares_before_parent_grants_gpu_initialization(monkeypatch):
         ("send", {"__startup__": "prepared"}),
         ("recv", {"__startup__": "initialize"}),
         ("initialize", None),
-        ("send", {"__ready__": {"target": {"arch": "fake"}, "versions": {}}}),
+        (
+            "send",
+            {
+                "__ready__": {
+                    "target": {"arch": "fake"},
+                    "versions": {},
+                    "cpu_only": ["builtin.cpu_sleep"],
+                }
+            },
+        ),
     ]
 
 
@@ -330,7 +350,7 @@ def test_killing_a_worker_frees_the_gpu_it_held(shared_gpu_pool):
 def test_poison_replaces_only_the_corresponding_worker(shared_gpu_pool):
     before = [worker._proc.pid for worker in shared_gpu_pool._workers]
     outcome = shared_gpu_pool.submit(prog(Run("bad", "builtin.poison", [])), timeout=10)
-    after = [worker._proc.pid for worker in shared_gpu_pool._workers]
+    after = [worker._proc.pid for worker in settled(shared_gpu_pool)._workers]
 
     assert outcome.execution.error["kind"] == "runtime"
     assert outcome.worker_restart_reason == "poisoned_context"

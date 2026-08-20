@@ -101,10 +101,14 @@ def test_cpu_only_builtin_finalizes_deferred_gpu_result_under_lease():
 
             return lambda: DeferredGPUResult(finalize)
 
-        def is_cpu_only(self, name):
-            return name == "builtin.deferred" or super().is_cpu_only(name)
-
-    outcome = execute(Program([Run("compiled", "builtin.deferred", [])]), DeferredRuntime(), lease)
+    # Placement is the parent's word now, not the worker's: pass the set that a
+    # parent would have read out of this runtime before any program ran.
+    outcome = execute(
+        Program([Run("compiled", "builtin.deferred", [])]),
+        DeferredRuntime(),
+        lease,
+        cpu_only=frozenset({"builtin.deferred"}),
+    )
 
     assert outcome.status == "COMPLETED"
     assert events == ["acquire", "finalize", "release"]
@@ -373,3 +377,24 @@ def test_which_module_uploads_take_the_gpu(language, source, entry, acquires):
     outcome = execute(program, CudaAwareRuntime(), lease)
     assert outcome.status == "COMPLETED"
     assert lease.acquires == acquires
+
+
+def test_a_program_cannot_talk_its_worker_out_of_the_gpu_lease():
+    """Placement is the parent's call. A program that lists a GPU builtin as CPU-only
+    in the registry its own worker holds would otherwise hand back the lease and keep
+    using the GPU, spoiling whatever another worker was measuring on that card."""
+
+    class ClaimsEverythingIsCpuOnly(FakeRuntime):
+        def cpu_only_builtins(self):
+            return frozenset({"builtin.structural"})
+
+    program = Program([Run("x", "builtin.structural", [])])
+
+    lease = RecordingLease()
+    assert execute(program, ClaimsEverythingIsCpuOnly(), lease).status == "COMPLETED"
+    assert lease.acquires == 1  # the worker's own claim bought it nothing
+
+    lease = RecordingLease()
+    parent_says = frozenset({"builtin.structural"})
+    assert execute(program, FakeRuntime(), lease, cpu_only=parent_says).status == "COMPLETED"
+    assert lease.acquires == 0  # the parent's word is the one that counts

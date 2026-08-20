@@ -118,20 +118,25 @@ class WorkerPool:
     ) -> None:
         if max_requests_per_worker < 0:
             raise ValueError("max_requests_per_worker must be non-negative")
+        if workers_per_gpu < 1:
+            raise ValueError(f"workers_per_gpu must be at least 1, got {workers_per_gpu}")
         self._workers = [
             Worker(
-                g,
+                gpu,
                 runtime_factory,
                 termination_grace_seconds=termination_grace_seconds,
                 max_requests=max_requests_per_worker,
             )
-            for g in gpus
-            for _ in range(max(1, workers_per_gpu))
+            for gpu in gpus
+            for _ in range(workers_per_gpu)
         ]
         self._require_one_target()
         self._gpus = list(dict.fromkeys(gpus))
         self._idle = IdleWorkers(self._workers)
         self._leases = GPULeases(self._gpus)
+        self._replacing: set[threading.Thread] = set()
+        self._replacing_lock = threading.Lock()  # so shutdown can copy it mid-flight
+        self._closing = threading.Event()
 
     def submit(self, program, timeout: float, worker_wait_timeout: float = 0.0) -> SubmitOutcome:
         queue_started = time.monotonic()
@@ -140,6 +145,7 @@ class WorkerPool:
         if worker is None:
             raise PoolBusy("all workers busy", queue_ms=queue_ms)
         run_started = time.monotonic()
+        restart_reason = None
         try:
             execution, lease_wait_ms, lease_held_ms, restart_reason = worker.run(
                 program, timeout, self._leases
@@ -160,7 +166,37 @@ class WorkerPool:
             raise
         finally:
             self._leases.abandon(worker.gpu_id, worker)  # no-op unless it still holds
-            self._idle.release(worker)  # worker was respawned in-place on crash/timeout
+            self._release_or_replace(worker, restart_reason)
+
+    def _release_or_replace(self, worker: Worker, restart_reason: str | None) -> None:
+        """Hand the worker back, replacing its process first if it retired.
+
+        A retired worker has already exited, so it stays out of the idle set until
+        its replacement is ready. Building it on its own thread keeps it out of the
+        answered request's timings; a crash or timeout respawned in place already.
+        """
+        if restart_reason is None or self._closing.is_set():
+            self._idle.release(worker)
+            return
+        thread = threading.Thread(target=self._replace, args=(worker,), daemon=True)
+        with self._replacing_lock:
+            self._replacing.add(thread)
+        try:
+            thread.start()
+        except RuntimeError:  # no thread to be had; rebuild it here instead
+            with self._replacing_lock:
+                self._replacing.discard(thread)
+            self._replace(worker)
+
+    def _replace(self, worker: Worker) -> None:
+        try:
+            worker.replace(self._leases)
+        except Exception:
+            pass  # a respawn that failed leaves a dead worker; the next run revives it
+        finally:
+            self._idle.release(worker)
+            with self._replacing_lock:
+                self._replacing.discard(threading.current_thread())
 
     def _require_one_target(self) -> None:
         """One pool serves one target, so a client builds one library that any
@@ -203,5 +239,10 @@ class WorkerPool:
         return self._workers[0].versions
 
     def shutdown(self) -> None:
+        self._closing.set()
+        with self._replacing_lock:
+            replacing = list(self._replacing)
+        for thread in replacing:  # let a half-built replacement finish, not leak
+            thread.join(timeout=60)
         for w in self._workers:
             w.close()

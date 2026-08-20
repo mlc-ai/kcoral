@@ -37,12 +37,10 @@ lease and never run on it at once, so a measurement is unaffected by what else
 the server is doing. `lease_depth` is how many workers hold or are queued for
 that GPU.
 
-By default each worker generation serves one request
-(`--max-requests-per-worker 1`) and is replaced before its slot returns to the
-idle pool. This gives every request a fresh CUDA context and allocator state.
-Setting the option to `0` enables unlimited worker reuse for trusted kernels and
-higher throughput, at the cost of allowing undefined CUDA behaviour to depend on
-the process's prior allocation/module history.
+By default each worker serves one request (`--max-requests-per-worker 1`) and is
+replaced before its slot returns to the idle pool, so every request starts from a
+fresh CUDA context and allocator state. Setting it to `0` reuses workers, letting
+undefined CUDA behaviour depend on the process's prior history.
 
 ## Request envelope
 
@@ -692,14 +690,6 @@ only that worker process before it accepts another program. A non-sticky CUDA
 launch error found while draining the request also answers `FAILED`, but the
 server clears the error and keeps that healthy worker. A timeout, a worker
 failure outside an instruction, or a server failure answers `ERROR`.
-
-By default, a worker is also replaced after every completed request, whether or
-not an error was detected. The fresh-process isolation covers all CUDA-backed
-code, including Triton, and should remain enabled for untrusted submissions and
-error corpora. `max_requests_per_worker: 0` reuses workers and is intended only
-for validated throughput benchmarks. Record the setting with throughput results:
-process replacement has a measurable cost for short requests, while reuse lets
-undetected CUDA undefined behaviour influence a later request.
 
 ---
 

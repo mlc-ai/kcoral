@@ -1,8 +1,9 @@
 """The GPU worker: a child process that owns one GPU's CUDA context.
 
 The front-end never touches the GPU - it dispatches a Program to a worker over a
-pipe and reads back one execution outcome. A worker runs one program at a time
-and clears its per-request state after each (via the Runtime). The worker's
+pipe and reads back one execution outcome. A worker runs one program at a time,
+clears its per-request state after each (via the Runtime), and is replaced by a
+fresh process once it has served ``max_requests`` of them. The worker's
 `main` is the child entry point; :class:`Worker` is the parent-side handle with
 crash/timeout kill + respawn.
 """
@@ -50,7 +51,12 @@ def worker_main(gpu_id: int, conn, runtime_factory: Callable, max_requests: int)
         return
     try:
         runtime = prepared_factory()
-        described = {"target": runtime.target(), "versions": runtime.versions()}
+        described = {
+            "target": runtime.target(),
+            "versions": runtime.versions(),
+            # Read before an upload can edit it, so none can talk its worker off the lease.
+            "cpu_only": sorted(runtime.cpu_only_builtins()),
+        }
     except Exception as exc:  # runtime init failed — report and exit
         conn.send({"__error__": f"runtime init failed: {type(exc).__name__}: {exc}"})
         return
@@ -60,11 +66,12 @@ def worker_main(gpu_id: int, conn, runtime_factory: Callable, max_requests: int)
     requests_served = 0
     while True:
         try:
-            program = conn.recv()
+            message = conn.recv()
         except EOFError:
             return
-        if program is None:  # shutdown signal
+        if message is None:  # shutdown signal
             return
+        program, cpu_only = message
         cleanup_error: BaseException | None = None
 
         def mark_cleanup_failed(exc: BaseException) -> None:
@@ -76,19 +83,19 @@ def worker_main(gpu_id: int, conn, runtime_factory: Callable, max_requests: int)
             program,
             runtime,
             lease=lease,
+            cpu_only=cpu_only,
             progress=lambda index: conn.send({"__instruction__": index}),
             cleanup_failed=mark_cleanup_failed,
         )
         requests_served += 1
         if cleanup_error is not None:
-            # Send the request's result before this process is discarded. The
-            # parent respawns synchronously before returning the worker to idle.
+            # Send the request's result before this process is discarded. The parent
+            # respawns before returning the worker to idle, but after answering.
             conn.send({"__outcome__": outcome, "__replace_worker__": "poisoned_context"})
             return
         if max_requests and requests_served >= max_requests:
-            # A fresh process gives every request the same CUDA context and
-            # allocator starting state, including after submitted native code
-            # happened to return without a detectable sticky error.
+            # A fresh process gives every request the same context and allocator
+            # state, even where native code left no detectable sticky error.
             conn.send({"__outcome__": outcome, "__replace_worker__": "request_limit"})
             return
         conn.send(outcome)
@@ -113,6 +120,9 @@ class WorkerTimeout(Exception):
 
 class Worker:
     """Parent-side handle to one GPU worker process."""
+
+    # Replaced from the worker's ready message; empty means nothing runs off-lease.
+    cpu_only: frozenset[str] = frozenset()
 
     def __init__(
         self,
@@ -168,6 +178,7 @@ class Worker:
         described = msg["__ready__"]
         self.target: dict[str, str] = described["target"]
         self.versions: dict[str, str] = described["versions"]
+        self.cpu_only = frozenset(described["cpu_only"])
 
     def _await_startup_message(self, phase: str):
         try:
@@ -196,7 +207,7 @@ class Worker:
         held_since: float | None = None
         instruction_index: int | None = None
         try:
-            self._conn.send(program)
+            self._conn.send((program, self.cpu_only))
             while True:
                 waited_from = time.monotonic()
                 if not self._conn.poll(remaining):  # no answer by the deadline -> hung
@@ -211,9 +222,8 @@ class Worker:
                     if held_since is not None:
                         lease_held_ms += (time.monotonic() - held_since) * 1000
                     outcome = message.get("__outcome__")
-                    reason = message["__replace_worker__"]
-                    self._abandon_and_respawn(leases)
-                    return outcome, lease_wait_ms, lease_held_ms, reason
+                    leases.release(self.gpu_id, self)  # no-op if the engine already did
+                    return outcome, lease_wait_ms, lease_held_ms, message["__replace_worker__"]
                 if not (isinstance(message, dict) and "__lease__" in message):
                     # Anything that is not a lease message is the program's outcome.
                     if held_since is not None:
@@ -248,15 +258,18 @@ class Worker:
             self._abandon_and_respawn(leases)
             raise crash from exc
 
-    def _abandon_and_respawn(self, leases: GPULeases) -> None:
-        """Replace a failed worker without letting its lifecycle touch an in-use GPU.
+    def replace(self, leases: GPULeases) -> None:
+        """Swap in a fresh process. The pool calls this after answering the request
+        the old one served, so no client waits for a respawn."""
+        self._abandon_and_respawn(leases)
 
-        Terminate the old process before abandoning its lease: a timed-out native
-        kernel may still be running until process termination completes.  Worker
-        startup also creates a CUDA context and warms the runtime. Start the new
-        process and finish its explicitly CPU-only preparation without the lease,
-        then reacquire before granting GPU initialization. Otherwise a replacement
-        racing a waiter can initialize CUDA alongside that waiter's program.
+    def _abandon_and_respawn(self, leases: GPULeases) -> None:
+        """Replace a worker without letting its lifecycle touch an in-use GPU.
+
+        Kill before abandoning the lease: a timed-out kernel may still be running
+        until termination completes. Then prepare off-lease but initialize under it,
+        or a replacement racing a waiter creates its context alongside that
+        waiter's program.
         """
         self._kill()
         leases.abandon(self.gpu_id, self)

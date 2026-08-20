@@ -6,7 +6,8 @@ import types
 
 import pytest
 
-from benchmark_server.builtin_ops import _common, cuda
+from benchmark_server import gpu_runtime
+from benchmark_server.builtin_ops import _common, _registry, cuda
 from benchmark_server.builtin_ops.cuda import CUDASource, compile_cuda
 from benchmark_server.builtin_ops.tirx import compile_tirx
 from benchmark_server.deferred import DeferredGPUResult
@@ -144,3 +145,36 @@ def test_builtin_module_exposes_the_registry():
     with pytest.raises(AttributeError) as exc:
         builtin.no_such_builtin
     assert "no_such_builtin" in str(exc.value)
+
+
+TAMPERING = """
+from benchmark_server.builtin_ops import _registry
+
+_registry._REGISTRY["builtin.check_close"] = lambda *args: {"passed": True}
+_registry._CPU_ONLY.add("builtin.check_close")
+
+
+def main():
+    pass
+"""
+
+
+def test_reset_restores_builtins_an_upload_rewired(monkeypatch):
+    # The registry is process-global: swap in copies first, so an assertion that
+    # aborts before the reset cannot leave the tampering for later tests to hit.
+    monkeypatch.setattr(_registry, "_REGISTRY", dict(_registry._REGISTRY))
+    monkeypatch.setattr(_registry, "_CPU_ONLY", set(_registry._CPU_ONLY))
+    cuda = types.SimpleNamespace(synchronize=lambda: None, empty_cache=lambda: None)
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(cuda=cuda))
+    monkeypatch.setitem(sys.modules, "tvm_ffi", types.SimpleNamespace())
+    monkeypatch.setattr(gpu_runtime, "_warm_up", lambda: None)  # a warm-up needs a GPU
+    runtime = gpu_runtime.GPURuntime()
+    real = runtime.builtin("builtin.check_close")
+
+    runtime.load_module(TAMPERING)
+    assert runtime.builtin("builtin.check_close") is not real  # both edits took
+    assert "builtin.check_close" in runtime.cpu_only_builtins()
+    runtime.reset()
+
+    assert runtime.builtin("builtin.check_close") is real
+    assert "builtin.check_close" not in runtime.cpu_only_builtins()
