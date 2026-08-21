@@ -70,6 +70,10 @@ class GPURuntime:
         """The worker's library versions, for a client comparing its own."""
         return describe_versions()
 
+    def device_uuid(self) -> str | None:
+        """The card this worker actually got, for the parent to check."""
+        return describe_device_uuid()
+
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any:
         return _materialize_tensor(data, dtype, shape)
 
@@ -322,6 +326,16 @@ def describe_versions() -> dict[str, str]:
     except Exception:
         pass
     return versions
+
+
+def describe_device_uuid() -> str | None:
+    """The visible GPU's UUID; None where torch cannot name one."""
+    import torch
+
+    try:
+        return str(torch.cuda.get_device_properties(0).uuid)
+    except Exception:  # no such attribute on older torch, or no visible device
+        return None
 
 
 def _materialize_library(data: bytes, entry: str) -> Any:

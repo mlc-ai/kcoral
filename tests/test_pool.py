@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 
@@ -156,7 +157,10 @@ def test_worker_prepares_before_parent_grants_gpu_initialization(monkeypatch):
 
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "before-test")
     monkeypatch.setattr("benchmark_server.worker.os.setsid", lambda: None)
-    worker_main(0, Connection(), Factory(), max_requests=0)
+    worker_main("GPU-abc123", Connection(), Factory(), max_requests=0)
+
+    # The parent picks the card; what the server was launched with is gone.
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "GPU-abc123"
 
     assert events[:5] == [
         ("prepare", None),
@@ -170,6 +174,7 @@ def test_worker_prepares_before_parent_grants_gpu_initialization(monkeypatch):
                     "target": {"arch": "fake"},
                     "versions": {},
                     "cpu_only": ["builtin.cpu_sleep"],
+                    "device_uuid": None,
                 }
             },
         ),
@@ -432,3 +437,18 @@ def test_lease_invariants_hold_while_workers_die_under_load():
         assert recorder.depth(0) == 0, "a killed worker stranded the GPU"
     finally:
         pool.shutdown()
+
+
+def test_worker_refuses_a_process_that_came_up_on_another_gpu():
+    """A mis-pinned worker would measure someone else's card under our id."""
+    worker = object.__new__(Worker)
+    worker.gpu_id = 3
+    worker._kill = lambda: None
+    worker._expected_uuid = "GPU-1111-2222"
+
+    worker.device_uuid = "1111-2222"  # torch spells it without the prefix
+    worker._require_expected_device()  # same card: accepted
+
+    worker.device_uuid = "3333-4444"
+    with pytest.raises(WorkerCrashed, match="not the requested"):
+        worker._require_expected_device()

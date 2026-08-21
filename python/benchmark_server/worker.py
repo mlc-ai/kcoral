@@ -16,14 +16,19 @@ import signal
 import time
 from collections.abc import Callable
 
+from . import nvml
 from .engine import execute
 from .lease import GPULeases, LeaseClient
 
 _WORKER_PIPE_FAILURES = (EOFError, ConnectionResetError, BrokenPipeError, OSError)
 
 
-def worker_main(gpu_id: int, conn, runtime_factory: Callable, max_requests: int) -> None:
-    """Child entry point. Pins the GPU, builds the Runtime, serves programs."""
+def worker_main(device: str, conn, runtime_factory: Callable, max_requests: int) -> None:
+    """Child entry point. Pins the GPU, builds the Runtime, serves programs.
+
+    ``device`` is the ``CUDA_VISIBLE_DEVICES`` value the parent resolved, a UUID
+    where NVML could name one.
+    """
     # Lead a new process group, so the parent can clean up anything the submitted
     # code spawned (grandchildren included) with one killpg.
     if hasattr(os, "setsid"):
@@ -32,7 +37,8 @@ def worker_main(gpu_id: int, conn, runtime_factory: Callable, max_requests: int)
         except OSError:
             pass
     # Select the GPU before the Runtime imports torch/tvm, so it sees one device.
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    # Any value the server was launched with selects nothing here, so it goes.
+    os.environ["CUDA_VISIBLE_DEVICES"] = device
     try:
         # A factory may explicitly move dependency imports and other host-only
         # setup into ``prepare``.  Signal the parent only after that work is done;
@@ -56,6 +62,7 @@ def worker_main(gpu_id: int, conn, runtime_factory: Callable, max_requests: int)
             "versions": runtime.versions(),
             # Read before an upload can edit it, so none can talk its worker off the lease.
             "cpu_only": sorted(runtime.cpu_only_builtins()),
+            "device_uuid": runtime.device_uuid(),
         }
     except Exception as exc:  # runtime init failed — report and exit
         conn.send({"__error__": f"runtime init failed: {type(exc).__name__}: {exc}"})
@@ -133,6 +140,8 @@ class Worker:
         max_requests: int = 1,
     ) -> None:
         self.gpu_id = gpu_id
+        self._expected_uuid = nvml.device_uuid(gpu_id)
+        self._device = self._expected_uuid or str(gpu_id)
         self._factory = runtime_factory
         self._spawn_timeout = spawn_timeout
         self._termination_grace_seconds = termination_grace_seconds
@@ -152,7 +161,7 @@ class Worker:
         self._conn = parent
         self._proc = self._ctx.Process(
             target=worker_main,
-            args=(self.gpu_id, child, self._factory, self._max_requests),
+            args=(self._device, child, self._factory, self._max_requests),
             daemon=True,
         )
         self._proc.start()
@@ -179,6 +188,21 @@ class Worker:
         self.target: dict[str, str] = described["target"]
         self.versions: dict[str, str] = described["versions"]
         self.cpu_only = frozenset(described["cpu_only"])
+        self.device_uuid: str | None = described.get("device_uuid")
+        self._require_expected_device()
+
+    def _require_expected_device(self) -> None:
+        """Refuse a worker that came up on another card: it would measure someone
+        else's GPU under the id it was asked for."""
+        expected = nvml.uuid_key(self._expected_uuid)
+        reported = nvml.uuid_key(self.device_uuid)
+        if expected is None or reported is None or expected == reported:
+            return
+        self._kill()
+        raise WorkerCrashed(
+            f"worker for GPU {self.gpu_id} came up on device {self.device_uuid}, "
+            f"not the requested {self._expected_uuid}"
+        )
 
     def _await_startup_message(self, phase: str):
         try:

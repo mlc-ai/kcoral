@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 from .app import create_app
@@ -121,8 +122,20 @@ def main() -> None:
 
     args = build_parser().parse_args()
     config = config_from_args(args)
+    _warn_if_visible_devices_set()
     app = create_app(config, runtime_factory=gpu_runtime_factory)
     uvicorn.run(app, host=args.host, port=args.port)
+
+
+def _warn_if_visible_devices_set() -> None:
+    """A worker overwrites it with the card ``--gpus`` gave it, so setting it
+    here selects nothing and only misleads."""
+    if os.environ.get("CUDA_VISIBLE_DEVICES"):
+        print(
+            "warning: CUDA_VISIBLE_DEVICES is set but does not restrict this server; "
+            "workers are pinned by --gpus (physical GPU ids). Unset it to avoid confusion.",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":

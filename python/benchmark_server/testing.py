@@ -96,6 +96,9 @@ class FakeRuntime:
     def versions(self) -> dict[str, str]:
         return {}
 
+    def device_uuid(self) -> str | None:
+        return None
+
     def load_library(self, data: bytes, entry: str) -> Any:
         raise ExecutionError("unavailable", "the fake runtime cannot load a library")
 
