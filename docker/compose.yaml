@@ -10,10 +10,12 @@ services:
     gpus: all
     environment:
       BENCH_GPUS: "${BENCH_GPUS:-0}"
+      # The container must accept traffic from Docker's bridge. The published
+      # host port below remains loopback-only.
       BENCH_HOST: 0.0.0.0
       BENCH_PORT: "8000"
     ports:
-      - "${BENCH_PORT:-8000}:8000"
+      - "127.0.0.1:${BENCH_PORT:-8000}:8000"
     volumes:
       - ..:/workspace/benchmark-server
     healthcheck:

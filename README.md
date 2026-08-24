@@ -58,8 +58,26 @@ wheel, and no environment variables are needed.
 ## Run the server
 
 ```bash
-benchmark-server --host 0.0.0.0 --port 8000
+benchmark-server --port 8000
 ```
+
+The server binds to `127.0.0.1` by default. Keep it on loopback unless access is
+protected by a trusted network boundary or an authenticating reverse proxy: the
+server intentionally executes uploaded Python and native libraries and does not
+authenticate requests itself. `--host` and `BENCH_HOST` can override the bind
+address for an explicitly secured deployment.
+
+The development Compose configuration makes the server reachable at
+`http://127.0.0.1:8000` while keeping the port off every non-loopback host
+interface:
+
+```bash
+docker compose -f docker/compose.yaml up --build
+```
+
+Inside Docker's bridge network the process listens on `0.0.0.0`, but the Compose
+port mapping publishes it only on host address `127.0.0.1`. Do not shorten that
+mapping to `8000:8000`, which publishes the server on all host interfaces.
 
 Useful options include:
 

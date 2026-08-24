@@ -16,6 +16,12 @@ def test_defaults():
     assert config.max_requests_per_worker == 1
 
 
+def test_default_host_is_loopback(monkeypatch):
+    monkeypatch.delenv("BENCH_HOST", raising=False)
+    args = build_parser().parse_args([])
+    assert args.host == "127.0.0.1"
+
+
 def test_all_flags_reach_config():
     config = parse(
         [

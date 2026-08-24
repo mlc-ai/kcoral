@@ -32,8 +32,6 @@ COPY python ./python
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --group gpu --group test
 
-ENV BENCH_HOST=0.0.0.0
-
 EXPOSE 8000
 
 CMD ["python", "-m", "benchmark_server"]
