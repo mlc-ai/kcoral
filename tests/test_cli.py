@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +19,30 @@ def test_defaults():
     assert config.num_workers == 1
     assert config.log_dir == Path("logs")
     assert config.max_requests_per_worker == 1
+
+
+def test_host_default_and_flag():
+    assert build_parser().parse_args([]).host == "127.0.0.1"
+    assert build_parser().parse_args(["--host", "0.0.0.0"]).host == "0.0.0.0"
+
+
+def test_host_env():
+    code = (
+        "from benchmark_server.__main__ import build_parser; "
+        "print(build_parser().parse_args([]).host)"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        env={
+            **os.environ,
+            "BENCH_HOST": "192.0.2.1",
+            "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "python"),
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert out.stdout.strip() == "192.0.2.1"
 
 
 def test_all_flags_reach_config():

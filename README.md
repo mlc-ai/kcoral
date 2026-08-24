@@ -70,8 +70,11 @@ uv sync --group compiler
 ## Run the server
 
 ```bash
-benchmark-server --host 0.0.0.0 --port 8000
+benchmark-server --host 127.0.0.1 --port 8000
 ```
+
+The server binds to `127.0.0.1` by default. Use `--host` or `BENCH_HOST` to
+select another address.
 
 To compile on a machine without a GPU and execute on a separate GPU machine,
 run two instances of this same command:
