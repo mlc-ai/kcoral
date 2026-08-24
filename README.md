@@ -71,6 +71,9 @@ Useful options include:
 --default-timeout-seconds 300     Default execution timeout
 --output-limit-bytes 1048576      Request-level stdout/stderr capture limit
 --max-request-bytes 268435456     Maximum request body size
+--log-dir logs                    Event log directory; empty disables logging
+--no-log-console                  Stop mirroring events to stderr
+--no-log-programs                 Stop keeping each request's program JSON
 ```
 
 Check readiness with `GET /health`, which also reports the `target` an uploaded
@@ -88,6 +91,46 @@ later request depend on its process history. `--max-requests-per-worker 0` reuse
 workers instead: reset and poison detection still run, but undefined CUDA
 behaviour is no longer contained, and replacement costs enough on short requests
 that throughput numbers should record the setting.
+
+## Logs
+
+Each run appends to `<log-dir>/runs/<timestamp>/events.jsonl`, one JSON object
+per line, mirrored to stderr and never capped or rotated. Only the front-end
+writes it, so one file holds a request's whole history: `request_received`,
+`request_accepted` with the shape of the workload, `request_routed` with the
+worker that took it, and `request_finished`. One that never comes back stops
+after the record naming its worker.
+
+`request_finished` carries a `finish_reason`: why the request ended when it did.
+
+| `finish_reason` | what happened | worker |
+|---|---|---|
+| `completed` | the program ran to the end | keeps serving |
+| `program_failed` | the program raised; `error_kind` and `instruction_index` say where | keeps serving |
+| `request_limit` | `--max-requests-per-worker` reached, after answering | replaced |
+| `poisoned_context` | cleanup after the program failed, after answering | replaced |
+| `timeout` | no answer inside `timeout_seconds` | killed, replaced |
+| `crashed` | the process exited mid-request; `exitcode` says how | killed, replaced |
+| `no_worker` | saturated, nothing ran | untouched |
+| `rejected`, `cache_miss`, `server_error` | never reached a worker | untouched |
+
+A failing program is the client's kernel and stays `INFO`; only what the server
+itself did wrong reaches `ERROR`.
+
+```bash
+jq -c 'select(.level == "ERROR")' logs/runs/*/events.jsonl
+jq -c 'select(.request_id == "<id>")' logs/runs/*/events.jsonl   # one request end to end
+jq -c 'select(.worker_id == "gpu0/w3")' logs/runs/*/events.jsonl # one worker's history
+```
+
+`worker_id` names a seat on a GPU and outlives the processes that fill it, which
+`generation` and `pid` identify; the `worker_*` records cover what happens
+between requests. A killed worker's output reaches `request_finished` as
+`output_tail`.
+
+Each program's JSON is kept beside the log as `programs/<request-id>.json`, so a
+failed request names the kernel that failed. Blob uploads travel by hash, so this
+costs a few KB per request; `--no-log-programs` turns it off.
 
 ## Python client
 

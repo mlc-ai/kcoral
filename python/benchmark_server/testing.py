@@ -59,6 +59,13 @@ def _crash(*_args: Any):
     os._exit(1)
 
 
+def _crash_after_output(*_args: Any):
+    """Exit the way a native fault does: a message on the descriptor, then gone
+    before anything can send it back over the pipe."""
+    os.write(2, b"fatal: simulated device-side assert\n")
+    os._exit(1)
+
+
 def _sleep(seconds: Any = 0.0, *_args: Any) -> dict[str, float]:
     time.sleep(float(seconds))
     return {"slept": float(seconds)}
@@ -69,6 +76,7 @@ _BUILTINS: dict[str, Callable] = {
     "builtin.structural": _structural,
     "builtin.binary": _binary,
     "builtin.crash": _crash,
+    "builtin.crash_after_output": _crash_after_output,
     "builtin.sleep": _sleep,
     "builtin.cpu_sleep": _sleep,  # same work, declared not to need the GPU
 }

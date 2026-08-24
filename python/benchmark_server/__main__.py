@@ -16,6 +16,10 @@ flags default from the environment, so env-only deployments keep working:
   BENCH_HOST       bind host (default 127.0.0.1)
   BENCH_PORT       bind port (default 8000)
   BENCH_LOG_DIR    directory for structured event logs (default "logs"; empty disables)
+
+The log is one JSONL stream per run under ``<log dir>/runs/``, uncapped, and it
+is mirrored to stderr unless ``--no-log-console`` says otherwise. Its first line
+names the run directory.
 """
 
 from __future__ import annotations
@@ -49,6 +53,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--log-dir",
         default=os.environ.get("BENCH_LOG_DIR", "logs"),
         help="structured event log directory; empty disables logging (default: logs)",
+    )
+    parser.add_argument(
+        "--no-log-console",
+        dest="log_console",
+        action="store_false",
+        help="stop mirroring events to stderr; the log file is unaffected",
+    )
+    parser.add_argument(
+        "--no-log-programs",
+        dest="log_programs",
+        action="store_false",
+        help="stop keeping each request's program JSON beside the log",
     )
     parser.add_argument(
         "--default-timeout-seconds", type=float, default=_DEFAULTS.default_timeout_seconds
@@ -104,6 +120,8 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         gpus=gpus,
         cache_capacity_bytes=args.cache_capacity_bytes,
         log_dir=Path(args.log_dir) if args.log_dir else None,
+        log_console=args.log_console,
+        log_programs=args.log_programs,
         default_timeout_seconds=args.default_timeout_seconds,
         max_timeout_seconds=args.max_timeout_seconds,
         worker_wait_timeout_seconds=args.worker_wait_timeout_seconds,

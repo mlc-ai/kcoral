@@ -54,6 +54,7 @@ def execute(
     *,
     progress: Callable[[int], None] | None = None,
     cleanup_failed: Callable[[BaseException], None] | None = None,
+    capture_dir: str | None = None,
 ) -> ProgramOutcome:
     """Run a program and serialize only values selected by return instructions.
 
@@ -69,7 +70,7 @@ def execute(
     current: Instruction | None = None
     captured = CapturedOutput()
     try:
-        with _capture_output(_output_limit(program)) as captured:
+        with _capture_output(_output_limit(program), capture_dir) as captured:
             try:
                 for current_index, instruction in enumerate(program.instructions):
                     current = instruction
@@ -323,7 +324,7 @@ class CapturedOutput:
 
 
 @contextmanager
-def _capture_output(limit_bytes: int) -> Iterator[CapturedOutput]:
+def _capture_output(limit_bytes: int, capture_dir: str | None = None) -> Iterator[CapturedOutput]:
     """Capture process-level stdout and stderr for the complete request."""
     captured = CapturedOutput()
     if limit_bytes <= 0:
@@ -331,7 +332,7 @@ def _capture_output(limit_bytes: int) -> Iterator[CapturedOutput]:
         return
     sys.stdout.flush()
     sys.stderr.flush()
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+    with _capture_files(capture_dir) as (stdout_file, stderr_file):
         saved_stdout_fd = os.dup(1)
         saved_stderr_fd = os.dup(2)
         saved_sys_stdout, saved_sys_stderr = sys.stdout, sys.stderr
@@ -354,6 +355,57 @@ def _capture_output(limit_bytes: int) -> Iterator[CapturedOutput]:
             os.close(saved_stderr_fd)
             captured.stdout, captured.stdout_truncated = _read_captured(stdout_file, limit_bytes)
             captured.stderr, captured.stderr_truncated = _read_captured(stderr_file, limit_bytes)
+
+
+@contextmanager
+def _capture_files(capture_dir: str | None) -> Iterator[tuple[IO[bytes], IO[bytes]]]:
+    """The pair of files stdout and stderr are redirected into, removed after."""
+    if capture_dir is None:
+        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+            yield out, err
+        return
+    # Named by pid: one request runs in a worker at a time, so the pid the parent
+    # already holds is enough to find this request's output.
+    paths = [os.path.join(capture_dir, f"{os.getpid()}.{suffix}") for suffix in ("out", "err")]
+    files = [open(path, "w+b") for path in paths]
+    try:
+        yield files[0], files[1]
+    finally:
+        for file, path in zip(files, paths):
+            file.close()
+            try:
+                os.unlink(path)  # so the next request cannot inherit this one's output
+            except OSError:
+                pass
+
+
+def read_captured_output(capture_dir: str | None, pid: int | None, limit_bytes: int) -> str:
+    """The tail of what a worker had written when it was killed, or ``""``.
+
+    Only what reached the file descriptor is here - a ``print`` still in Python's
+    buffer died with the process, but a compiler writing to stderr did reach it.
+    Consuming: the worker that would have removed these is the one that died.
+    """
+    if capture_dir is None or pid is None:
+        return ""
+    chunks = []
+    for suffix in ("out", "err"):
+        path = os.path.join(capture_dir, f"{pid}.{suffix}")
+        try:
+            with open(path, "rb") as file:
+                file.seek(0, os.SEEK_END)
+                file.seek(max(0, file.tell() - limit_bytes))
+                data = file.read()
+        except OSError:
+            continue
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        if data:
+            chunks.append(f"[{suffix}] {data.decode('utf-8', errors='replace')}")
+    return "\n".join(chunks)
 
 
 def _stream_over(file: IO[bytes]) -> IO[str]:

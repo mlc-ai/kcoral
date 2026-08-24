@@ -1,28 +1,40 @@
-"""Structured event log: one JSONL stream per server run.
+"""Structured event log: one JSONL stream per server run, optionally mirrored
+to the console.
 
 Each server start creates ``<log_dir>/runs/<utc timestamp>/events.jsonl`` and
-appends one JSON object per event (server lifecycle, request lifecycle, worker
-restarts). Constructing with ``log_dir=None`` disables logging: ``emit`` becomes
-a no-op, so call sites never need to branch.
+appends one JSON object per event - server lifecycle, request lifecycle, worker
+lifecycle. Constructing with ``log_dir=None`` and ``console=False`` disables
+logging: ``emit`` becomes a no-op, so call sites never need to branch.
+
+Only the front-end process writes here: it routes every request and supervises
+every worker, so one ordered stream covers both, with no per-worker file to join
+against.
 """
 
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
+# Kept on disk but left off the console line, where they would drown the rest.
+_CONSOLE_SKIP = frozenset({"traceback", "versions", "config", "ops", "uploads"})
+_CONSOLE_VALUE_LIMIT = 120
+_UNENCODABLE_LIMIT = 2000
+
 
 class EventLogger:
-    def __init__(self, log_dir: Path | None) -> None:
+    def __init__(self, log_dir: Path | None, *, console: bool = False) -> None:
         self._lock = threading.Lock()
         self._stream: TextIO | None = None
+        self._console = console
         self.run_dir: Path | None = None
         if log_dir is None:
             return
-        runs_dir = Path(log_dir).resolve() / "runs"
+        runs_dir = Path(log_dir).expanduser().resolve() / "runs"
         runs_dir.mkdir(parents=True, exist_ok=True)
         base = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         suffix = 0
@@ -37,8 +49,23 @@ class EventLogger:
         self.run_dir = run_dir
         self._stream = (run_dir / "events.jsonl").open("a", encoding="utf-8")
 
+    @property
+    def enabled(self) -> bool:
+        """Whether an ``emit`` would go anywhere. Worth checking only where
+        building the fields costs something."""
+        return self._stream is not None or self._console
+
+    def subdir(self, name: str) -> Path | None:
+        """A directory beside ``events.jsonl`` for payloads too large to inline,
+        or None when nothing is being written to disk."""
+        if self.run_dir is None:
+            return None
+        path = self.run_dir / name
+        path.mkdir(exist_ok=True)
+        return path
+
     def emit(self, event: str, *, level: str = "INFO", **fields: Any) -> None:
-        if self._stream is None:
+        if self._stream is None and not self._console:
             return
         payload = {
             "timestamp": datetime.now(timezone.utc)
@@ -51,14 +78,49 @@ class EventLogger:
         # Logging is best-effort: a failed serialization or write (e.g. disk
         # full) must never fail the request being served.
         try:
-            line = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-            with self._lock:
-                self._stream.write(line + "\n")
-                self._stream.flush()
-        except (OSError, ValueError):
-            pass
+            line = _encode(payload)
+        except (TypeError, ValueError):
+            # One field that will not serialize must not cost the whole event,
+            # and ``repr`` of them cannot hold the non-finite number that would
+            # fail a second time.
+            line = _encode(
+                {
+                    **{key: payload[key] for key in ("timestamp", "level", "event")},
+                    "unencodable_fields": repr(fields)[:_UNENCODABLE_LIMIT],
+                }
+            )
+        with self._lock:
+            if self._stream is not None:
+                try:
+                    self._stream.write(line + "\n")
+                    self._stream.flush()  # buffered writes die with a crashing process
+                except OSError:
+                    pass
+            if self._console:
+                try:
+                    print(_console_line(payload), file=sys.stderr, flush=True)
+                except (OSError, ValueError):
+                    pass
 
     def close(self) -> None:
         if self._stream is not None:
             self._stream.close()
             self._stream = None
+
+
+def _encode(payload: dict[str, Any]) -> str:
+    return json.dumps(
+        payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"), default=repr
+    )
+
+
+def _console_line(payload: dict[str, Any]) -> str:
+    parts = [payload["timestamp"], f"{payload['level']:<7}", payload["event"]]
+    for key, value in payload.items():
+        if key in ("timestamp", "level", "event") or key in _CONSOLE_SKIP or value is None:
+            continue
+        text = f"{value:.1f}" if isinstance(value, float) else str(value)
+        if len(text) > _CONSOLE_VALUE_LIMIT:
+            text = text[:_CONSOLE_VALUE_LIMIT] + "..."
+        parts.append(f"{key}={text}")
+    return " ".join(parts)

@@ -10,6 +10,8 @@ from pathlib import Path
 class ServerConfig:
     gpus: list[int] = field(default_factory=lambda: [0])
     log_dir: Path | None = None  # structured event logs; None disables logging
+    log_console: bool = True  # mirror events to stderr as well as the log file
+    log_programs: bool = True  # keep each request's program JSON beside the log
     cache_capacity_bytes: int = 16 * 1024**3  # 16 GB byte cache
     default_timeout_seconds: float = 300.0  # per-request execution timeout
     max_timeout_seconds: float = 3600.0

@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import traceback
 import uuid
+from collections import Counter
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from dataclasses import asdict
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -21,11 +25,26 @@ from .pool import PoolBusy, SubmitOutcome, WorkerPool
 from .schemas import (
     Program,
     ProgramOutcome,
+    Run,
+    Upload,
     expected_tensor_nbytes,
     parse_program,
     strict_json_loads,
 )
-from .worker import WorkerCrashed, WorkerTimeout
+from .worker import FINISH_REASON_LEVEL, WorkerCrashed, WorkerTimeout
+
+_TRACEBACK_LIMIT = 8192
+_MESSAGE_LIMIT = 2048
+
+# The worker's finish reasons, plus the ones the front-end can answer with before
+# any worker is involved.
+_FINISH_REASON_LEVEL = {
+    **FINISH_REASON_LEVEL,
+    "no_worker": "WARNING",
+    "rejected": "WARNING",
+    "cache_miss": "INFO",
+    "server_error": "ERROR",
+}
 
 
 class _CacheMiss(Exception):
@@ -43,22 +62,46 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.cache = ByteCache(config.cache_capacity_bytes)
-        app.state.pool = WorkerPool(
-            config.gpus,
-            runtime_factory,
-            termination_grace_seconds=config.worker_termination_grace_seconds,
-            workers_per_gpu=config.workers_per_gpu,
-            max_requests_per_worker=config.max_requests_per_worker,
+        # Before the pool, not after: bringing workers up is where a deployment
+        # fails first, and a log opened afterwards would never record it.
+        events = EventLogger(config.log_dir, console=config.log_console)
+        app.state.events = events
+        events.emit(
+            "server_started",
+            run_dir=str(events.run_dir) if events.run_dir else None,
+            config=_describe(config),
         )
-        app.state.events = EventLogger(config.log_dir)
-        app.state.events.emit("server_started", gpus=list(config.gpus))
+        app.state.cache = ByteCache(config.cache_capacity_bytes)
+        try:
+            app.state.pool = WorkerPool(
+                config.gpus,
+                runtime_factory,
+                termination_grace_seconds=config.worker_termination_grace_seconds,
+                workers_per_gpu=config.workers_per_gpu,
+                max_requests_per_worker=config.max_requests_per_worker,
+                events=events,
+            )
+        except BaseException as exc:
+            events.emit(
+                "server_start_failed",
+                level="ERROR",
+                error=f"{type(exc).__name__}: {exc}",
+                traceback=traceback.format_exc()[-_TRACEBACK_LIMIT:],
+            )
+            events.close()
+            raise
+        events.emit(
+            "pool_ready",
+            target=app.state.pool.target(),
+            versions=app.state.pool.versions(),
+            workers=len(config.gpus) * config.workers_per_gpu,
+        )
         try:
             yield
         finally:
             app.state.pool.shutdown()
-            app.state.events.emit("server_stopped")
-            app.state.events.close()
+            events.emit("server_stopped")
+            events.close()
 
     app = FastAPI(title="Benchmark Server", version="0.1.0", lifespan=lifespan)
 
@@ -67,45 +110,75 @@ def create_app(
         pool_health = request.app.state.pool.health()
         return {"status": "ok", "gpu_count": len(pool_health["gpus"]), **pool_health}
 
+    @app.exception_handler(Exception)
+    async def unhandled_error(request: Request, exc: Exception):
+        """Close out a request the endpoint could not, so a front-end bug leaves
+        more than a ``request_received`` with no end."""
+        request_id = getattr(request.state, "request_id", None)
+        request.app.state.events.emit(
+            "request_finished",
+            level="ERROR",
+            request_id=request_id,
+            http_status=500,
+            finish_reason="server_error",
+            error_kind="unhandled",
+            error_message=f"{type(exc).__name__}: {exc}"[:_MESSAGE_LIMIT],
+            traceback=traceback.format_exc()[-_TRACEBACK_LIMIT:],
+        )
+        return _error_response(500, "engine", "internal server error", request_id or "")
+
     @app.post("/execute")
     async def execute_request(request: Request):
         request_id = str(uuid.uuid4())
+        request.state.request_id = request_id  # so unhandled_error can name it
         headers = {"X-Request-ID": request_id}
         events: EventLogger = request.app.state.events
-        events.emit("request_started", request_id=request_id)
+        client = request.client
+        events.emit(
+            "request_received",
+            request_id=request_id,
+            client=client.host if client else None,
+            content_length=request.headers.get("content-length"),
+        )
 
-        def finished(http_status: int, *, level: str = "INFO", **fields: object) -> None:
+        def finished(http_status: int, *, finish_reason: str, **fields: object) -> None:
             events.emit(
                 "request_finished",
-                level=level,
+                level=_FINISH_REASON_LEVEL.get(finish_reason, "INFO"),
                 request_id=request_id,
                 http_status=http_status,
+                finish_reason=finish_reason,
                 **fields,
             )
 
         declared_length = request.headers.get("content-length", "")
         if declared_length.isdigit() and int(declared_length) > config.max_request_bytes:
-            finished(413, level="WARNING", error="request_too_large")
+            finished(413, finish_reason="rejected", error_kind="request_too_large")
             return _error_response(
                 413, "request_too_large", "request exceeds the configured size limit", request_id
             )
         body_bytes = await request.body()
         if len(body_bytes) > config.max_request_bytes:
-            finished(413, level="WARNING", error="request_too_large")
+            finished(413, finish_reason="rejected", error_kind="request_too_large")
             return _error_response(
                 413, "request_too_large", "request exceeds the configured size limit", request_id
             )
 
         cache: ByteCache = request.app.state.cache
         try:
-            program, cache_keys = _parse_execute_request(
+            program, cache_keys, program_bytes = _parse_execute_request(
                 request.headers.get("content-type"), body_bytes, cache
             )
         except ValidationError as exc:
-            finished(400, level="WARNING", error="invalid_request")
+            finished(
+                400,
+                finish_reason="rejected",
+                error_kind="invalid_request",
+                error_message=str(exc)[:_MESSAGE_LIMIT],
+            )
             return _error_response(400, "parse", str(exc), request_id)
         except _CacheMiss as miss:
-            finished(200, status="CACHE_MISS")
+            finished(200, finish_reason="cache_miss", status="CACHE_MISS", missing=len(miss.blobs))
             return JSONResponse(
                 {
                     "status": "CACHE_MISS",
@@ -117,7 +190,22 @@ def create_app(
 
         timeout = _resolve_timeout(program, config)
         program.options["output_limit_bytes"] = _resolve_output_limit(program, config)
+        if events.enabled:  # describing the workload is the one cost worth a branch
+            events.emit(
+                "request_accepted",
+                request_id=request_id,
+                request_bytes=len(body_bytes),
+                timeout_seconds=timeout,
+                program=_keep_program(events, request_id, program_bytes)
+                if config.log_programs
+                else None,
+                **_program_shape(program),
+            )
         cache.pin(cache_keys)
+        # A crash the engine can attribute to an instruction still answers 200
+        # with a FAILED program; these carry its cause onto that record.
+        crash_exitcode: int | None = None
+        crash_tail = ""
         loop = asyncio.get_running_loop()
         try:
             outcome = await loop.run_in_executor(
@@ -126,43 +214,38 @@ def create_app(
                 program,
                 timeout,
                 config.worker_wait_timeout_seconds,
+                request_id,
             )
         except PoolBusy as exc:
-            finished(503, level="WARNING", error="busy", queue_ms=exc.queue_ms)
+            finished(503, finish_reason="no_worker", queue_ms=exc.queue_ms)
             response = _error_response(503, "busy", "server saturated", request_id)
             response.headers["Retry-After"] = "1"
             return response
         except WorkerTimeout as exc:
-            events.emit(
-                "worker_restarted", request_id=request_id, gpu_id=exc.gpu_id, reason="timeout"
-            )
             finished(
                 504,
-                level="WARNING",
-                error="timeout",
+                finish_reason="timeout",
+                worker_id=exc.worker_id,
                 gpu_id=exc.gpu_id,
                 queue_ms=exc.queue_ms,
                 elapsed_ms=exc.elapsed_ms,
+                timeout_seconds=timeout,
+                output_tail=exc.output_tail or None,
             )
             return _error_response(504, "timeout", "execution timed out", request_id)
         except WorkerCrashed as exc:
-            events.emit(
-                "worker_restarted",
-                request_id=request_id,
-                gpu_id=exc.gpu_id,
-                reason="crash",
-                exitcode=exc.exitcode,
-            )
             if exc.instruction_index is None or not 0 <= exc.instruction_index < len(
                 program.instructions
             ):
                 finished(
                     500,
-                    level="ERROR",
-                    error="worker_crashed",
+                    finish_reason="crashed",
+                    worker_id=exc.worker_id,
                     gpu_id=exc.gpu_id,
+                    exitcode=exc.exitcode,
                     queue_ms=exc.queue_ms,
                     elapsed_ms=exc.elapsed_ms,
+                    output_tail=exc.output_tail or None,
                 )
                 return _error_response(500, "engine", "worker crashed", request_id)
             instruction = program.instructions[exc.instruction_index]
@@ -184,20 +267,22 @@ def create_app(
                 elapsed_ms=exc.elapsed_ms or 0.0,
                 lease_wait_ms=exc.lease_wait_ms,
                 lease_held_ms=exc.lease_held_ms,
+                worker_id=exc.worker_id or "",
+                finish_reason="crashed",
             )
+            crash_exitcode, crash_tail = exc.exitcode, exc.output_tail
         finally:
             cache.unpin(cache_keys)
 
-        if outcome.worker_restart_reason is not None:
-            events.emit(
-                "worker_restarted",
-                request_id=request_id,
-                gpu_id=outcome.gpu_id,
-                reason=outcome.worker_restart_reason,
-            )
         execution = outcome.execution
         if not isinstance(execution, ProgramOutcome):
-            finished(500, level="ERROR", error="invalid_worker_response")
+            finished(
+                500,
+                finish_reason="server_error",
+                error_kind="invalid_worker_response",
+                worker_id=outcome.worker_id,
+                gpu_id=outcome.gpu_id,
+            )
             return _error_response(500, "engine", "invalid worker response", request_id)
         payload: dict[str, object] = {
             "status": execution.status,
@@ -219,8 +304,10 @@ def create_app(
         if len(response_body) > config.max_response_bytes:
             finished(
                 500,
-                level="ERROR",
-                error="response_too_large",
+                finish_reason="server_error",
+                error_kind="response_too_large",
+                response_bytes=len(response_body),
+                worker_id=outcome.worker_id,
                 gpu_id=outcome.gpu_id,
                 queue_ms=outcome.queue_ms,
                 elapsed_ms=outcome.elapsed_ms,
@@ -233,14 +320,25 @@ def create_app(
                 request_id,
             )
 
+        error = execution.error or {}
         finished(
             200,
+            finish_reason=outcome.finish_reason,
+            exitcode=crash_exitcode,
+            output_tail=crash_tail or None,
             status=execution.status,
+            worker_id=outcome.worker_id,
             gpu_id=outcome.gpu_id,
+            error_kind=error.get("kind"),
+            error_message=str(error.get("message", ""))[:_MESSAGE_LIMIT] or None,
+            instruction_index=error.get("instruction_index"),
+            instruction_op=error.get("instruction_op"),
+            instruction_id=error.get("instruction_id"),
             queue_ms=outcome.queue_ms,
             elapsed_ms=outcome.elapsed_ms,
             lease_wait_ms=outcome.lease_wait_ms,
             lease_held_ms=outcome.lease_held_ms,
+            response_bytes=len(response_body),
         )
         response_headers = {**headers, "Content-Type": content_type}
         return Response(content=response_body, status_code=200, headers=response_headers)
@@ -250,7 +348,7 @@ def create_app(
 
 def _parse_execute_request(
     content_type: str | None, body: bytes, cache: ByteCache
-) -> tuple[Program, list[str]]:
+) -> tuple[Program, list[str], bytes]:
     parts = parse_multipart(content_type, body)
     program_bytes: bytes | None = None
     supplied_blobs: dict[str, bytes] = {}
@@ -306,7 +404,51 @@ def _parse_execute_request(
         program.blob_bytes[upload.blob] = data
     if missing:
         raise _CacheMiss(_dedup(missing))
-    return program, referenced_blobs
+    return program, referenced_blobs, program_bytes
+
+
+def _describe(config: ServerConfig) -> dict[str, object]:
+    """The settings a run was started with, so a log explains its own behaviour."""
+    return {
+        key: str(value) if isinstance(value, Path) else value
+        for key, value in asdict(config).items()
+    }
+
+
+def _program_shape(program: Program) -> dict[str, object]:
+    """The shape of the workload, for reading the log without opening the
+    program it describes."""
+    ops: Counter[str] = Counter()
+    uploads: Counter[str] = Counter()
+    builtins: set[str] = set()
+    for instruction in program.instructions:
+        ops[instruction.op] += 1
+        if isinstance(instruction, Upload):
+            kind = instruction.kind
+            uploads[f"{kind}:{instruction.language}" if kind == "module" else kind] += 1
+        elif isinstance(instruction, Run) and isinstance(instruction.fn, str):
+            builtins.add(instruction.fn)
+    return {
+        "instructions": len(program.instructions),
+        "ops": dict(ops),
+        "uploads": dict(uploads) or None,
+        "builtins": sorted(builtins) or None,
+        "blob_bytes": sum(len(data) for data in program.blob_bytes.values()) or None,
+    }
+
+
+def _keep_program(events: EventLogger, request_id: str, program_bytes: bytes) -> str | None:
+    """Write the program beside the log and answer with its name. The bytes
+    arrived over the wire, so nothing is re-serialized."""
+    directory = events.subdir("programs")
+    if directory is None:
+        return None
+    name = f"{request_id}.json"
+    try:
+        (directory / name).write_bytes(program_bytes)
+    except OSError:
+        return None  # best-effort, like every other write the log makes
+    return name
 
 
 def _encode_response(

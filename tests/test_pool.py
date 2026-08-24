@@ -64,7 +64,7 @@ def test_poisoned_context_replaces_worker_and_recovers(pool):
     assert outcome.execution.status == "FAILED"
     assert outcome.execution.error["kind"] == "runtime"
     assert outcome.execution.error["message"] == "simulated illegal memory access"
-    assert outcome.worker_restart_reason == "poisoned_context"
+    assert outcome.finish_reason == "poisoned_context"
     assert settled(pool)._workers[0]._proc.pid != original_pid
     assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
 
@@ -76,7 +76,7 @@ def test_last_error_fails_current_request_without_replacing_worker(pool):
     assert outcome.execution.status == "FAILED"
     assert outcome.execution.error["kind"] == "runtime"
     assert "cudaErrorInvalidValue" in outcome.execution.error["message"]
-    assert outcome.worker_restart_reason is None
+    assert outcome.finish_reason == "program_failed"
     assert pool._workers[0]._proc.pid == original_pid
     assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
 
@@ -88,7 +88,7 @@ def test_default_request_limit_replaces_worker_after_preserving_outcome():
         outcome = pool.submit(successful_program(), timeout=10)
 
         assert outcome.execution.status == "COMPLETED"
-        assert outcome.worker_restart_reason == "request_limit"
+        assert outcome.finish_reason == "request_limit"
         assert settled(pool)._workers[0]._proc.pid != original_pid
     finally:
         pool.shutdown()
@@ -120,7 +120,7 @@ def test_run_replaces_worker_on_pipe_failures(pipe_error):
     worker._conn = _FailedPipe(pipe_error)
     worker._proc = _ExitedProcess()
     replacements = []
-    worker._abandon_and_respawn = replacements.append
+    worker._abandon_and_respawn = lambda leases, reason: replacements.append((leases, reason))
     leases = GPULeases([0])
 
     with pytest.raises(WorkerCrashed) as exc_info:
@@ -128,7 +128,7 @@ def test_run_replaces_worker_on_pipe_failures(pipe_error):
 
     assert exc_info.value.__cause__ is pipe_error
     assert exc_info.value.exitcode == 1
-    assert replacements == [leases]
+    assert replacements == [(leases, "crashed")]
 
 
 def test_worker_prepares_before_parent_grants_gpu_initialization(monkeypatch):
@@ -203,7 +203,7 @@ def test_replacement_kills_old_process_then_prepares_off_gpu_and_initializes_und
     worker._kill = kill
     worker._start_process = prepare
     worker._initialize_process = initialize
-    worker._abandon_and_respawn(leases)
+    worker._abandon_and_respawn(leases, "request_limit")
 
     assert events == ["kill", "prepare", "initialize"]
     assert leases.depth(0) == 0
@@ -224,7 +224,7 @@ def test_replacement_releases_gpu_when_respawn_fails():
 
     worker._initialize_process = fail_initialize
     with pytest.raises(RuntimeError, match="initialize failed"):
-        worker._abandon_and_respawn(leases)
+        worker._abandon_and_respawn(leases, "request_limit")
 
     assert leases.depth(0) == 0
 
@@ -242,7 +242,7 @@ def test_replacement_does_not_claim_gpu_when_preparation_fails():
     worker._start_process = fail_prepare
 
     with pytest.raises(RuntimeError, match="prepare failed"):
-        worker._abandon_and_respawn(leases)
+        worker._abandon_and_respawn(leases, "request_limit")
 
     assert leases.depth(0) == 0
 
@@ -260,6 +260,7 @@ def test_health_reports_idle_workers(pool):
     assert health["queue_length"] == 0
     assert health["workers"] == [
         {
+            "worker_id": "gpu0/w0",
             "gpu_id": 0,
             "status": "idle",
             "uptime_seconds": health["workers"][0]["uptime_seconds"],
@@ -358,7 +359,7 @@ def test_poison_replaces_only_the_corresponding_worker(shared_gpu_pool):
     after = [worker._proc.pid for worker in settled(shared_gpu_pool)._workers]
 
     assert outcome.execution.error["kind"] == "runtime"
-    assert outcome.worker_restart_reason == "poisoned_context"
+    assert outcome.finish_reason == "poisoned_context"
     assert sum(old != new for old, new in zip(before, after, strict=True)) == 1
 
 

@@ -22,8 +22,9 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .events import EventLogger
 from .lease import GPULeases, Ticket
-from .worker import Worker, WorkerCrashed, WorkerTimeout
+from .worker import RETIRING_FINISH_REASONS, Worker, WorkerCrashed, WorkerTimeout
 
 
 class IdleWorkers:
@@ -104,7 +105,8 @@ class SubmitOutcome:
     elapsed_ms: float
     lease_wait_ms: float = 0.0
     lease_held_ms: float = 0.0
-    worker_restart_reason: str | None = None
+    worker_id: str = ""
+    finish_reason: str = "completed"
 
 
 class WorkerPool:
@@ -115,20 +117,26 @@ class WorkerPool:
         termination_grace_seconds: float = 5.0,
         workers_per_gpu: int = 1,
         max_requests_per_worker: int = 1,
+        events: EventLogger | None = None,
     ) -> None:
         if max_requests_per_worker < 0:
             raise ValueError("max_requests_per_worker must be non-negative")
         if workers_per_gpu < 1:
             raise ValueError(f"workers_per_gpu must be at least 1, got {workers_per_gpu}")
+        self._events = events or EventLogger(None)
+        capture_dir = self._events.subdir("output")
         self._workers = [
             Worker(
                 gpu,
                 runtime_factory,
                 termination_grace_seconds=termination_grace_seconds,
                 max_requests=max_requests_per_worker,
+                index=index,
+                events=self._events,
+                capture_dir=str(capture_dir) if capture_dir is not None else None,
             )
             for gpu in gpus
-            for _ in range(workers_per_gpu)
+            for index in range(workers_per_gpu)
         ]
         self._require_one_target()
         self._gpus = list(dict.fromkeys(gpus))
@@ -138,16 +146,31 @@ class WorkerPool:
         self._replacing_lock = threading.Lock()  # so shutdown can copy it mid-flight
         self._closing = threading.Event()
 
-    def submit(self, program, timeout: float, worker_wait_timeout: float = 0.0) -> SubmitOutcome:
+    def submit(
+        self,
+        program,
+        timeout: float,
+        worker_wait_timeout: float = 0.0,
+        request_id: str | None = None,
+    ) -> SubmitOutcome:
         queue_started = time.monotonic()
         worker = self._idle.acquire(worker_wait_timeout)
         queue_ms = (time.monotonic() - queue_started) * 1000
         if worker is None:
             raise PoolBusy("all workers busy", queue_ms=queue_ms)
+        self._events.emit(
+            "request_routed",
+            request_id=request_id,
+            worker_id=worker.worker_id,
+            gpu_id=worker.gpu_id,
+            generation=worker.generation,
+            pid=worker.pid,
+            queue_ms=queue_ms,
+        )
         run_started = time.monotonic()
-        restart_reason = None
+        finish_reason = None
         try:
-            execution, lease_wait_ms, lease_held_ms, restart_reason = worker.run(
+            execution, lease_wait_ms, lease_held_ms, finish_reason = worker.run(
                 program, timeout, self._leases
             )
             return SubmitOutcome(
@@ -157,28 +180,30 @@ class WorkerPool:
                 (time.monotonic() - run_started) * 1000,
                 lease_wait_ms,
                 lease_held_ms,
-                restart_reason,
+                worker.worker_id,
+                finish_reason,
             )
         except (WorkerTimeout, WorkerCrashed) as exc:
+            exc.worker_id = worker.worker_id
             exc.gpu_id = worker.gpu_id
             exc.queue_ms = queue_ms
             exc.elapsed_ms = (time.monotonic() - run_started) * 1000
             raise
         finally:
             self._leases.abandon(worker.gpu_id, worker)  # no-op unless it still holds
-            self._release_or_replace(worker, restart_reason)
+            self._release_or_replace(worker, finish_reason)
 
-    def _release_or_replace(self, worker: Worker, restart_reason: str | None) -> None:
+    def _release_or_replace(self, worker: Worker, finish_reason: str | None) -> None:
         """Hand the worker back, replacing its process first if it retired.
 
         A retired worker has already exited, so it stays out of the idle set until
         its replacement is ready. Building it on its own thread keeps it out of the
         answered request's timings; a crash or timeout respawned in place already.
         """
-        if restart_reason is None or self._closing.is_set():
+        if finish_reason not in RETIRING_FINISH_REASONS or self._closing.is_set():
             self._idle.release(worker)
             return
-        thread = threading.Thread(target=self._replace, args=(worker,), daemon=True)
+        thread = threading.Thread(target=self._replace, args=(worker, finish_reason), daemon=True)
         with self._replacing_lock:
             self._replacing.add(thread)
         try:
@@ -186,13 +211,22 @@ class WorkerPool:
         except RuntimeError:  # no thread to be had; rebuild it here instead
             with self._replacing_lock:
                 self._replacing.discard(thread)
-            self._replace(worker)
+            self._replace(worker, finish_reason)
 
-    def _replace(self, worker: Worker) -> None:
+    def _replace(self, worker: Worker, reason: str) -> None:
         try:
-            worker.replace(self._leases)
-        except Exception:
-            pass  # a respawn that failed leaves a dead worker; the next run revives it
+            worker.replace(self._leases, reason)
+        except Exception as exc:
+            # A respawn that failed leaves a dead worker; the next run revives
+            # it, so unlogged this shows up only as the pool being slow.
+            self._events.emit(
+                "worker_replace_failed",
+                level="ERROR",
+                worker_id=worker.worker_id,
+                gpu_id=worker.gpu_id,
+                reason=reason,
+                error=f"{type(exc).__name__}: {exc}",
+            )
         finally:
             self._idle.release(worker)
             with self._replacing_lock:
@@ -222,6 +256,7 @@ class WorkerPool:
             "gpus": [{"gpu_id": gpu, "lease_depth": self._leases.depth(gpu)} for gpu in self._gpus],
             "workers": [
                 {
+                    "worker_id": w.worker_id,
                     "gpu_id": w.gpu_id,
                     "status": "idle" if id(w) in idle_ids else "busy",
                     "uptime_seconds": max(0.0, now - w.started_at),
