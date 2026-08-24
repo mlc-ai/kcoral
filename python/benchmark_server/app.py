@@ -55,10 +55,26 @@ class _CacheMiss(Exception):
 def create_app(
     config: ServerConfig | None = None,
     *,
-    runtime_factory: Callable,
+    runtime_factory: Callable | None = None,
 ) -> FastAPI:
-    """Build an application whose workers construct ``runtime_factory()``."""
+    """Build an application, optionally overriding its mode-specific runtime."""
     config = config or ServerConfig()
+    if config.device not in ("cpu", "gpu"):
+        raise ValueError(f"device must be 'cpu' or 'gpu', got {config.device!r}")
+    worker_gpus = config.gpus if config.device == "gpu" else []
+    cpu_workers = config.num_workers if config.device == "cpu" else None
+    worker_count = (
+        cpu_workers if cpu_workers is not None else len(worker_gpus) * config.workers_per_gpu
+    )
+    if runtime_factory is None:
+        if config.device == "cpu":
+            from .cpu_runtime import cpu_runtime_factory
+
+            runtime_factory = cpu_runtime_factory
+        else:
+            from .gpu_runtime import gpu_runtime_factory
+
+            runtime_factory = gpu_runtime_factory
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -74,11 +90,12 @@ def create_app(
         app.state.cache = ByteCache(config.cache_capacity_bytes)
         try:
             app.state.pool = WorkerPool(
-                config.gpus,
+                worker_gpus,
                 runtime_factory,
                 termination_grace_seconds=config.worker_termination_grace_seconds,
                 workers_per_gpu=config.workers_per_gpu,
                 max_requests_per_worker=config.max_requests_per_worker,
+                cpu_workers=cpu_workers,
                 events=events,
             )
         except BaseException as exc:
@@ -92,9 +109,10 @@ def create_app(
             raise
         events.emit(
             "pool_ready",
+            mode=config.device,
             target=app.state.pool.target(),
             versions=app.state.pool.versions(),
-            workers=len(config.gpus) * config.workers_per_gpu,
+            workers=worker_count,
         )
         try:
             yield

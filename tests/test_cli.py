@@ -11,7 +11,9 @@ def parse(argv):
 
 def test_defaults():
     config = parse([])
+    assert config.device == "gpu"
     assert config.gpus == [0]
+    assert config.num_workers == 1
     assert config.log_dir == Path("logs")
     assert config.max_requests_per_worker == 1
 
@@ -19,8 +21,12 @@ def test_defaults():
 def test_all_flags_reach_config():
     config = parse(
         [
+            "--device",
+            "gpu",
             "--gpus",
             "1,3",
+            "--num-workers",
+            "5",
             "--cache-capacity-bytes",
             "1234",
             "--log-dir",
@@ -47,7 +53,9 @@ def test_all_flags_reach_config():
             "400",
         ]
     )
+    assert config.device == "gpu"
     assert config.gpus == [1, 3]
+    assert config.num_workers == 5
     assert config.log_dir is None  # empty string disables logging
     assert config.cache_capacity_bytes == 1234
     assert config.default_timeout_seconds == 12
@@ -70,6 +78,19 @@ def test_bad_port_rejected():
 def test_empty_gpus_rejected():
     with pytest.raises(SystemExit):
         parse(["--gpus", ","])
+
+
+def test_cpu_mode_uses_workers_and_needs_no_gpus():
+    config = parse(["--device", "cpu", "--num-workers", "4", "--gpus", ","])
+    assert config.device == "cpu"
+    assert config.gpus == []
+    assert config.num_workers == 4
+
+
+@pytest.mark.parametrize("flag", ["--num-workers", "--workers-per-gpu"])
+def test_worker_count_must_be_positive(flag):
+    with pytest.raises(SystemExit):
+        parse([flag, "0"])
 
 
 def test_negative_max_requests_per_worker_rejected():

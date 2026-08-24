@@ -23,3 +23,5 @@ class ServerConfig:
     max_response_bytes: int = 256 * 1024**2  # cap on the serialized results payload
     output_limit_bytes: int = 1024**2  # per-request stdout/stderr capture cap
     max_output_limit_bytes: int = 16 * 1024**2  # cap on a client-requested limit
+    device: str = "gpu"
+    num_workers: int = 1  # CPU workers; ignored in GPU mode

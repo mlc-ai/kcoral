@@ -2,7 +2,7 @@
 
 The server exposes one synchronous endpoint, `POST /execute` (plus `GET /health`).
 A request body is a **program**: an ordered list of instructions the server runs
-on a GPU worker. There is no session state; every request is self-contained, and
+on one worker. There is no session state; every request is self-contained, and
 its handles live only for that request.
 
 ```text
@@ -30,6 +30,12 @@ for, and the `versions` a client may want to match:
 
 Every worker in a pool shares one target — a server whose GPUs disagree refuses
 to start, so run one server per GPU model.
+
+The same protocol also serves CPU compilation workers started with
+`--device cpu --num-workers N`. Their health response has `gpu_count: 0`, an empty
+`target` and `gpus` list, and `gpu_id: null` on each worker. A client obtains the
+target from a GPU server and supplies it to `builtin.compile_cuda_binary`. CPU
+requests use the same `/execute` envelope and report zero for both lease timings.
 
 Several workers share each GPU (`--workers-per-gpu`), so one can compile while
 another measures on the GPU it is not using. They take turns through a per-GPU
@@ -182,10 +188,11 @@ entry is exported through TVM FFI, so it takes `tvm::ffi::TensorView` parameters
 and returns `void`; the includes and the export macro are supplied by the server.
 `main` is rejected, because C++ reserves it as the program entry point.
 
-The kernel is built for the worker GPU's arch-specific target (`sm_100a` on
-Blackwell, `sm_90a` on Hopper), so instructions gated behind those targets —
-tcgen05, wgmma — are available. Set `TVM_FFI_CUDA_ARCH_LIST` on the server to
-override. Builds are cached on disk by source and flags.
+On a GPU worker, `compile_cuda` builds for that worker's arch-specific target
+(`sm_100a` on Blackwell, `sm_90a` on Hopper). On a CPU worker,
+`compile_cuda_binary` instead requires `{"arch": "sm_100a"}` and returns the
+finished shared-object bytes. The client gets that value from the GPU server's
+health response. Builds are cached on disk by source, target, and flags.
 
 #### CuTeDSL modules
 
@@ -279,7 +286,8 @@ other binary formats that the server should parse.
 
 ### Library
 
-A library is a shared object the client already built, so the server compiles
+A library is an already-built shared object, whether its bytes came from the
+client's toolchain or a preceding CPU-server request. The GPU server compiles
 nothing:
 
 ```json
@@ -450,6 +458,7 @@ values are passed as literals.
 | `builtin.zeros` | `spec = {shape, dtype}` | a zero tensor |
 | `builtin.compile_tirx` | `(kernel, bindings?)` — `bindings` binds `T.constexpr` dimensions | a compiled module |
 | `builtin.compile_cuda` | `(source, cfg?)` — `cfg = {extra_cuda_cflags?}` | the module's exported function |
+| `builtin.compile_cuda_binary` | `(source, cfg)` — `cfg = {arch, extra_cuda_cflags?}` | shared-object bytes compiled for `arch`, such as `sm_100a` |
 | `builtin.compile_cutedsl` | `(kernel, *tensors, cfg?)` — the tensors it specializes on; `cfg = {options?}` | a compiled kernel |
 | `builtin.compile_triton` | `(kernel, *args, cfg)` — the args it specializes on; `cfg = {grid, **launch keywords}` | a callable bound to that grid |
 | `builtin.benchmark` | `(mod, *tensors, cfg?)` — `cfg = {warmup_ms?, repeat_ms?, warmup?, repeat?, flush_l2?}` | timing statistics |

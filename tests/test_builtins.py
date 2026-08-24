@@ -1,5 +1,6 @@
 """Builtin behaviour that needs neither a GPU nor a kernel-language toolchain."""
 
+import os
 import shutil
 import sys
 import types
@@ -8,7 +9,7 @@ import pytest
 
 from benchmark_server import gpu_runtime
 from benchmark_server.builtin_ops import _common, _registry, cuda
-from benchmark_server.builtin_ops.cuda import CUDASource, compile_cuda
+from benchmark_server.builtin_ops.cuda import CUDASource, compile_cuda, compile_cuda_binary
 from benchmark_server.builtin_ops.tirx import compile_tirx
 from benchmark_server.deferred import DeferredGPUResult
 from benchmark_server.errors import ExecutionError
@@ -92,6 +93,58 @@ def test_compile_cuda_builds_off_lease_and_defers_module_loading(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "args",
+    [
+        (object(), {"arch": "sm_90a"}),
+        (CUDASource(source="", entry="add"), []),
+        (CUDASource(source="", entry="add"), {}),
+        (CUDASource(source="", entry="add"), {"arch": "90a"}),
+        (
+            CUDASource(source="", entry="add"),
+            {"arch": "sm_90a", "extra_cuda_cflags": "-O3"},
+        ),
+    ],
+)
+def test_compile_cuda_binary_rejects_bad_arguments(args):
+    with pytest.raises(ExecutionError) as exc:
+        compile_cuda_binary(*args)
+    assert exc.value.kind == "compile"
+
+
+def test_compile_cuda_binary_returns_built_library(monkeypatch, tmp_path):
+    library = tmp_path / "add.so"
+    library.write_bytes(b"compiled-library")
+    calls = []
+
+    def build(src, flags, arch_list=None):
+        calls.append((src, flags, arch_list))
+        return str(library)
+
+    monkeypatch.setattr(cuda, "_build_cuda", build)
+    source = CUDASource(source="void add() {}", entry="add")
+
+    result = compile_cuda_binary(source, {"arch": "sm_100a", "extra_cuda_cflags": ["-O3"]})
+
+    assert result == b"compiled-library"
+    assert calls == [(source, ["-O3"], "10.0a")]
+
+
+@pytest.mark.parametrize(
+    "arch,expected",
+    [("sm_89", "8.9"), ("sm_90a", "9.0a"), ("sm_100a", "10.0a")],
+)
+def test_tvm_ffi_arch_conversion(arch, expected):
+    assert cuda._tvm_ffi_arch(arch) == expected
+
+
+def test_cuda_arch_override_is_temporary(monkeypatch):
+    monkeypatch.setenv("TVM_FFI_CUDA_ARCH_LIST", "8.9")
+    with cuda._cuda_arch_override("10.0a"):
+        assert os.environ["TVM_FFI_CUDA_ARCH_LIST"] == "10.0a"
+    assert os.environ["TVM_FFI_CUDA_ARCH_LIST"] == "8.9"
+
+
+@pytest.mark.parametrize(
     "capability,expected", [((8, 9), "8.9"), ((9, 0), "9.0a"), ((10, 0), "10.0a")]
 )
 def test_cuda_arch_list_suffixes_hopper_and_newer(monkeypatch, capability, expected):
@@ -141,6 +194,7 @@ def test_builtin_module_exposes_the_registry():
 
     assert builtin.check_close is resolve("builtin.check_close")
     assert builtin.compile_cuda is resolve("builtin.compile_cuda")
+    assert builtin.compile_cuda_binary is resolve("builtin.compile_cuda_binary")
     assert "randn" in dir(builtin) and "benchmark" in dir(builtin)
     with pytest.raises(AttributeError) as exc:
         builtin.no_such_builtin

@@ -81,6 +81,80 @@ def test_health():
     assert data["workers"][0]["status"] == "idle"
 
 
+def test_cpu_health_and_execution_have_no_gpu_lease():
+    config = ServerConfig(device="cpu", num_workers=2, max_requests_per_worker=0)
+    with make_client(config) as client:
+        health = client.get("/health").json()
+        result = post_program(client, scalar_program()).json()
+
+    assert health["status"] == "ok"
+    assert health["gpu_count"] == 0
+    assert health["gpus"] == []
+    assert len(health["workers"]) == 2
+    assert result["status"] == "COMPLETED"
+    assert result["lease_wait_ms"] == 0
+    assert result["lease_held_ms"] == 0
+
+
+def test_cpu_app_selects_cpu_runtime_by_default():
+    config = ServerConfig(device="cpu", num_workers=1, max_requests_per_worker=0)
+    with TestClient(create_app(config)) as client:
+        health = client.get("/health").json()
+
+    assert health["gpu_count"] == 0
+    assert health["target"] == {}
+    assert health["workers"][0]["gpu_id"] is None
+
+
+def _cuda_toolchain_available() -> bool:
+    """Whether this machine can build CUDA C, which is all the CPU server needs.
+    Probed rather than opted into: unlike a GPU test, compiling contends with
+    nothing, so it should run wherever it can."""
+    try:
+        from benchmark_server.builtin_ops.cuda import _require_cuda_toolchain
+
+        _require_cuda_toolchain()
+    except Exception:
+        return False
+    return True
+
+
+@pytest.mark.skipif(
+    not _cuda_toolchain_available(),
+    reason="needs the compiler group and a CUDA toolchain (nvcc, ninja, c++)",
+)
+def test_cpu_cuda_compilation_end_to_end():
+    arch = os.environ.get("BENCH_CPU_COMPILE_ARCH", "sm_90a")
+    program = {
+        "instructions": [
+            {
+                "op": "upload",
+                "id": "source",
+                "kind": "module",
+                "language": "cuda",
+                "source": "void add_one(tvm::ffi::TensorView x) {}",
+                "entry": "add_one",
+            },
+            {
+                "op": "run",
+                "id": "library",
+                "fn": "builtin.compile_cuda_binary",
+                "args": [{"$ref": "source"}, {"arch": arch}],
+            },
+            {"op": "return", "key": "library", "value": {"$ref": "library"}},
+        ]
+    }
+    config = ServerConfig(device="cpu", num_workers=1, max_requests_per_worker=0)
+    with TestClient(create_app(config)) as client:
+        response = post_program(client, program)
+
+    result, binary_parts = response_parts(response)
+    assert result["status"] == "COMPLETED", result.get("error")
+    assert result["lease_wait_ms"] == 0
+    assert result["lease_held_ms"] == 0
+    assert binary_parts["return:0"].startswith(b"\x7fELF")
+
+
 def test_request_id_and_timing_are_returned():
     with make_client() as client:
         first = post_program(client, scalar_program())

@@ -38,6 +38,38 @@ def test_pool_runs_a_program(pool):
     assert outcome.queue_ms >= 0 and outcome.elapsed_ms >= 0
 
 
+def test_cpu_pool_runs_without_gpus_or_leases():
+    pool = WorkerPool([], fake_runtime_factory, cpu_workers=2, max_requests_per_worker=0)
+    try:
+        outcome = pool.submit(successful_program(), timeout=10)
+        health = pool.health()
+    finally:
+        pool.shutdown()
+
+    assert outcome.execution.status == "COMPLETED"
+    assert outcome.gpu_id is None
+    assert outcome.lease_wait_ms == 0
+    assert outcome.lease_held_ms == 0
+    assert health["gpus"] == []
+    assert len(health["workers"]) == 2
+    assert all(worker["gpu_id"] is None for worker in health["workers"])
+
+
+def test_cpu_timeout_respawns_without_a_gpu():
+    pool = WorkerPool([], fake_runtime_factory, cpu_workers=1, max_requests_per_worker=0)
+    try:
+        with pytest.raises(WorkerTimeout) as exc_info:
+            pool.submit(prog(Run("sleep", "builtin.sleep", [2.0])), timeout=0.2)
+        recovered = pool.submit(successful_program(), timeout=10)
+    finally:
+        pool.shutdown()
+
+    assert exc_info.value.gpu_id is None
+    assert recovered.execution.status == "COMPLETED"
+    assert recovered.lease_wait_ms == 0
+    assert recovered.lease_held_ms == 0
+
+
 def test_crash_replaces_worker_and_recovers(pool):
     with pytest.raises(WorkerCrashed) as exc_info:
         pool.submit(prog(Run("boom", "builtin.crash", [])), timeout=10)
@@ -179,6 +211,23 @@ def test_worker_prepares_before_parent_grants_gpu_initialization(monkeypatch):
             },
         ),
     ]
+
+
+def test_cpu_worker_does_not_change_visible_devices(monkeypatch):
+    class Connection:
+        incoming = iter([{"__startup__": "initialize"}, None])
+
+        def send(self, message):
+            pass
+
+        def recv(self):
+            return next(self.incoming)
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "unchanged")
+    monkeypatch.setattr("benchmark_server.worker.os.setsid", lambda: None)
+    worker_main(None, Connection(), fake_runtime_factory, max_requests=0)
+
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "unchanged"
 
 
 def test_replacement_kills_old_process_then_prepares_off_gpu_and_initializes_under_lease():

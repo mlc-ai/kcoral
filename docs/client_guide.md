@@ -70,12 +70,33 @@ Four rules the example relies on:
 Runnable versions of all this live in [`../examples`](../examples):
 `remote_compile_client.py` (four languages, compiled on the server) and
 `library_upload_client.py` (built on the client, uploaded prebuilt).
+`cpu_compile_gpu_execute.py` compiles on a CPU server and uploads the returned
+library to a separate GPU server.
 
 ## Where to compile
 
-A kernel can be built by the server, from source you upload, or built by you and
-uploaded as a finished shared object. The server supports both equally — it runs
-whatever program you send it.
+A kernel can be built by the GPU server, by a separate CPU instance of the same
+server, or by the client and uploaded as a finished shared object.
+
+**Use a CPU server when the compiler and GPU should scale independently.** The
+client reads `arch` from the GPU server, sends source and
+`builtin.compile_cuda_binary` to the CPU server with a normal `/execute`
+request, then uploads the returned bytes as a `library` in a second normal
+request:
+
+```python
+arch = gpu_client.target()["arch"]
+compiled = cpu_client.execute(build_compile_program(source, arch))
+library = compiled.results["library"]
+result = gpu_client.execute(build_benchmark_program(library))
+```
+
+The CPU server starts with `--device cpu --num-workers N`. It has no target of its
+own, reports `gpu_count: 0`, and never initializes PyTorch or a CUDA context.
+Only CUDA C compilation is supported in CPU mode; tensor creation, library
+loading, correctness checks, and timing belong in the GPU request. See
+[`../examples/cpu_compile_gpu_execute.py`](../examples/cpu_compile_gpu_execute.py)
+for the complete programs.
 
 **Compiling on the server is the recommended starting point.** Upload the kernel
 as source text and let one of the `builtin.compile_*` builtins build it. The
@@ -125,6 +146,7 @@ compile call has to be told.
 |---|---|---|---|
 | TIRx | `source` | `compile_tirx(kernel, bindings?)` | `bindings` supplies a `@T.jit` kernel's `T.constexpr` values; a `@T.prim_func` is already concrete and rejects them. The source must open with `from __future__ import annotations`, or a shape annotation like `T.Buffer((N,), dtype)` evaluates at `def` time and raises `NameError: N` |
 | CUDA C | `source`, `language="cuda"`, `entry` | `compile_cuda(kernel, cfg?)` | `void f(tvm::ffi::TensorView, ...)`; `main` is rejected; builds are cached on disk, so recompiling the same source is much cheaper than the first build |
+| CUDA C on a CPU server | `source`, `language="cuda"`, `entry` | `compile_cuda_binary(kernel, {"arch": arch, ...})` | `arch` must come from the GPU server; returns shared-object bytes rather than loading them |
 | CuTeDSL | `source`, `entry` | `compile_cutedsl(kernel, *tensors, cfg?)` | Specializes on the tensors, so pass the ones it will run on; nothing is cached |
 | Triton | `source`, `entry` | `compile_triton(kernel, *args, cfg)` | `cfg["grid"]` is required; pass scalars and constexprs positionally; other `cfg` keys are launch keywords |
 

@@ -7,7 +7,10 @@ import functools
 import os
 import re
 import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from ..deferred import DeferredGPUResult
@@ -28,38 +31,96 @@ class CUDASource:
 def compile_cuda(src: Any, cfg: Any = None) -> Any:
     """Build a CUDA C upload into its exported function, caching the build on
     disk. cfg: ``extra_cuda_cflags``."""
-    if not isinstance(src, CUDASource):
-        raise ExecutionError(
-            "compile", "compile_cuda expects a module upload whose language is 'cuda'"
-        )
-    options = cfg if cfg is not None else {}
-    if not isinstance(options, dict):
-        raise ExecutionError("compile", "compile_cuda options must be a dict")
+    options = _validate_compile_request(src, cfg, "compile_cuda")
     cuda_cflags = _string_list(options, "extra_cuda_cflags")
-    _require_cuda_toolchain()
-    import tvm_ffi.cpp
-
-    # Selects the GPU's arch-specific target unless the operator already pinned one.
-    if "TVM_FFI_CUDA_ARCH_LIST" not in os.environ:
-        os.environ["TVM_FFI_CUDA_ARCH_LIST"] = _cuda_arch_list()
-    source_manages_exports = _declares_tvm_ffi_macro(src.source)
-    try:
-        library_path = tvm_ffi.cpp.build_inline(
-            name=f"upload_{src.entry}",
-            cuda_sources=src.source,
-            functions=None if source_manages_exports else src.entry,
-            extra_cuda_cflags=cuda_cflags or None,
-            backend="cuda",
-        )
-    except RuntimeError as exc:  # nvcc/ptxas diagnostics, surfaced by ninja
-        raise ExecutionError("compile", short(_diagnostics(str(exc)))) from exc
+    library_path = _build_cuda(src, cuda_cflags)
     # Building is host-only and may overlap another worker's benchmark. Loading
     # the shared object registers its CUDA fatbinary, so defer that small phase
     # until the engine has reacquired this GPU's lease.
     return DeferredGPUResult(lambda: _load_compiled_entry(library_path, src.entry))
 
 
+@register_builtin("compile_cuda_binary", cpu_only=True)
+def compile_cuda_binary(src: Any, cfg: Any = None) -> bytes:
+    """Build a CUDA C upload for an explicit GPU architecture and return its
+    shared-object bytes. cfg: ``arch`` and optional ``extra_cuda_cflags``."""
+    options = _validate_compile_request(src, cfg, "compile_cuda_binary")
+    arch = options.get("arch")
+    if not isinstance(arch, str):
+        raise ExecutionError("compile", "compile_cuda_binary option 'arch' must be a string")
+    arch_list = _tvm_ffi_arch(arch)
+    cuda_cflags = _string_list(options, "extra_cuda_cflags")
+    library_path = _build_cuda(src, cuda_cflags, arch_list=arch_list)
+    try:
+        return Path(library_path).read_bytes()
+    except OSError as exc:
+        raise ExecutionError("compile", f"cannot read compiled CUDA library: {short(exc)}") from exc
+
+
 # --- helpers ----------------------------------------------------------------
+
+
+def _validate_compile_request(src: Any, cfg: Any, builtin: str) -> dict:
+    if not isinstance(src, CUDASource):
+        raise ExecutionError(
+            "compile", f"{builtin} expects a module upload whose language is 'cuda'"
+        )
+    options = cfg if cfg is not None else {}
+    if not isinstance(options, dict):
+        raise ExecutionError("compile", f"{builtin} options must be a dict")
+    return options
+
+
+def _build_cuda(src: CUDASource, cuda_cflags: list[str], arch_list: str | None = None) -> str:
+    _require_cuda_toolchain()
+    import tvm_ffi.cpp
+
+    # A GPU worker discovers its visible device once. A CPU worker temporarily
+    # overrides the setting with the target supplied by the client.
+    if arch_list is None and "TVM_FFI_CUDA_ARCH_LIST" not in os.environ:
+        os.environ["TVM_FFI_CUDA_ARCH_LIST"] = _cuda_arch_list()
+    source_manages_exports = _declares_tvm_ffi_macro(src.source)
+    try:
+        with _cuda_arch_override(arch_list):
+            return tvm_ffi.cpp.build_inline(
+                name=f"upload_{src.entry}",
+                cuda_sources=src.source,
+                functions=None if source_manages_exports else src.entry,
+                extra_cuda_cflags=cuda_cflags or None,
+                backend="cuda",
+            )
+    except RuntimeError as exc:  # nvcc/ptxas diagnostics, surfaced by ninja
+        raise ExecutionError("compile", short(_diagnostics(str(exc)))) from exc
+
+
+@contextmanager
+def _cuda_arch_override(arch_list: str | None) -> Iterator[None]:
+    if arch_list is None:
+        yield
+        return
+    key = "TVM_FFI_CUDA_ARCH_LIST"
+    previous = os.environ.get(key)
+    os.environ[key] = arch_list
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+
+
+_CUDA_ARCH = re.compile(r"sm_(\d+)(\d)(a?)")
+
+
+def _tvm_ffi_arch(arch: str) -> str:
+    """Convert a health target such as ``sm_100a`` to TVM FFI's ``10.0a``."""
+    match = _CUDA_ARCH.fullmatch(arch)
+    if match is None:
+        raise ExecutionError("compile", "compile_cuda_binary option 'arch' must look like 'sm_90a'")
+    major, minor, suffix = match.groups()
+    return f"{int(major)}.{minor}{suffix}"
+
 
 # nvcc writes "file(9): error: ...", ptxas "..., line 9; error   : ...", gcc
 # "file:9:1: error: ...".

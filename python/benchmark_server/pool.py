@@ -1,9 +1,9 @@
-"""Worker pool: several workers per GPU, least-loaded assignment, backpressure.
+"""CPU or GPU worker pool with backpressure.
 
 `submit` blocks (call it from a thread), acquires an idle worker, runs the
-program, and returns a :class:`SubmitOutcome` - the execution outcome, the GPU
-that ran the program, and the queue/execution/lease timings. The worker returns
-to the idle set respawned already if it crashed or timed out; the raised
+program, and returns a :class:`SubmitOutcome` - the execution outcome, the
+worker's optional GPU id, and the queue/execution/lease timings. The worker
+returns to the idle set respawned already if it crashed or timed out; the raised
 :class:`WorkerTimeout` / :class:`WorkerCrashed` carries the same attribution
 (``gpu_id``, ``queue_ms``, ``elapsed_ms``). When no worker becomes free within
 ``worker_wait_timeout`` it raises :class:`PoolBusy` (the front-end maps that to
@@ -23,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .events import EventLogger
-from .lease import GPULeases, Ticket
+from .lease import GPULeases, NoopLeases, Ticket
 from .worker import RETIRING_FINISH_REASONS, Worker, WorkerCrashed, WorkerTimeout
 
 
@@ -38,8 +38,8 @@ class IdleWorkers:
 
     def __init__(self, workers: list[Worker]) -> None:
         self._lock = threading.Lock()
-        self._idle: dict[int, list[Worker]] = {}  # gpu id -> its free workers
-        self._assigned: dict[int, int] = {}  # gpu id -> how many are out
+        self._idle: dict[int | None, list[Worker]] = {}  # device -> its free workers
+        self._assigned: dict[int | None, int] = {}  # device -> how many are out
         for worker in workers:
             self._idle.setdefault(worker.gpu_id, []).append(worker)
             self._assigned.setdefault(worker.gpu_id, 0)
@@ -100,7 +100,7 @@ class PoolBusy(Exception):
 @dataclass
 class SubmitOutcome:
     execution: object
-    gpu_id: int
+    gpu_id: int | None
     queue_ms: float
     elapsed_ms: float
     lease_wait_ms: float = 0.0
@@ -117,17 +117,31 @@ class WorkerPool:
         termination_grace_seconds: float = 5.0,
         workers_per_gpu: int = 1,
         max_requests_per_worker: int = 1,
+        cpu_workers: int | None = None,
         events: EventLogger | None = None,
     ) -> None:
         if max_requests_per_worker < 0:
             raise ValueError("max_requests_per_worker must be non-negative")
         if workers_per_gpu < 1:
             raise ValueError(f"workers_per_gpu must be at least 1, got {workers_per_gpu}")
+        if cpu_workers is not None and cpu_workers < 1:
+            raise ValueError(f"cpu_workers must be at least 1, got {cpu_workers}")
+        if gpus and cpu_workers is not None:
+            raise ValueError("a worker pool cannot mix CPU and GPU workers")
+        if not gpus and cpu_workers is None:
+            raise ValueError("a GPU worker pool needs at least one GPU")
         self._events = events or EventLogger(None)
         capture_dir = self._events.subdir("output")
+        # (device, index) pairs: the index names a worker within its device, so a
+        # CPU pool's workers stay distinguishable in the log without a GPU id.
+        devices: list[tuple[int | None, int]]
+        if cpu_workers is not None:
+            devices = [(None, index) for index in range(cpu_workers)]
+        else:
+            devices = [(gpu, index) for gpu in gpus for index in range(workers_per_gpu)]
         self._workers = [
             Worker(
-                gpu,
+                device,
                 runtime_factory,
                 termination_grace_seconds=termination_grace_seconds,
                 max_requests=max_requests_per_worker,
@@ -135,13 +149,12 @@ class WorkerPool:
                 events=self._events,
                 capture_dir=str(capture_dir) if capture_dir is not None else None,
             )
-            for gpu in gpus
-            for index in range(workers_per_gpu)
+            for device, index in devices
         ]
         self._require_one_target()
         self._gpus = list(dict.fromkeys(gpus))
         self._idle = IdleWorkers(self._workers)
-        self._leases = GPULeases(self._gpus)
+        self._leases = NoopLeases() if cpu_workers is not None else GPULeases(self._gpus)
         self._replacing: set[threading.Thread] = set()
         self._replacing_lock = threading.Lock()  # so shutdown can copy it mid-flight
         self._closing = threading.Event()

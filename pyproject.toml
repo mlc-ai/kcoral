@@ -23,6 +23,9 @@ benchmark-server = "benchmark_server.__main__:main"
 test = [
   "pytest>=8",
 ]
+compiler = [
+  "apache-tvm-ffi[cpp]==0.1.13.post2",
+]
 gpu = [
   "torch>=2.9",
   "apache-tvm>=0.26.0",

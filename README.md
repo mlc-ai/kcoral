@@ -1,6 +1,7 @@
 # benchmark-server
 
-`benchmark-server` executes GPU benchmark programs over HTTP. A program uploads
+`benchmark-server` executes GPU benchmark programs over HTTP. The same server
+can also run without a GPU as a CUDA compilation service. A program uploads
 modules and tensors, runs registered functions, and explicitly returns selected
 values.
 
@@ -23,7 +24,8 @@ depends on which builtins the programs use:
 
 | To run | The worker environment needs |
 |---|---|
-| any program | PyTorch and TVM FFI |
+| a CPU compilation server | TVM FFI, `nvcc`, `ninja`, and a host C++ compiler |
+| any GPU program | PyTorch and TVM FFI |
 | `compile_tirx` | TVM as well |
 | `compile_cuda` | `nvcc`, a host C++ compiler, and `ninja` as well |
 | `compile_cutedsl`, or a CuTeDSL library upload | `nvidia-cutlass-dsl` as well |
@@ -55,15 +57,35 @@ uv sync --group gpu
 `nvcc` and a host C++ compiler still come from the system; everything else is a
 wheel, and no environment variables are needed.
 
+### Running CPU compilation workers
+
+The `compiler` group adds TVM FFI and `ninja` without installing PyTorch or
+other GPU runtimes. The CUDA toolkit and a host C++ compiler still come from the
+system:
+
+```bash
+uv sync --group compiler
+```
+
 ## Run the server
 
 ```bash
 benchmark-server --host 0.0.0.0 --port 8000
 ```
 
+To compile on a machine without a GPU and execute on a separate GPU machine,
+run two instances of this same command:
+
+```bash
+benchmark-server --device cpu --num-workers 16 --host 0.0.0.0 --port 8000
+benchmark-server --device gpu --gpus 0 --workers-per-gpu 8 --host 0.0.0.0 --port 8001
+```
+
 Useful options include:
 
 ```text
+--device cpu|gpu                  Worker type (default: gpu)
+--num-workers 16                  CPU workers in CPU mode
 --gpus 0,1                        CUDA devices exposed to workers
 --workers-per-gpu 8               Workers sharing each GPU
 --max-requests-per-worker 1       Fresh process/context per request; 0 reuses workers
@@ -77,8 +99,9 @@ Useful options include:
 ```
 
 Check readiness with `GET /health`, which also reports the `target` an uploaded
-library must be built for and the `versions` the worker runs. Submit programs with `POST /execute` using
-`multipart/form-data`.
+library must be built for and the `versions` the worker runs. A CPU server
+reports `gpu_count: 0`; the client reads the target from the GPU server. Submit
+programs with `POST /execute` using `multipart/form-data`.
 
 Several workers share each GPU, so one can compile while another measures on the
 GPU it is not using; they take turns through a per-GPU lease and never run on it
@@ -176,6 +199,12 @@ protocol document states what a library must export, and
 [`examples/library_upload_client.py`](examples/library_upload_client.py) builds
 one end to end.
 
+[`examples/cpu_compile_gpu_execute.py`](examples/cpu_compile_gpu_execute.py)
+shows the two-server form: the client reads the GPU target, sends a normal
+`/execute` request to a CPU server to return the shared-object bytes, then sends
+another normal `/execute` request to upload and run that library on the GPU
+server. No additional endpoint or instruction format is involved.
+
 `Program.upload()` and `Program.run()` return a `Register`, which can be passed
 to later instructions. `Program.return_()` adds an explicit result; run values
 that are not returned do not appear in the response.
@@ -226,4 +255,12 @@ The GPU integration tests are opt-in, and need the GPU environment:
 
 ```bash
 BENCH_GPU_TEST=1 pytest -q
+```
+
+The CPU compilation integration test needs the compiler group and a CUDA
+toolchain, but no GPU. It runs whenever `nvcc`, `ninja` and a host C++ compiler
+are present, and skips itself otherwise:
+
+```bash
+uv run --group test --group compiler pytest -q
 ```

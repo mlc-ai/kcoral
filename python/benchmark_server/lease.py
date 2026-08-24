@@ -70,6 +70,38 @@ class LeaseClient:
         self._conn.send({"__lease__": "release"})
 
 
+class NoopLease:
+    """A worker-side lease for a process that has no GPU."""
+
+    held = False
+
+    def acquire(self) -> None:
+        pass
+
+    def release(self) -> None:
+        pass
+
+
+class NoopLeases:
+    """Parent-side lease collection for CPU workers.
+
+    It matches :class:`GPULeases` so worker lifecycle code can stay identical,
+    while every reported lease timing remains zero.
+    """
+
+    def acquire(self, gpu_id: None, holder: Worker) -> float:
+        return 0.0
+
+    def release(self, gpu_id: None, holder: Worker) -> None:
+        pass
+
+    def abandon(self, gpu_id: None, holder: Worker) -> None:
+        pass
+
+    def depth(self, gpu_id: None) -> int:
+        return 0
+
+
 class GPULeases:
     """One lease per GPU, granted FIFO among the workers pinned to it.
 

@@ -1,4 +1,4 @@
-"""The GPU worker: a child process that owns one GPU's CUDA context.
+"""A child worker process and its parent-side lifecycle handle.
 
 The front-end never touches the GPU - it dispatches a Program to a worker over a
 pipe and reads back one execution outcome. A worker runs one program at a time,
@@ -23,7 +23,7 @@ from collections.abc import Callable
 from . import nvml
 from .engine import execute, read_captured_output
 from .events import EventLogger
-from .lease import GPULeases, LeaseClient
+from .lease import GPULeases, LeaseClient, NoopLease, NoopLeases
 
 _WORKER_PIPE_FAILURES = (EOFError, ConnectionResetError, BrokenPipeError, OSError)
 
@@ -46,12 +46,17 @@ _OUTPUT_TAIL_BYTES = 4096  # of a killed worker's output, kept on its log record
 
 
 def worker_main(
-    device: str, conn, runtime_factory: Callable, max_requests: int, capture_dir: str | None = None
+    device: str | None,
+    conn,
+    runtime_factory: Callable,
+    max_requests: int,
+    capture_dir: str | None = None,
 ) -> None:
-    """Child entry point. Pins the GPU, builds the Runtime, serves programs.
+    """Child entry point. Optionally pins a GPU, then serves programs.
 
-    ``device`` is the ``CUDA_VISIBLE_DEVICES`` value the parent resolved, a UUID
-    where NVML could name one.
+    For a GPU worker, ``device`` is the ``CUDA_VISIBLE_DEVICES`` value the parent
+    resolved, a UUID where NVML could name one. A CPU worker receives ``None``
+    and leaves the environment untouched.
     """
     # Lead a new process group, so the parent can clean up anything the submitted
     # code spawned (grandchildren included) with one killpg.
@@ -62,7 +67,8 @@ def worker_main(
             pass
     # Select the GPU before the Runtime imports torch/tvm, so it sees one device.
     # Any value the server was launched with selects nothing here, so it goes.
-    os.environ["CUDA_VISIBLE_DEVICES"] = device
+    if device is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = device
     try:
         # A factory may explicitly move dependency imports and other host-only
         # setup into ``prepare``.  Signal the parent only after that work is done;
@@ -91,9 +97,9 @@ def worker_main(
     except Exception as exc:  # runtime init failed — report and exit
         conn.send({"__error__": f"runtime init failed: {type(exc).__name__}: {exc}"})
         return
-    # Only this process sees the GPU, so only it can describe the target.
+    # A GPU process describes its visible card; a CPU process reports no target.
     conn.send({"__ready__": described})
-    lease = LeaseClient(conn)
+    lease = LeaseClient(conn) if device is not None else NoopLease()
     requests_served = 0
     while True:
         try:
@@ -159,7 +165,7 @@ class WorkerTimeout(Exception):
 
 
 class Worker:
-    """Parent-side handle to one GPU worker process."""
+    """Parent-side handle to one CPU or GPU worker process."""
 
     # Replaced from the worker's ready message; empty means nothing runs off-lease.
     cpu_only: frozenset[str] = frozenset()
@@ -174,7 +180,7 @@ class Worker:
 
     def __init__(
         self,
-        gpu_id: int,
+        gpu_id: int | None,
         runtime_factory: Callable,
         spawn_timeout: float = 60.0,
         termination_grace_seconds: float = 5.0,
@@ -184,11 +190,11 @@ class Worker:
         capture_dir: str | None = None,
     ) -> None:
         self.gpu_id = gpu_id
-        self.worker_id = f"gpu{gpu_id}/w{index}"
+        self.worker_id = f"cpu/w{index}" if gpu_id is None else f"gpu{gpu_id}/w{index}"
         if events is not None:
             self._events = events
-        self._expected_uuid = nvml.device_uuid(gpu_id)
-        self._device = self._expected_uuid or str(gpu_id)
+        self._expected_uuid = nvml.device_uuid(gpu_id) if gpu_id is not None else None
+        self._device = (self._expected_uuid or str(gpu_id)) if gpu_id is not None else None
         self._factory = runtime_factory
         self._spawn_timeout = spawn_timeout
         self._termination_grace_seconds = termination_grace_seconds
@@ -198,7 +204,7 @@ class Worker:
         self._spawn()
 
     def _spawn(self) -> None:
-        """Start and fully initialize a worker when no request can use its GPU."""
+        """Start and fully initialize a worker before it becomes available."""
         try:
             self._start_process()
             self._initialize_process()
@@ -237,14 +243,12 @@ class Worker:
             raise WorkerCrashed(f"worker preparation error: {msg}")
 
     def _initialize_process(self) -> None:
-        """Create the worker's CUDA Runtime; the caller must serialize its GPU."""
+        """Create the worker runtime; GPU callers serialize this phase."""
         try:
             self._conn.send({"__startup__": "initialize"})
         except _WORKER_PIPE_FAILURES as exc:
             self._kill()
-            raise WorkerCrashed(
-                f"worker on GPU {self.gpu_id} failed before GPU initialization"
-            ) from exc
+            raise WorkerCrashed(f"{self._description()} failed before initialization") from exc
         msg = self._await_startup_message("initialize")
         if not (isinstance(msg, dict) and "__ready__" in msg):
             self._kill()
@@ -268,6 +272,8 @@ class Worker:
     def _require_expected_device(self) -> None:
         """Refuse a worker that came up on another card: it would measure someone
         else's GPU under the id it was asked for."""
+        if self.gpu_id is None:
+            return
         expected = nvml.uuid_key(self._expected_uuid)
         reported = nvml.uuid_key(self.device_uuid)
         if expected is None or reported is None or expected == reported:
@@ -284,13 +290,13 @@ class Worker:
             msg = self._conn.recv() if ready else None
         except _WORKER_PIPE_FAILURES as exc:
             self._kill()
-            raise WorkerCrashed(f"worker on GPU {self.gpu_id} failed during {phase}") from exc
+            raise WorkerCrashed(f"{self._description()} failed during {phase}") from exc
         if not ready:
             self._kill()
-            raise WorkerCrashed(f"worker on GPU {self.gpu_id} timed out during {phase}")
+            raise WorkerCrashed(f"{self._description()} timed out during {phase}")
         return msg
 
-    def run(self, program, timeout: float, leases: GPULeases) -> tuple:
+    def run(self, program, timeout: float, leases: GPULeases | NoopLeases) -> tuple:
         """Run a program, servicing its lease requests; kill+respawn on timeout or
         crash, then re-raise. A poisoned context is respawned after preserving its
         outcome. Returns the outcome, the lease timings, and the finish_reason.
@@ -309,7 +315,9 @@ class Worker:
             while True:
                 waited_from = time.monotonic()
                 if not self._conn.poll(remaining):  # no answer by the deadline -> hung
-                    timed_out = WorkerTimeout(f"program exceeded {timeout}s on GPU {self.gpu_id}")
+                    timed_out = WorkerTimeout(
+                        f"program exceeded {timeout}s in {self._description()}"
+                    )
                     timed_out.worker_id = self.worker_id
                     timed_out.output_tail = self._output_tail()  # before the kill removes it
                     self._abandon_and_respawn(leases, "timeout")
@@ -355,7 +363,7 @@ class Worker:
                 self._proc.join(timeout=0.1)
             except Exception:
                 pass
-            crash = WorkerCrashed(f"worker on GPU {self.gpu_id} pipe failed: {exc}")
+            crash = WorkerCrashed(f"{self._description()} pipe failed: {exc}")
             crash.worker_id = self.worker_id
             crash.instruction_index = instruction_index
             crash.exitcode = self._proc.exitcode
@@ -370,12 +378,12 @@ class Worker:
         travels back in the outcome, but a worker that never answers has none."""
         return read_captured_output(self._capture_dir, self.pid, _OUTPUT_TAIL_BYTES)
 
-    def replace(self, leases: GPULeases, reason: str) -> None:
+    def replace(self, leases: GPULeases | NoopLeases, reason: str) -> None:
         """Swap in a fresh process. The pool calls this after answering the request
         the old one served, so no client waits for a respawn."""
         self._abandon_and_respawn(leases, reason)
 
-    def _abandon_and_respawn(self, leases: GPULeases, reason: str) -> None:
+    def _abandon_and_respawn(self, leases: GPULeases | NoopLeases, reason: str) -> None:
         """Replace a worker without letting its lifecycle touch an in-use GPU.
 
         Kill before abandoning the lease: a timed-out kernel may still be running
@@ -404,6 +412,9 @@ class Worker:
         except Exception as exc:
             self._log_failure("respawn", exc)
             raise
+
+    def _description(self) -> str:
+        return "CPU worker" if self.gpu_id is None else f"worker on GPU {self.gpu_id}"
 
     def _kill(self) -> None:
         try:

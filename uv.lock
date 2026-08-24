@@ -110,6 +110,9 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+compiler = [
+    { name = "apache-tvm-ffi", extra = ["cpp"], marker = "sys_platform == 'linux'" },
+]
 gpu = [
     { name = "apache-tvm", marker = "sys_platform == 'linux'" },
     { name = "apache-tvm-ffi", extra = ["cpp"], marker = "sys_platform == 'linux'" },
@@ -131,6 +134,7 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+compiler = [{ name = "apache-tvm-ffi", extras = ["cpp"], specifier = "==0.1.13.post2" }]
 gpu = [
     { name = "apache-tvm", specifier = ">=0.26.0" },
     { name = "apache-tvm-ffi", extras = ["cpp"], specifier = "==0.1.13.post2" },
