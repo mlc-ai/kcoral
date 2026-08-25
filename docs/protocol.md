@@ -21,7 +21,8 @@ for, and the `versions` a client may want to match:
   "target": {"arch": "sm_100a"},
   "versions": {"torch": "2.13.0+cu130", "cuda": "13.0",
                "tvm": "0.26.0", "tvm_ffi": "0.1.13.post2",
-               "triton": "3.6.0", "cutlass": "4.7.0"},
+               "triton": "3.6.0", "cutlass": "4.7.0",
+               "flashinfer": "0.6.17"},
   "gpus": [{"gpu_id": 0, "lease_depth": 1}],
   "workers": [{"gpu_id": 0, "status": "busy", "uptime_seconds": 12.4},
               {"gpu_id": 0, "status": "idle", "uptime_seconds": 12.4}]

@@ -20,7 +20,7 @@ pip install .
 
 This gives the Python client and the HTTP front-end, neither of which touches a
 GPU. Running programs needs a worker environment holding more, and how much
-depends on which builtins the programs use:
+depends on what the programs use:
 
 | To run | The worker environment needs |
 |---|---|
@@ -31,6 +31,7 @@ depends on which builtins the programs use:
 | `compile_cutedsl`, or a CuTeDSL library upload | `nvidia-cutlass-dsl` as well |
 | `compile_triton` | `triton`, which the CUDA PyTorch wheels already carry |
 | `benchmark` | `cupti-python` as well |
+| a program importing FlashInfer | `flashinfer-python` 0.6.17 or newer as well |
 
 A builtin whose requirement is absent answers `unavailable` and the rest of the
 server is unaffected, so a partial environment is a usable deployment.
@@ -48,7 +49,8 @@ uv sync
 ### Running GPU programs
 
 The `gpu` group adds PyTorch, TVM, TVM FFI, CuTeDSL, and the CUPTI Python
-bindings, which together cover every builtin and every kind of library upload:
+bindings, which together cover every builtin and every kind of library upload,
+plus other dependencies for programs whose reference calls it:
 
 ```bash
 uv sync --group gpu

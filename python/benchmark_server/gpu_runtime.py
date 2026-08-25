@@ -321,10 +321,14 @@ def describe_versions() -> dict[str, str]:
             versions[name] = __import__(name).__version__
         except Exception:  # optional, or no version attribute
             pass
-    try:
-        versions["cutlass"] = importlib.metadata.version("nvidia-cutlass-dsl")
-    except Exception:
-        pass
+    # By distribution metadata rather than import: nothing here calls these, and
+    # importing flashinfer costs about a second.
+    optional = (("cutlass", "nvidia-cutlass-dsl"), ("flashinfer", "flashinfer-python"))
+    for key, distribution in optional:
+        try:
+            versions[key] = importlib.metadata.version(distribution)
+        except Exception:  # not installed
+            pass
     return versions
 
 
