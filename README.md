@@ -225,6 +225,52 @@ tensor values are decoded as CPU `numpy.ndarray` objects.
 torch.from_numpy(value.view(np.uint8)).view(torch.bfloat16)
 ```
 
+## FlashInfer Trace client
+
+The distribution also provides the `flashinfer_trace` package. Its primary
+client path accepts an in-memory definition, solution, and workload trace, then
+returns a new in-memory trace containing the evaluation:
+
+```python
+from flashinfer_trace import FlashInferTraceClient, TraceSet
+
+trace_set = TraceSet("Example-FlashInfer-Trace")
+definition = trace_set.definitions["add_one"]
+solution = trace_set.solutions["python_add_one"]
+input_trace = trace_set.workloads["add_one"][0]
+
+with FlashInferTraceClient("http://localhost:8000") as client:
+    output_trace = client.evaluate(
+        definition,
+        solution,
+        input_trace,
+        resource_root=trace_set.path,
+    )
+
+trace_set.append([output_trace])
+```
+
+`evaluate_many()` applies the same in-memory contract concurrently while
+preserving input order. Directory lookup and persistence remain separate in
+`TraceSet`; the command-line entry point composes those operations.
+
+The client uploads self-contained validation, input generation, compilation,
+correctness, and timing code with each workload program. Safetensors files use
+the content-addressed byte cache and are parsed inside the GPU worker. Correct
+solutions are measured with CUDA Profiling Tools Interface (CUPTI) kernel
+timing; failed correctness checks return without timing.
+
+The command-line entry point performs the same operation and appends the
+results to the trace directory:
+
+```bash
+python -m flashinfer_trace TRACE_SET DEFINITION SOLUTION [SERVER_URL]
+```
+
+The initial implementation supports single-file Python and Triton solutions,
+plus single-file CUDA solutions exported through TVM FFI. Dataset-wide
+selection and resume policy remain with the caller.
+
 ## Protocol summary
 
 A request contains one `program` JSON part and zero or more binary parts named
