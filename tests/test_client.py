@@ -280,8 +280,38 @@ def test_library_builder_hashes_bytes_and_carries_entry():
     assert instruction["kind"] == "library" and instruction["entry"] == "add_one"
     assert instruction["blob"] == compute_blob_hash(b"\x7fELF...")
 
-    with pytest.raises(ValueError, match="requires an identifier 'entry'"):
-        Program().upload(id="k", kind="library", value=b"x")
+    modules = Program()
+    module = modules.upload(id="module", kind="library", value=b"x")
+    function = modules.get_function(id="step", module=module, name="namespace.step")
+    assert function == Register("step")
+    assert modules.instructions == [
+        {
+            "op": "upload",
+            "id": "module",
+            "kind": "library",
+            "blob": compute_blob_hash(b"x"),
+        },
+        {
+            "op": "get_function",
+            "id": "step",
+            "module": {"$ref": "module"},
+            "name": "namespace.step",
+        },
+    ]
+
+    with pytest.raises(ValueError, match="must be an identifier"):
+        Program().upload(id="k", kind="library", value=b"x", entry="not an id")
+
+
+def test_get_function_builder_validates_its_module_and_name():
+    program = Program()
+    module = program.upload(id="module", kind="library", value=b"library")
+    with pytest.raises(ValueError, match="unknown handle"):
+        program.get_function(id="bad", module=Register("missing"), name="step")
+    with pytest.raises(ValueError, match="non-empty string"):
+        program.get_function(id="bad", module=module, name="")
+    with pytest.raises(TypeError, match="module must be"):
+        program.get_function(id="bad", module={"not": "a ref"}, name="step")
 
 
 def test_bytes_builder_hashes_bytes_without_tensor_metadata():

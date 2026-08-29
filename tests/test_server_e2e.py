@@ -613,8 +613,7 @@ def test_prebuilt_library_is_cached_like_a_tensor(tmp_path):
     """A client-compiled library goes through the same content-addressed cache as a
     tensor: missing on the first attempt, then served from the cache by hash alone."""
     import numpy as np
-
-    from tests.test_gpu_runtime import CUDA_KERNEL, build_library
+    from test_gpu_runtime import CUDA_KERNEL, build_library
 
     data = build_library(CUDA_KERNEL, "add_one", tmp_path)
     digest = compute_blob_hash(data)
@@ -624,10 +623,15 @@ def test_prebuilt_library_is_cached_like_a_tensor(tmp_path):
         "instructions": [
             {
                 "op": "upload",
-                "id": "kernel",
+                "id": "kernels",
                 "kind": "library",
                 "blob": digest,
-                "entry": "add_one",
+            },
+            {
+                "op": "get_function",
+                "id": "kernel",
+                "module": {"$ref": "kernels"},
+                "name": "add_one",
             },
             {
                 "op": "upload",

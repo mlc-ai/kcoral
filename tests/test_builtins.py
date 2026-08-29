@@ -4,6 +4,7 @@ import os
 import shutil
 import sys
 import types
+from contextlib import contextmanager
 
 import pytest
 
@@ -13,6 +14,7 @@ from kcoral.builtin_ops.cuda import CUDASource, compile_cuda, compile_cuda_binar
 from kcoral.builtin_ops.tirx import compile_tirx
 from kcoral.deferred import DeferredGPUResult
 from kcoral.errors import ExecutionError
+from kcoral.gpu_runtime import LoadedFunction, LoadedLibrary
 
 
 def test_compile_tirx_unavailable_without_tvm(monkeypatch):
@@ -20,6 +22,33 @@ def test_compile_tirx_unavailable_without_tvm(monkeypatch):
     with pytest.raises(ExecutionError) as exc:
         compile_tirx(object())
     assert exc.value.kind == "unavailable"
+
+
+def test_loaded_function_keeps_its_module_and_sets_torch_stream(monkeypatch):
+    events = []
+
+    @contextmanager
+    def use_torch_stream():
+        events.append("enter")
+        try:
+            yield
+        finally:
+            events.append("exit")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "tvm_ffi",
+        types.SimpleNamespace(use_torch_stream=use_torch_stream),
+    )
+    owner = LoadedLibrary(digest="digest", module=object())
+    function = LoadedFunction(
+        owner=owner,
+        function=lambda value: events.append(("call", value)) or value + 1,
+    )
+
+    assert function(41) == 42
+    assert function.owner is owner
+    assert events == ["enter", ("call", 41), "exit"]
 
 
 def test_compile_cuda_unavailable_without_a_build_toolchain(monkeypatch, tmp_path):

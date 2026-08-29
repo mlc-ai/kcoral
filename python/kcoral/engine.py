@@ -18,6 +18,7 @@ from .keys import compute_blob_hash
 from .lease import Lease
 from .schemas import (
     DTYPE_ITEM_SIZES,
+    GetFunction,
     Instruction,
     Program,
     ProgramOutcome,
@@ -36,7 +37,8 @@ class Runtime(Protocol):
     def load_module(
         self, source: str, entry: str | None = None, language: str = "python"
     ) -> Any: ...
-    def load_library(self, data: bytes, entry: str) -> Any: ...
+    def load_library(self, data: bytes, entry: str | None = None) -> Any: ...
+    def get_function(self, module: Any, name: str) -> Callable: ...
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any: ...
     def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None: ...
     def builtin(self, name: str) -> Callable: ...
@@ -89,7 +91,7 @@ def execute(
                             assert instruction.blob is not None
                             env[instruction.id] = program.blob_bytes[instruction.blob]
                         elif instruction.kind == "library":
-                            assert instruction.blob is not None and instruction.entry is not None
+                            assert instruction.blob is not None
                             env[instruction.id] = runtime.load_library(
                                 program.blob_bytes[instruction.blob], instruction.entry
                             )
@@ -104,6 +106,10 @@ def execute(
                                 instruction.dtype,
                                 instruction.shape,
                             )
+                    elif isinstance(instruction, GetFunction):
+                        env[instruction.id] = runtime.get_function(
+                            env[instruction.module.id], instruction.name
+                        )
                     elif isinstance(instruction, Run):
                         value = _invoke(instruction, env, runtime)
                         if isinstance(value, DeferredGPUResult):

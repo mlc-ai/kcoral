@@ -107,8 +107,17 @@ class FakeRuntime:
     def device_uuid(self) -> str | None:
         return None
 
-    def load_library(self, data: bytes, entry: str) -> Any:
+    def load_library(self, data: bytes, entry: str | None = None) -> Any:
         raise ExecutionError("unavailable", "the fake runtime cannot load a library")
+
+    def get_function(self, module: Any, name: str) -> Callable:
+        try:
+            fn = module[name] if isinstance(module, dict) else getattr(module, name)
+        except (KeyError, AttributeError) as exc:
+            raise ExecutionError("compile", f"the module exports no function {name!r}") from exc
+        if not callable(fn):
+            raise ExecutionError("runtime", f"module member {name!r} is not callable")
+        return fn
 
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> _FakeTensor:
         return _FakeTensor(data=data, dtype=dtype, shape=shape)

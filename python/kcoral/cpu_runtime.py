@@ -30,7 +30,10 @@ class CPURuntime:
             return builtin_ops.CUDASource(source=source, entry=entry)
         raise ExecutionError("unavailable", "Python modules are unavailable in CPU mode")
 
-    def load_library(self, data: bytes, entry: str) -> Any:
+    def load_library(self, data: bytes, entry: str | None = None) -> Any:
+        raise ExecutionError("unavailable", "library uploads require a GPU worker")
+
+    def get_function(self, module: Any, name: str) -> Callable:
         raise ExecutionError("unavailable", "library uploads require a GPU worker")
 
     def target(self) -> dict[str, str]:

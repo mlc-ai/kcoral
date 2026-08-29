@@ -107,7 +107,8 @@ meanwhile.
 
 **Upload a prebuilt library** when your kernel needs custom compilation that the
 server's `compile_*` builtins cannot support. You compile the kernel and upload
-the library; the server only loads the compiled object and calls `entry`.
+the library; the server only loads the compiled object and calls its exported
+functions.
 
 For CUDA C, nvcc and linking run with the GPU lease released; the server
 reacquires it for the short module-loading phase before `compile_cuda` completes.
@@ -125,6 +126,28 @@ In practice, reach for a library when the build spans several translation units,
 comes out of a code generator, needs flags the builtins do not expose, or is a
 CUTLASS-heavy recipe you already have working. Anything else is cheaper to
 compile on the server.
+
+A TVM-FFI library may export several launchers. Upload it without `entry`, bind
+the functions once, then use the returned registers anywhere a compiled kernel
+is accepted:
+
+```python
+module = program.upload(id="kernels", kind="library", value=library_bytes)
+initialize = program.get_function(id="initialize", module=module, name="initialize")
+step = program.get_function(id="step", module=module, name="step")
+
+program.run(id="initialize_input", fn=initialize, args=[x])
+program.run(id="invoke", fn=step, args=[x, y])
+timing = program.run(
+    id="timing",
+    fn="builtin.benchmark",
+    args=[step, x, y, {"warmup": 10, "repeat": 50}],
+)
+program.return_(key="timing", value=timing)
+```
+
+The module and its derived functions remain request-local handles. They can be
+passed to later `run` instructions but cannot be returned to the client.
 
 A library must be built for the GPU the server runs, not the one sitting in your
 client machine:

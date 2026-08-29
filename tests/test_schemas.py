@@ -1,7 +1,15 @@
 import pytest
 
 from kcoral.errors import ValidationError
-from kcoral.schemas import Ref, Return, Run, Upload, parse_program, strict_json_loads
+from kcoral.schemas import (
+    GetFunction,
+    Ref,
+    Return,
+    Run,
+    Upload,
+    parse_program,
+    strict_json_loads,
+)
 
 TENSOR_HASH = "0" * 64
 
@@ -83,6 +91,31 @@ def test_parse_library_upload():
     assert program.blob_uploads() == [upload]
 
 
+def test_parse_library_module_and_get_function():
+    program = parse_program(
+        {
+            "instructions": [
+                {
+                    "op": "upload",
+                    "id": "kernels",
+                    "kind": "library",
+                    "blob": TENSOR_HASH,
+                },
+                {
+                    "op": "get_function",
+                    "id": "step",
+                    "module": {"$ref": "kernels"},
+                    "name": "namespace.step",
+                },
+            ]
+        }
+    )
+    upload, get_function = program.instructions
+    assert isinstance(upload, Upload) and upload.entry is None
+    assert isinstance(get_function, GetFunction)
+    assert get_function.module == Ref("kernels") and get_function.name == "namespace.step"
+
+
 def test_parse_bytes_upload():
     program = parse_program(
         {
@@ -139,8 +172,14 @@ def test_parse_bytes_upload():
             "unsupported language",
         ),
         (
-            {"op": "upload", "id": "x", "kind": "library", "blob": TENSOR_HASH},
-            "missing field",
+            {
+                "op": "upload",
+                "id": "x",
+                "kind": "library",
+                "blob": TENSOR_HASH,
+                "entry": "not an id",
+            },
+            "'entry' must be an identifier",
         ),
         (
             {"op": "upload", "id": "x", "kind": "bytes", "blob": "sha256:old"},
@@ -221,6 +260,65 @@ def test_forward_references_rejected():
                 "instructions": [
                     {"op": "return", "key": "x", "value": {"$ref": "x"}},
                     {"op": "run", "id": "x", "fn": "builtin.zeros"},
+                ]
+            }
+        )
+    with pytest.raises(ValidationError, match="unknown/forward"):
+        parse_program(
+            {
+                "instructions": [
+                    {
+                        "op": "get_function",
+                        "id": "step",
+                        "module": {"$ref": "module"},
+                        "name": "step",
+                    },
+                    {
+                        "op": "upload",
+                        "id": "module",
+                        "kind": "library",
+                        "blob": TENSOR_HASH,
+                    },
+                ]
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "instruction,match",
+    [
+        (
+            {"op": "get_function", "id": "fn", "module": "module", "name": "step"},
+            "must be.*ref",
+        ),
+        (
+            {"op": "get_function", "id": "fn", "module": {"$ref": "module"}, "name": ""},
+            "non-empty string",
+        ),
+        (
+            {
+                "op": "get_function",
+                "id": "fn",
+                "module": {"$ref": "module"},
+                "name": "step",
+                "extra": True,
+            },
+            "unknown field",
+        ),
+    ],
+)
+def test_invalid_get_function_shapes_rejected(instruction, match):
+    with pytest.raises(ValidationError, match=match):
+        parse_program(
+            {
+                "instructions": [
+                    {
+                        "op": "upload",
+                        "id": "module",
+                        "kind": "library",
+                        "blob": TENSOR_HASH,
+                    },
+                    instruction,
                 ]
             }
         )

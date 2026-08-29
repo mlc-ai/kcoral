@@ -68,7 +68,7 @@ The `program` part is:
 
 ```json
 {
-  "instructions": [ /* one or more upload / run / return instructions */ ],
+  "instructions": [ /* one or more upload / get_function / run / return instructions */ ],
   "options": { "timeout_seconds": 120 }
 }
 ```
@@ -301,11 +301,13 @@ nothing:
 }
 ```
 
-`blob` names the bytes of an ELF shared object for the server's platform. The
-server loads it with `tvm_ffi.load_module` and checks that it exports `entry`;
-one that cannot be loaded, or that has no such function, fails the upload with a
-`compile` error. Nothing else about the object is inspected, so any producer TVM
-FFI can load is accepted. Three are usual:
+`blob` names the bytes of an ELF shared object for the server's platform. With
+`entry`, the server loads it with `tvm_ffi.load_module`, checks the export, and
+binds the upload handle directly to that callable. Without `entry`, the handle
+instead denotes the module, and later `get_function` instructions may bind any
+number of its exports. A library that cannot be loaded, or a requested function
+that is absent, fails with a `compile` error. Nothing else about the object is
+inspected, so any producer TVM FFI can load is accepted. Three are usual:
 
 - `TVM_FFI_DLL_EXPORT_TYPED_FUNC`, which `tvm_ffi.cpp.build` applies for you,
   emitting a `__tvm_ffi_<entry>` symbol. A code generator that emits that symbol
@@ -393,7 +395,8 @@ callable, so no compile instruction appears.
 A field is accepted exactly for the kinds it lists, and is rejected for the
 others: a `module` upload carries `source` and an optional `entry` and
 `language`, a `tensor` upload carries `blob`, `dtype`, and `shape`, a `bytes`
-upload carries `blob`, and a `library` upload carries `blob` and `entry`.
+upload carries `blob`, and a `library` upload carries `blob` and an optional
+`entry`.
 
 | Field | Kinds | Required for | Notes |
 |---|---|---|---|
@@ -401,7 +404,7 @@ upload carries `blob`, and a `library` upload carries `blob` and `entry`.
 | `id` | all | all | Unique handle name |
 | `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, or `"library"` |
 | `source` | module | module | UTF-8 source defining the entry object |
-| `entry` | module, library | `cuda` modules, library | Identifier naming the entry object |
+| `entry` | module, library | `cuda` modules | Identifier naming the entry object; omit it on a library to bind the module itself |
 | `language` | module | — | `"python"` (default) or `"cuda"` |
 | `blob` | tensor, bytes, library | tensor, bytes, library | SHA-256 of the raw bytes |
 | `dtype` | tensor | tensor | Tensor data type |
@@ -424,6 +427,45 @@ requests cost only its hash. If any blob is missing, the program does not run:
 
 The client resends the program with the missing parts. Malformed names,
 duplicates, hash mismatches, and unreferenced parts are invalid requests.
+
+---
+
+## `get_function`
+
+Binds one function exported by an earlier library module to a new handle:
+
+```json
+{
+  "op": "get_function",
+  "id": "step",
+  "module": {"$ref": "kernels"},
+  "name": "step"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---:|---|
+| `op` | string | yes | `"get_function"` |
+| `id` | string | yes | Handle for the callable |
+| `module` | `{"$ref": id}` | yes | Earlier library upload without `entry` |
+| `name` | string | yes | Non-empty TVM-FFI function name |
+
+The module and function are request-local handles. The function keeps its
+defining module alive and is invoked in a TVM-FFI stream context corresponding
+to the worker's current PyTorch stream.
+
+Given a library that exports `init` and `step`, the Python client writes:
+
+```python
+module = program.upload(id="kernels", kind="library", value=library_bytes)
+init = program.get_function(id="init", module=module, name="init")
+step = program.get_function(id="step", module=module, name="step")
+program.run(id="initialize", fn=init, args=[input_tensor])
+program.run(id="invoke", fn=step, args=[input_tensor, output_tensor])
+```
+
+Module and function handles are request-local capabilities and cannot be
+returned in a response.
 
 ---
 
@@ -658,7 +700,7 @@ A `FAILED` response's `error` describes that instruction:
 | `kind` | string | See kinds below |
 | `message` | string | Human-readable description |
 | `instruction_index` | integer | Zero-based position in `instructions` |
-| `instruction_op` | string | `"upload"`, `"run"`, or `"return"` |
+| `instruction_op` | string | `"upload"`, `"get_function"`, `"run"`, or `"return"` |
 | `instruction_id` | string \| null | The instruction's `id`; `null` for `return` |
 | `traceback` | string | Server-side traceback, truncated to 8192 bytes |
 
@@ -819,7 +861,8 @@ print(result.stdout, result.stderr)
 Program.upload(id=..., kind="module", source=..., entry=None, language="python") -> Register
 Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
 Program.upload(id=..., kind="bytes", value=...) -> Register
-Program.upload(id=..., kind="library", value=..., entry=...) -> Register
+Program.upload(id=..., kind="library", value=..., entry=None) -> Register
+Program.get_function(id=..., module=..., name=...) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
 

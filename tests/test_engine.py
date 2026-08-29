@@ -3,7 +3,7 @@ import pytest
 from kcoral.deferred import DeferredGPUResult
 from kcoral.engine import execute
 from kcoral.keys import compute_blob_hash
-from kcoral.schemas import Program, Ref, Return, Run, Upload
+from kcoral.schemas import GetFunction, Program, Ref, Return, Run, Upload
 from kcoral.testing import UNSHARED_GPU, FakeRuntime
 
 
@@ -24,6 +24,60 @@ def call_module(source, entry=None):
         FakeRuntime(),
         UNSHARED_GPU,
     )
+
+
+def test_library_module_binds_multiple_functions_and_chains_results():
+    digest = compute_blob_hash(b"fake-library")
+
+    class LibraryRuntime(FakeRuntime):
+        def load_library(self, data, entry):
+            assert data == b"fake-library"
+            module = {"add_one": lambda value: value + 1, "times_two": lambda value: value * 2}
+            return module if entry is None else self.get_function(module, entry)
+
+    outcome = execute(
+        Program(
+            [
+                Upload("module", "library", blob=digest),
+                GetFunction("add_one", ref("module"), "add_one"),
+                GetFunction("times_two", ref("module"), "times_two"),
+                Run("incremented", ref("add_one"), [20]),
+                Run("answer", ref("times_two"), [ref("incremented")]),
+                Return("answer", ref("answer")),
+            ],
+            blob_bytes={digest: b"fake-library"},
+        ),
+        LibraryRuntime(),
+        UNSHARED_GPU,
+    )
+
+    assert outcome.status == "COMPLETED"
+    assert outcome.results == {"answer": {"type": "integer", "value": 42}}
+
+
+def test_missing_library_function_is_attributed_to_get_function():
+    digest = compute_blob_hash(b"fake-library")
+
+    class LibraryRuntime(FakeRuntime):
+        def load_library(self, data, entry):
+            return {}
+
+    outcome = execute(
+        Program(
+            [
+                Upload("module", "library", blob=digest),
+                GetFunction("missing", ref("module"), "missing"),
+            ],
+            blob_bytes={digest: b"fake-library"},
+        ),
+        LibraryRuntime(),
+        UNSHARED_GPU,
+    )
+
+    assert outcome.status == "FAILED"
+    assert outcome.error["kind"] == "compile"
+    assert outcome.error["instruction_op"] == "get_function"
+    assert outcome.error["instruction_id"] == "missing"
 
 
 def test_cleanup_failure_preserves_runtime_error_and_marks_worker_unhealthy():

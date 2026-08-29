@@ -8,7 +8,7 @@ import pytest
 
 from kcoral.engine import execute
 from kcoral.keys import compute_blob_hash
-from kcoral.schemas import Program, Ref, Return, Run, Upload
+from kcoral.schemas import GetFunction, Program, Ref, Return, Run, Upload
 from kcoral.testing import UNSHARED_GPU
 
 pytestmark = pytest.mark.skipif(
@@ -51,6 +51,26 @@ void add_one(tvm::ffi::TensorView x, tvm::ffi::TensorView y) {
 }
 """
 
+MULTI_ENTRY_CUDA_KERNEL = r"""
+#include <tvm/ffi/extra/c_env_api.h>
+
+__global__ void add_value_kernel(const float* x, float* y, int n, float value) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) y[i] = x[i] + value;
+}
+
+void add_value(tvm::ffi::TensorView x, tvm::ffi::TensorView y, float value) {
+  int n = static_cast<int>(x.numel());
+  cudaStream_t stream = static_cast<cudaStream_t>(
+      TVMFFIEnvGetStream(x.device().device_type, x.device().device_id));
+  add_value_kernel<<<(n + 255) / 256, 256, 0, stream>>>(
+      static_cast<const float*>(x.data_ptr()), static_cast<float*>(y.data_ptr()), n, value);
+}
+
+void add_one(tvm::ffi::TensorView x, tvm::ffi::TensorView y) { add_value(x, y, 1.0f); }
+void add_two(tvm::ffi::TensorView x, tvm::ffi::TensorView y) { add_value(x, y, 2.0f); }
+"""
+
 # One warp round-trips a value per lane through tensor memory. tcgen05 is gated
 # behind the sm_100a target. The tcgen05 ops are warp-synchronous, so no
 # __syncthreads is needed, but the allocation must be freed or the launch reports
@@ -89,6 +109,20 @@ def build_library(source, entry, tmp_path):
     cu = tmp_path / f"{entry}.cu"
     cu.write_text(extension._decorate_with_tvm_ffi(source, {entry: ""}))
     return pathlib.Path(tvm_ffi.cpp.build(name=entry, cuda_files=[str(cu)])).read_bytes()
+
+
+def build_multi_entry_library(source, entries, tmp_path):
+    """Build one TVM-FFI library that exports every name in ``entries``."""
+    import tvm_ffi.cpp
+    from tvm_ffi.cpp import extension
+
+    from benchmark_server.builtin_ops.cuda import _cuda_arch_list
+
+    os.environ.setdefault("TVM_FFI_CUDA_ARCH_LIST", _cuda_arch_list())
+    name = "multi_entry_" + "_".join(entries)
+    cu = tmp_path / f"{name}.cu"
+    cu.write_text(extension._decorate_with_tvm_ffi(source, dict.fromkeys(entries, "")))
+    return pathlib.Path(tvm_ffi.cpp.build(name=name, cuda_files=[str(cu)])).read_bytes()
 
 
 def build_tirx_library(tmp_path):
@@ -321,6 +355,54 @@ def test_prebuilt_library_runs_and_benchmarks(tmp_path):
     outcome = execute(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
+    assert decode_structural(outcome.results["timing"])["latency_ms_median"] > 0
+
+
+def test_prebuilt_library_module_binds_and_runs_multiple_functions(tmp_path):
+    data = build_multi_entry_library(
+        MULTI_ENTRY_CUDA_KERNEL,
+        ["add_one", "add_two"],
+        tmp_path,
+    )
+    digest = compute_blob_hash(data)
+    reference = "def one(a):\n    return a + 1.0\n\ndef two(a):\n    return a + 2.0\n"
+    program = Program(
+        [
+            Upload("kernels", "library", blob=digest),
+            GetFunction("add_one", ref("kernels"), "add_one"),
+            GetFunction("add_two", ref("kernels"), "add_two"),
+            Upload("one", "module", source=reference, entry="one"),
+            Upload("two", "module", source=reference, entry="two"),
+            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
+            Run("output_one", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            Run("output_two", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            Run("invoke_one", ref("add_one"), [ref("input"), ref("output_one")]),
+            Run("invoke_two", ref("add_two"), [ref("input"), ref("output_two")]),
+            Run("expected_one", ref("one"), [ref("input")]),
+            Run("expected_two", ref("two"), [ref("input")]),
+            Run("check_one", "builtin.check_close", [ref("output_one"), ref("expected_one")]),
+            Run("check_two", "builtin.check_close", [ref("output_two"), ref("expected_two")]),
+            Run(
+                "timing",
+                "builtin.benchmark",
+                [
+                    ref("add_two"),
+                    ref("input"),
+                    ref("output_two"),
+                    {"warmup": 5, "repeat": 20},
+                ],
+            ),
+            Return("check_one", ref("check_one")),
+            Return("check_two", ref("check_two")),
+            Return("timing", ref("timing")),
+        ],
+        blob_bytes={digest: data},
+    )
+
+    outcome = execute(program, runtime(), UNSHARED_GPU)
+    assert outcome.status == "COMPLETED", outcome.error
+    assert decode_structural(outcome.results["check_one"])["max_abs_err"] == 0
+    assert decode_structural(outcome.results["check_two"])["max_abs_err"] == 0
     assert decode_structural(outcome.results["timing"])["latency_ms_median"] > 0
 
 
