@@ -24,17 +24,18 @@ class CPURuntime:
     def __init__(self) -> None:
         self._builtins = builtin_ops.snapshot_registry()
 
-    def load_module(self, source: str, entry: str | None = None, language: str = "python") -> Any:
+    def load_module(self, source: str, language: str = "python") -> Any:
         if language == "cuda":
-            assert entry is not None
-            return builtin_ops.CUDASource(source=source, entry=entry)
+            return builtin_ops.CUDAModule(source=source)
         raise ExecutionError("unavailable", "Python modules are unavailable in CPU mode")
 
-    def load_library(self, data: bytes, entry: str | None = None) -> Any:
+    def load_library(self, data: bytes) -> Any:
         raise ExecutionError("unavailable", "library uploads require a GPU worker")
 
-    def get_function(self, module: Any, name: str) -> Callable:
-        raise ExecutionError("unavailable", "library uploads require a GPU worker")
+    def get_function(self, module: Any, name: str) -> Any:
+        if isinstance(module, builtin_ops.CUDAModule):
+            return module.get_function(name)
+        raise ExecutionError("unavailable", "only CUDA source modules are available in CPU mode")
 
     def target(self) -> dict[str, str]:
         """CPU workers compile for the architecture supplied by the client."""

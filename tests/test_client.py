@@ -61,7 +61,8 @@ ML_DTYPE_NAMES = ("bfloat16", "float8_e4m3fn", "float8_e5m2")
 
 def add_one_program():
     program = Program()
-    fn = program.upload(id="fn", kind="module", source="def main(x):\n    return x + 1\n")
+    module = program.upload(id="module", kind="module", source="def main(x):\n    return x + 1\n")
+    fn = program.get_function(id="fn", module=module, name="main")
     answer = program.run(id="answer", fn=fn, args=[41])
     program.return_(key="answer", value=answer)
     return program
@@ -92,13 +93,14 @@ def test_tensor_cache_retry_and_numpy_result(server_url):
 def test_bytes_cache_retry_and_result(server_url):
     value = b"safetensors contents\x00\xff"
     program = Program()
-    inspect_file = program.upload(
-        id="inspect_file",
+    inspect_module = program.upload(
+        id="inspect_module",
         kind="module",
         source=(
             "def main(data):\n    return {'size': len(data), 'format': data[:11].decode('ascii')}\n"
         ),
     )
+    inspect_file = program.get_function(id="inspect_file", module=inspect_module, name="main")
     file_data = program.upload(id="file", kind="bytes", value=value)
     result = program.run(id="result", fn=inspect_file, args=[file_data])
     program.return_(key="file", value=result)
@@ -156,11 +158,12 @@ def test_ml_dtype_tensor_round_trips_through_the_server(server_url, name):
 
 def test_nested_binary_results_are_decoded(server_url):
     program = Program()
-    fn = program.upload(
-        id="fn",
+    module = program.upload(
+        id="module",
         kind="module",
         source="def main():\n    return [b'a', {'nested': b'b'}]\n",
     )
+    fn = program.get_function(id="fn", module=module, name="main")
     value = program.run(id="value", fn=fn)
     program.return_(key="value", value=value)
     with Client(server_url) as client:
@@ -179,7 +182,10 @@ def test_failed_instruction_is_data(server_url):
 
 def test_interleaved_return_survives_a_later_failure(server_url):
     program = Program()
-    fn = program.upload(id="fn", kind="module", source="def main():\n    return b'checkpoint'\n")
+    module = program.upload(
+        id="module", kind="module", source="def main():\n    return b'checkpoint'\n"
+    )
+    fn = program.get_function(id="fn", module=module, name="main")
     early = program.run(id="early", fn=fn)
     program.return_(key="early", value=early)  # checkpointed before the failure
     program.run(id="bad", fn="builtin.nope")
@@ -249,22 +255,27 @@ def test_program_builder_validates_ids_and_tensor_metadata():
     reusable.upload(id="tensor", kind="tensor", value=b"\x00" * 4, dtype="float32", shape=[1])
 
 
-def test_cuda_module_builder_emits_language_and_entry():
+def test_cuda_module_builder_emits_language_and_get_function():
     program = Program()
-    program.upload(id="kernel", kind="module", source="void add() {}", entry="add", language="cuda")
+    module = program.upload(id="kernel", kind="module", source="void add() {}", language="cuda")
+    program.get_function(id="add", module=module, name="add")
     assert program.instructions[0]["language"] == "cuda"
-    assert program.instructions[0]["entry"] == "add"
+    assert "entry" not in program.instructions[0]
+    assert program.instructions[1] == {
+        "op": "get_function",
+        "id": "add",
+        "module": {"$ref": "kernel"},
+        "name": "add",
+    }
 
     # python is the default and stays off the wire
     program.upload(id="py", kind="module", source="def main():\n    pass\n")
-    assert "language" not in program.instructions[1]
+    assert "language" not in program.instructions[2]
 
 
 @pytest.mark.parametrize(
     "kwargs,match",
     [
-        ({"kind": "module", "source": "x", "language": "cuda"}, "must name its 'entry'"),
-        ({"kind": "module", "source": "x", "language": "cuda", "entry": "main"}, "reserves 'main'"),
         ({"kind": "module", "source": "x", "language": "rust"}, "'python' or 'cuda'"),
     ],
 )
@@ -273,11 +284,11 @@ def test_cuda_module_builder_validation(kwargs, match):
         Program().upload(id="kernel", **kwargs)
 
 
-def test_library_builder_hashes_bytes_and_carries_entry():
+def test_library_builder_hashes_bytes_and_gets_functions():
     program = Program()
-    program.upload(id="k", kind="library", value=b"\x7fELF...", entry="add_one")
+    program.upload(id="k", kind="library", value=b"\x7fELF...")
     instruction = program.instructions[0]
-    assert instruction["kind"] == "library" and instruction["entry"] == "add_one"
+    assert instruction["kind"] == "library" and "entry" not in instruction
     assert instruction["blob"] == compute_blob_hash(b"\x7fELF...")
 
     modules = Program()
@@ -299,8 +310,10 @@ def test_library_builder_hashes_bytes_and_carries_entry():
         },
     ]
 
-    with pytest.raises(ValueError, match="must be an identifier"):
-        Program().upload(id="k", kind="library", value=b"x", entry="not an id")
+
+def test_upload_has_no_entry_argument():
+    with pytest.raises(TypeError, match="unexpected keyword argument 'entry'"):
+        Program().upload(id="module", kind="module", source="", entry="main")
 
 
 def test_get_function_builder_validates_its_module_and_name():

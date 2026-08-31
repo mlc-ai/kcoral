@@ -34,11 +34,9 @@ MAX_TRACEBACK_BYTES = 8192
 
 
 class Runtime(Protocol):
-    def load_module(
-        self, source: str, entry: str | None = None, language: str = "python"
-    ) -> Any: ...
-    def load_library(self, data: bytes, entry: str | None = None) -> Any: ...
-    def get_function(self, module: Any, name: str) -> Callable: ...
+    def load_module(self, source: str, language: str = "python") -> Any: ...
+    def load_library(self, data: bytes) -> Any: ...
+    def get_function(self, module: Any, name: str) -> Any: ...
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any: ...
     def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None: ...
     def builtin(self, name: str) -> Callable: ...
@@ -84,7 +82,6 @@ def execute(
                             assert instruction.source is not None
                             env[instruction.id] = runtime.load_module(
                                 instruction.source,
-                                entry=instruction.entry,
                                 language=instruction.language,
                             )
                         elif instruction.kind == "bytes":
@@ -93,7 +90,7 @@ def execute(
                         elif instruction.kind == "library":
                             assert instruction.blob is not None
                             env[instruction.id] = runtime.load_library(
-                                program.blob_bytes[instruction.blob], instruction.entry
+                                program.blob_bytes[instruction.blob]
                             )
                         else:
                             assert (

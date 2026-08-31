@@ -67,7 +67,13 @@ def response_parts(response):
 def scalar_program():
     return {
         "instructions": [
-            {"op": "upload", "id": "fn", "kind": "module", "source": ADD_ONE},
+            {"op": "upload", "id": "fn_module", "kind": "module", "source": ADD_ONE},
+            {
+                "op": "get_function",
+                "id": "fn",
+                "module": {"$ref": "fn_module"},
+                "name": "main",
+            },
             {"op": "run", "id": "answer", "fn": {"$ref": "fn"}, "args": [41]},
             {"op": "return", "key": "answer", "value": {"$ref": "answer"}},
         ]
@@ -129,11 +135,16 @@ def test_cpu_cuda_compilation_end_to_end():
         "instructions": [
             {
                 "op": "upload",
-                "id": "source",
+                "id": "source_module",
                 "kind": "module",
                 "language": "cuda",
                 "source": "void add_one(tvm::ffi::TensorView x) {}",
-                "entry": "add_one",
+            },
+            {
+                "op": "get_function",
+                "id": "source",
+                "module": {"$ref": "source_module"},
+                "name": "add_one",
             },
             {
                 "op": "run",
@@ -334,7 +345,13 @@ def test_request_and_response_size_limits():
     source = "def main():\n    return b'x' * 1000\n"
     program = {
         "instructions": [
-            {"op": "upload", "id": "fn", "kind": "module", "source": source},
+            {"op": "upload", "id": "fn_module", "kind": "module", "source": source},
+            {
+                "op": "get_function",
+                "id": "fn",
+                "module": {"$ref": "fn_module"},
+                "name": "main",
+            },
             {"op": "run", "id": "value", "fn": {"$ref": "fn"}},
             {"op": "return", "key": "value", "value": {"$ref": "value"}},
         ]
@@ -375,7 +392,13 @@ def test_stdout_stderr_and_output_limit_are_request_level():
     )
     program = {
         "instructions": [
-            {"op": "upload", "id": "fn", "kind": "module", "source": source},
+            {"op": "upload", "id": "fn_module", "kind": "module", "source": source},
+            {
+                "op": "get_function",
+                "id": "fn",
+                "module": {"$ref": "fn_module"},
+                "name": "main",
+            },
             {"op": "run", "id": "value", "fn": {"$ref": "fn"}},
         ],
         "options": {"output_limit_bytes": 8},
@@ -442,7 +465,13 @@ SPAWN_AND_HANG = (
 def _spawner_program(source, pid_file):
     return {
         "instructions": [
-            {"op": "upload", "id": "fn", "kind": "module", "source": source},
+            {"op": "upload", "id": "fn_module", "kind": "module", "source": source},
+            {
+                "op": "get_function",
+                "id": "fn",
+                "module": {"$ref": "fn_module"},
+                "name": "main",
+            },
             {"op": "run", "id": "call", "fn": {"$ref": "fn"}, "args": [pid_file]},
         ],
         "options": {"timeout_seconds": 1},
@@ -492,7 +521,13 @@ def test_real_kernel_end_to_end():
     digest = compute_blob_hash(raw)
     program = {
         "instructions": [
-            {"op": "upload", "id": "kernel", "kind": "module", "source": KERNEL},
+            {"op": "upload", "id": "kernel_module", "kind": "module", "source": KERNEL},
+            {
+                "op": "get_function",
+                "id": "kernel",
+                "module": {"$ref": "kernel_module"},
+                "name": "main",
+            },
             {
                 "op": "upload",
                 "id": "input",
@@ -690,11 +725,16 @@ def test_cuda_c_kernel_end_to_end():
         "instructions": [
             {
                 "op": "upload",
-                "id": "kernel",
+                "id": "kernel_module",
                 "kind": "module",
                 "language": "cuda",
                 "source": CUDA_KERNEL,
-                "entry": "scale",
+            },
+            {
+                "op": "get_function",
+                "id": "kernel",
+                "module": {"$ref": "kernel_module"},
+                "name": "scale",
             },
             {
                 "op": "upload",
@@ -744,13 +784,24 @@ def test_illegal_access_replaces_only_worker_and_next_gpu_request_recovers():
         "instructions": [
             {
                 "op": "upload",
-                "id": "kernel",
+                "id": "kernel_module",
                 "kind": "module",
                 "language": "cuda",
                 "source": ILLEGAL_ACCESS_KERNEL,
-                "entry": "illegal_access",
             },
-            {"op": "upload", "id": "sync_fn", "kind": "module", "source": CUDA_SYNC},
+            {
+                "op": "get_function",
+                "id": "kernel",
+                "module": {"$ref": "kernel_module"},
+                "name": "illegal_access",
+            },
+            {"op": "upload", "id": "sync_module", "kind": "module", "source": CUDA_SYNC},
+            {
+                "op": "get_function",
+                "id": "sync_fn",
+                "module": {"$ref": "sync_module"},
+                "name": "main",
+            },
             {
                 "op": "run",
                 "id": "compiled",
@@ -806,7 +857,13 @@ def test_parallel_triton_illegal_accesses_match_and_workers_recover(tmp_path, mo
 
     def triton_program(source, *, return_output=False):
         instructions = [
-            {"op": "upload", "id": "kernel", "kind": "module", "source": source, "entry": "run"},
+            {"op": "upload", "id": "kernel_module", "kind": "module", "source": source},
+            {
+                "op": "get_function",
+                "id": "kernel",
+                "module": {"$ref": "kernel_module"},
+                "name": "run",
+            },
             {
                 "op": "run",
                 "id": "output",
@@ -869,11 +926,16 @@ def test_cuda_last_error_fails_current_request_without_replacing_worker():
         "instructions": [
             {
                 "op": "upload",
-                "id": "kernel",
+                "id": "kernel_module",
                 "kind": "module",
                 "language": "cuda",
                 "source": STALE_LAST_ERROR_KERNEL,
-                "entry": "stale_launch",
+            },
+            {
+                "op": "get_function",
+                "id": "kernel",
+                "module": {"$ref": "kernel_module"},
+                "name": "stale_launch",
             },
             {
                 "op": "run",
@@ -928,7 +990,18 @@ def test_compiling_does_not_hold_the_gpu():
     def compiling(source):
         return {
             "instructions": [
-                {"op": "upload", "id": "kernel", "kind": "module", "source": source},
+                {
+                    "op": "upload",
+                    "id": "kernel_module",
+                    "kind": "module",
+                    "source": source,
+                },
+                {
+                    "op": "get_function",
+                    "id": "kernel",
+                    "module": {"$ref": "kernel_module"},
+                    "name": "main",
+                },
                 {
                     "op": "run",
                     "id": "compiled",

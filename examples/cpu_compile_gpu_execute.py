@@ -35,13 +35,13 @@ REFERENCE = "def main(a):\n    return a + 1.0\n"
 
 def compile_program(arch: str) -> Program:
     program = Program()
-    source = program.upload(
+    module = program.upload(
         id="source",
         kind="module",
         language="cuda",
         source=CUDA_SOURCE,
-        entry="add_one",
     )
+    source = program.get_function(id="add_one_source", module=module, name="add_one")
     library = program.run(
         id="library",
         fn="builtin.compile_cuda_binary",
@@ -53,8 +53,10 @@ def compile_program(arch: str) -> Program:
 
 def benchmark_program(library: bytes) -> Program:
     program = Program()
-    kernel = program.upload(id="kernel", kind="library", value=library, entry="add_one")
-    reference = program.upload(id="reference", kind="module", source=REFERENCE)
+    module = program.upload(id="kernel_module", kind="library", value=library)
+    kernel = program.get_function(id="kernel", module=module, name="add_one")
+    reference_module = program.upload(id="reference_module", kind="module", source=REFERENCE)
+    reference = program.get_function(id="reference", module=reference_module, name="main")
     src = program.run(
         id="src",
         fn="builtin.randn",

@@ -54,7 +54,7 @@ def add_one(src: cute.Tensor, dst: cute.Tensor):
     add_one_kernel(src, dst).launch(grid=((n + 255) // 256, 1, 1), block=(256, 1, 1))
 """
 
-# The entry is exported through TVM FFI, so it takes TensorView parameters and
+# The selected function is exported through TVM FFI, so it takes TensorView parameters and
 # returns void; the includes and the export macro come from the server.
 CUDA_KERNEL = r"""
 __global__ void add_one_kernel(const float* x, float* y, int n) {
@@ -85,7 +85,8 @@ def add_one(x_ptr, y_ptr, n, BLOCK: tl.constexpr):
 
 def tirx_program() -> Program:
     program = Program()
-    kernel = program.upload(id="kernel", kind="module", source=TIRX_KERNEL)
+    module = program.upload(id="kernel_module", kind="module", source=TIRX_KERNEL)
+    kernel = program.get_function(id="kernel", module=module, name="main")
     src = program.upload(id="src", kind="tensor", value=np.arange(N, dtype=np.float32))
     dst = program.run(id="dst", fn="builtin.empty", args=[{"shape": [N], "dtype": "float32"}])
 
@@ -104,9 +105,8 @@ def tirx_program() -> Program:
 
 def cutedsl_program() -> Program:
     program = Program()
-    # `entry` names the @cute.jit launcher: with the kernel beside it there are
-    # two top-level definitions and no `main`, which would be ambiguous.
-    kernel = program.upload(id="kernel", kind="module", source=CUTEDSL_KERNEL, entry="add_one")
+    module = program.upload(id="kernel_module", kind="module", source=CUTEDSL_KERNEL)
+    kernel = program.get_function(id="kernel", module=module, name="add_one")
     src = program.upload(id="src", kind="tensor", value=np.arange(N, dtype=np.float32))
     dst = program.run(id="dst", fn="builtin.empty", args=[{"shape": [N], "dtype": "float32"}])
 
@@ -126,11 +126,10 @@ def cutedsl_program() -> Program:
 
 def cuda_program() -> Program:
     program = Program()
-    # `language` makes the source CUDA C, and `entry` is required: nothing is
-    # executed, so there is no namespace to infer a name from. C++ reserves `main`.
-    kernel = program.upload(
-        id="kernel", kind="module", source=CUDA_KERNEL, entry="add_one", language="cuda"
-    )
+    # `language` makes this a CUDA C source module; selecting a function from it
+    # creates the input consumed by the CUDA compile builtins.
+    module = program.upload(id="kernel_module", kind="module", source=CUDA_KERNEL, language="cuda")
+    kernel = program.get_function(id="kernel", module=module, name="add_one")
     src = program.upload(id="src", kind="tensor", value=np.arange(N, dtype=np.float32))
     dst = program.run(id="dst", fn="builtin.empty", args=[{"shape": [N], "dtype": "float32"}])
 
@@ -150,7 +149,8 @@ def cuda_program() -> Program:
 
 def triton_program() -> Program:
     program = Program()
-    kernel = program.upload(id="kernel", kind="module", source=TRITON_KERNEL, entry="add_one")
+    module = program.upload(id="kernel_module", kind="module", source=TRITON_KERNEL)
+    kernel = program.get_function(id="kernel", module=module, name="add_one")
     src = program.upload(id="src", kind="tensor", value=np.arange(N, dtype=np.float32))
     dst = program.run(id="dst", fn="builtin.empty", args=[{"shape": [N], "dtype": "float32"}])
 

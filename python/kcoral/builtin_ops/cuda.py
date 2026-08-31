@@ -20,11 +20,25 @@ from ._registry import register_builtin
 
 
 @dataclass(frozen=True)
+class CUDAModule:
+    """Uploaded CUDA C source before a function has been selected."""
+
+    source: str
+
+    def get_function(self, name: str) -> CUDASource:
+        if not name.isidentifier():
+            raise ExecutionError("parse", "a CUDA function name must be an identifier")
+        if name == "main":
+            raise ExecutionError("parse", "C++ reserves 'main'; name the function otherwise")
+        return CUDASource(source=self.source, name=name)
+
+
+@dataclass(frozen=True)
 class CUDASource:
     """CUDA C source text and the name of the function it exports."""
 
     source: str
-    entry: str
+    name: str
 
 
 @register_builtin("compile_cuda", cpu_only=True)
@@ -37,7 +51,7 @@ def compile_cuda(src: Any, cfg: Any = None) -> Any:
     # Building is host-only and may overlap another worker's benchmark. Loading
     # the shared object registers its CUDA fatbinary, so defer that small phase
     # until the engine has reacquired this GPU's lease.
-    return DeferredGPUResult(lambda: _load_compiled_entry(library_path, src.entry))
+    return DeferredGPUResult(lambda: _load_compiled_function(library_path, src.name))
 
 
 @register_builtin("compile_cuda_binary", cpu_only=True)
@@ -83,9 +97,9 @@ def _build_cuda(src: CUDASource, cuda_cflags: list[str], arch_list: str | None =
     try:
         with _cuda_arch_override(arch_list):
             return tvm_ffi.cpp.build_inline(
-                name=f"upload_{src.entry}",
+                name=f"upload_{src.name}",
                 cuda_sources=src.source,
-                functions=None if source_manages_exports else src.entry,
+                functions=None if source_manages_exports else src.name,
                 extra_cuda_cflags=cuda_cflags or None,
                 backend="cuda",
             )
@@ -142,21 +156,23 @@ def _declares_tvm_ffi_macro(source: str) -> bool:
     return bool(re.search(r"(?m)^[ \t]*TVM_FFI_DLL_EXPORT_TYPED_FUNC[ \t]*\(", source))
 
 
-def _compiled_entry(mod: Any, entry: str):
-    if hasattr(mod, entry):
-        return getattr(mod, entry)
+def _compiled_function(mod: Any, name: str):
+    if hasattr(mod, name):
+        return getattr(mod, name)
     try:
-        return mod.get_function(entry)
+        return mod.get_function(name)
     except AttributeError as exc:
-        raise ExecutionError("compile", f"compiled module has no exported entry {entry!r}") from exc
+        raise ExecutionError(
+            "compile", f"compiled module has no exported function {name!r}"
+        ) from exc
 
 
-def _load_compiled_entry(library_path: str, entry: str):
+def _load_compiled_function(library_path: str, name: str):
     import tvm_ffi
 
     try:
         mod = tvm_ffi.load_module(library_path)
-        return _compiled_entry(mod, entry)
+        return _compiled_function(mod, name)
     except ExecutionError:
         raise
     except Exception as exc:

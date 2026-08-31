@@ -52,8 +52,10 @@ def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.con
 REFERENCE = "def main(a):\n    return a + 1.0\n"
 
 program = Program()
-kernel = program.upload(id="kernel", kind="module", source=KERNEL)
-reference = program.upload(id="reference", kind="module", source=REFERENCE)
+kernel_module = program.upload(id="kernel_module", kind="module", source=KERNEL)
+kernel = program.get_function(id="kernel", module=kernel_module, name="main")
+reference_module = program.upload(id="reference_module", kind="module", source=REFERENCE)
+reference = program.get_function(id="reference", module=reference_module, name="main")
 
 src = program.upload(id="src", kind="tensor", value=np.arange(256, dtype=np.float32))
 dst = program.run(id="dst", fn="builtin.empty", args=[{"shape": [256], "dtype": "float32"}])
@@ -76,10 +78,11 @@ print(result.results["timing"]["latency_ms_median"])
 API surface:
 
 ```python
-Program.upload(id=..., kind="module", source=..., entry=None, language="python") -> Register
+Program.upload(id=..., kind="module", source=..., language="python") -> Register
 Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
 Program.upload(id=..., kind="bytes", value=...) -> Register
-Program.upload(id=..., kind="library", value=..., entry=...) -> Register
+Program.upload(id=..., kind="library", value=...) -> Register
+Program.get_function(id=..., module=..., name=...) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
 
@@ -106,25 +109,23 @@ A field is accepted exactly for the kinds it lists:
 |---|---|---|---|
 | `id` | all | all | Unique handle name |
 | `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, or `"library"` |
-| `source` | module | module | UTF-8 source defining the entry object |
-| `entry` | module, library | `cuda` modules, library | Identifier naming the entry object |
+| `source` | module | module | UTF-8 Python or CUDA source defining a module |
 | `language` | module | — | `"python"` (default) or `"cuda"` |
 | `blob` | tensor, bytes, library | tensor, bytes, library | SHA-256 of the raw bytes |
 | `dtype` | tensor | tensor | Tensor data type |
 | `shape` | tensor | tensor | Tensor shape |
 
-A module upload binds one object out of its source: the one named by `entry`
-if set, otherwise `main`, otherwise the source's single top-level `def` or
-`class`. Two top-level definitions with no `main` and no `entry` fail as
-ambiguous. An uploaded module is ordinary Python executed on the worker (torch
-included), so a plain function works as a reference baseline.
+A module upload binds its full source namespace. Use `get_function` to select a
+named Python object or CUDA source function. Uploaded Python is ordinary code
+executed on the worker (torch included), so a plain function works as a
+reference baseline.
 
 A `bytes` upload binds the blob's bytes unchanged. They stay in CPU memory and
 can be passed to uploaded Python code, which suits files and other binary
 formats the server should parse.
 
 A `library` upload is a prebuilt ELF shared object loaded with
-`tvm_ffi.load_module`; the handle is directly callable, no compile step.
+`tvm_ffi.load_module`; use `get_function` to bind one of its exported functions.
 
 ### `run`
 
@@ -166,10 +167,10 @@ All four follow the same upload-then-compile shape:
 
 | Language | Upload | Compile call | Facts |
 |---|---|---|---|
-| TIRx | `source` | `compile_tirx(kernel, bindings?)` | Source must open with `from __future__ import annotations`, or `T.Buffer((N,), ...)` raises `NameError: N` at `def` time. `bindings` is for `@T.jit` constexprs; a `@T.prim_func` rejects them |
-| CUDA C | `source`, `language="cuda"`, `entry` | `compile_cuda(kernel, cfg?)` | Entry is `void f(tvm::ffi::TensorView, ...)`; `entry` is required and `main` is rejected; includes and export macro come from the server; builds are disk-cached |
-| CuTeDSL | `source`, `entry` (or name the `@cute.jit` entry `main`) | `compile_cutedsl(kernel, *tensors, cfg?)` | Specializes on the tensors passed, which must be the ones it will run on; nothing is cached |
-| Triton | `source`, `entry` (or name the `@triton.jit` kernel `main`) | `compile_triton(kernel, *args, cfg)` | `cfg["grid"]` (1–3 positive ints) is required; scalars and constexprs pass positionally; other `cfg` keys are launch keywords (`num_warps`, `num_stages`, constexprs by name) |
+| TIRx | `source`, then `get_function(name)` | `compile_tirx(kernel, bindings?)` | Source must open with `from __future__ import annotations`, or `T.Buffer((N,), ...)` raises `NameError: N` at `def` time. `bindings` is for `@T.jit` constexprs; a `@T.prim_func` rejects them |
+| CUDA C | `source`, `language="cuda"`, then `get_function(name)` | `compile_cuda(kernel, cfg?)` | Function is `void f(tvm::ffi::TensorView, ...)`; `main` is rejected; includes and export macro come from the server; builds are disk-cached |
+| CuTeDSL | `source`, then `get_function(name)` | `compile_cutedsl(kernel, *tensors, cfg?)` | Specializes on the tensors passed, which must be the ones it will run on; nothing is cached |
+| Triton | `source`, then `get_function(name)` | `compile_triton(kernel, *args, cfg)` | `cfg["grid"]` (1–3 positive ints) is required; scalars and constexprs pass positionally; other `cfg` keys are launch keywords (`num_warps`, `num_stages`, constexprs by name) |
 
 A missing toolchain fails that builtin with an `unavailable` error;
 `GET /health` lists installed `versions`.

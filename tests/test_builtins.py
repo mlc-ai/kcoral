@@ -56,7 +56,7 @@ def test_compile_cuda_unavailable_without_a_build_toolchain(monkeypatch, tmp_pat
     monkeypatch.setattr(shutil, "which", lambda tool: None)
     monkeypatch.setenv("CUDA_HOME", str(tmp_path))  # holds no bin/nvcc
     with pytest.raises(ExecutionError) as exc:
-        compile_cuda(CUDASource(source="", entry="add"))
+        compile_cuda(CUDASource(source="", name="add"))
     assert exc.value.kind == "unavailable"
     assert "nvcc" in exc.value.message and "ninja" in exc.value.message
 
@@ -70,7 +70,7 @@ def test_compile_cuda_finds_nvcc_under_cuda_home(monkeypatch, tmp_path):
     monkeypatch.setattr(shutil, "which", lambda tool: None)
     monkeypatch.setenv("CUDA_HOME", str(tmp_path))
     with pytest.raises(ExecutionError) as exc:
-        compile_cuda(CUDASource(source="", entry="add"))
+        compile_cuda(CUDASource(source="", name="add"))
     assert exc.value.kind == "unavailable"
     assert "nvcc" not in exc.value.message  # only ninja and the host compiler are missing
 
@@ -79,8 +79,8 @@ def test_compile_cuda_finds_nvcc_under_cuda_home(monkeypatch, tmp_path):
     "args",
     [
         (object(),),  # not a cuda upload
-        (CUDASource(source="", entry="add"), []),  # cfg is not a dict
-        (CUDASource(source="", entry="add"), {"extra_cuda_cflags": "-O3"}),  # not a list
+        (CUDASource(source="", name="add"), []),  # cfg is not a dict
+        (CUDASource(source="", name="add"), {"extra_cuda_cflags": "-O3"}),  # not a list
     ],
 )
 def test_compile_cuda_rejects_bad_arguments(args):
@@ -111,7 +111,7 @@ def test_compile_cuda_builds_off_lease_and_defers_module_loading(monkeypatch):
         lambda path: calls.append(("load", path)) or types.SimpleNamespace(run=compiled_fn),
     )
 
-    deferred = compile_cuda(CUDASource(source="void run() {}", entry="run"))
+    deferred = compile_cuda(CUDASource(source="void run() {}", name="run"))
 
     assert isinstance(deferred, DeferredGPUResult)
     assert [call[0] for call in calls] == ["build"]
@@ -125,11 +125,11 @@ def test_compile_cuda_builds_off_lease_and_defers_module_loading(monkeypatch):
     "args",
     [
         (object(), {"arch": "sm_90a"}),
-        (CUDASource(source="", entry="add"), []),
-        (CUDASource(source="", entry="add"), {}),
-        (CUDASource(source="", entry="add"), {"arch": "90a"}),
+        (CUDASource(source="", name="add"), []),
+        (CUDASource(source="", name="add"), {}),
+        (CUDASource(source="", name="add"), {"arch": "90a"}),
         (
-            CUDASource(source="", entry="add"),
+            CUDASource(source="", name="add"),
             {"arch": "sm_90a", "extra_cuda_cflags": "-O3"},
         ),
     ],
@@ -150,7 +150,7 @@ def test_compile_cuda_binary_returns_built_library(monkeypatch, tmp_path):
         return str(library)
 
     monkeypatch.setattr(cuda, "_build_cuda", build)
-    source = CUDASource(source="void add() {}", entry="add")
+    source = CUDASource(source="void add() {}", name="add")
 
     result = compile_cuda_binary(source, {"arch": "sm_100a", "extra_cuda_cflags": ["-O3"]})
 

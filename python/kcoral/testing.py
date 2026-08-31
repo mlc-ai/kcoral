@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .errors import ExecutionError
-from .gpu_runtime import resolve_entry  # shared so the double cannot drift; touches no GPU
+from .gpu_runtime import LoadedPythonModule  # imports no GPU libraries
 
 
 class _UnsharedGPU:
@@ -87,7 +87,7 @@ class FakeRuntime:
         self._poisoned = False
         self._last_error: str | None = None
 
-    def load_module(self, source: str, entry: str | None = None, language: str = "python") -> Any:
+    def load_module(self, source: str, language: str = "python") -> Any:
         assert language == "python", "the fake runtime has no compiler"
         namespace: dict[str, Any] = {}
         try:
@@ -96,7 +96,7 @@ class FakeRuntime:
             raise ExecutionError("parse", str(exc)) from exc
         except Exception as exc:
             raise ExecutionError("parse", f"{type(exc).__name__}: {exc}") from exc
-        return resolve_entry(namespace, source, entry)
+        return LoadedPythonModule(namespace=namespace)
 
     def target(self) -> dict[str, str]:
         return {"arch": "fake"}
@@ -107,16 +107,21 @@ class FakeRuntime:
     def device_uuid(self) -> str | None:
         return None
 
-    def load_library(self, data: bytes, entry: str | None = None) -> Any:
+    def load_library(self, data: bytes) -> Any:
         raise ExecutionError("unavailable", "the fake runtime cannot load a library")
 
-    def get_function(self, module: Any, name: str) -> Callable:
+    def get_function(self, module: Any, name: str) -> Any:
+        if isinstance(module, LoadedPythonModule):
+            try:
+                return module.namespace[name]
+            except KeyError:
+                raise ExecutionError(
+                    "parse", f"the uploaded Python module defines no name {name!r}"
+                ) from None
         try:
             fn = module[name] if isinstance(module, dict) else getattr(module, name)
         except (KeyError, AttributeError) as exc:
             raise ExecutionError("compile", f"the module exports no function {name!r}") from exc
-        if not callable(fn):
-            raise ExecutionError("runtime", f"module member {name!r} is not callable")
         return fn
 
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> _FakeTensor:

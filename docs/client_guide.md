@@ -28,8 +28,10 @@ def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.con
 REFERENCE = "def main(a):\n    return a + 1.0\n"
 
 program = Program()
-kernel = program.upload(id="kernel", kind="module", source=KERNEL)
-reference = program.upload(id="reference", kind="module", source=REFERENCE)
+kernel_module = program.upload(id="kernel_module", kind="module", source=KERNEL)
+kernel = program.get_function(id="kernel", module=kernel_module, name="main")
+reference_module = program.upload(id="reference_module", kind="module", source=REFERENCE)
+reference = program.get_function(id="reference", module=reference_module, name="main")
 
 src = program.upload(id="src", kind="tensor", value=np.arange(256, dtype=np.float32))
 dst = program.run(id="dst", fn="builtin.empty", args=[{"shape": [256], "dtype": "float32"}])
@@ -58,11 +60,9 @@ Four rules the example relies on:
   handle that later instructions can use; the response carries only what
   `return_` selects. Above, `invoke` runs the kernel and the client never sees
   its result, while `timing` comes back because a `return_` names it.
-- **The entry object is found by name.** A module upload binds one object out of
-  its source: the one named by `entry` if the upload sets it, otherwise `main`,
-  otherwise the source's single top-level `def` or `class`. A source with two
-  top-level definitions, no `main`, and no `entry` is ambiguous — the upload
-  fails, and the error lists the candidates it found.
+- **Functions are selected explicitly.** A module upload binds its Python or
+  CUDA source namespace. `get_function` selects a named object from it; the same
+  instruction selects an exported function from a prebuilt TVM-FFI library.
 - **An uploaded module need not be a kernel.** `REFERENCE` above is ordinary
   Python executed on the worker, torch included, so `def main(a, b): return a @ b`
   is a perfectly good baseline to measure against.
@@ -127,9 +127,8 @@ comes out of a code generator, needs flags the builtins do not expose, or is a
 CUTLASS-heavy recipe you already have working. Anything else is cheaper to
 compile on the server.
 
-A TVM-FFI library may export several launchers. Upload it without `entry`, bind
-the functions once, then use the returned registers anywhere a compiled kernel
-is accepted:
+A TVM-FFI library may export several launchers. Upload it, bind the functions
+once, then use the returned registers anywhere a compiled kernel is accepted:
 
 ```python
 module = program.upload(id="kernels", kind="library", value=library_bytes)
@@ -167,11 +166,11 @@ compile call has to be told.
 
 | Language | Upload | Compile call | Watch for |
 |---|---|---|---|
-| TIRx | `source` | `compile_tirx(kernel, bindings?)` | `bindings` supplies a `@T.jit` kernel's `T.constexpr` values; a `@T.prim_func` is already concrete and rejects them. The source must open with `from __future__ import annotations`, or a shape annotation like `T.Buffer((N,), dtype)` evaluates at `def` time and raises `NameError: N` |
-| CUDA C | `source`, `language="cuda"`, `entry` | `compile_cuda(kernel, cfg?)` | `void f(tvm::ffi::TensorView, ...)`; `main` is rejected; builds are cached on disk, so recompiling the same source is much cheaper than the first build |
-| CUDA C on a CPU server | `source`, `language="cuda"`, `entry` | `compile_cuda_binary(kernel, {"arch": arch, ...})` | `arch` must come from the GPU server; returns shared-object bytes rather than loading them |
-| CuTeDSL | `source`, `entry` | `compile_cutedsl(kernel, *tensors, cfg?)` | Specializes on the tensors, so pass the ones it will run on; nothing is cached |
-| Triton | `source`, `entry` | `compile_triton(kernel, *args, cfg)` | `cfg["grid"]` is required; pass scalars and constexprs positionally; other `cfg` keys are launch keywords |
+| TIRx | `source`, then `get_function(name)` | `compile_tirx(kernel, bindings?)` | `bindings` supplies a `@T.jit` kernel's `T.constexpr` values; a `@T.prim_func` is already concrete and rejects them. The source must open with `from __future__ import annotations`, or a shape annotation like `T.Buffer((N,), dtype)` evaluates at `def` time and raises `NameError: N` |
+| CUDA C | `source`, `language="cuda"`, then `get_function(name)` | `compile_cuda(kernel, cfg?)` | `void f(tvm::ffi::TensorView, ...)`; `main` is rejected; builds are cached on disk, so recompiling the same source is much cheaper than the first build |
+| CUDA C on a CPU server | `source`, `language="cuda"`, then `get_function(name)` | `compile_cuda_binary(kernel, {"arch": arch, ...})` | `arch` must come from the GPU server; returns shared-object bytes rather than loading them |
+| CuTeDSL | `source`, then `get_function(name)` | `compile_cutedsl(kernel, *tensors, cfg?)` | Specializes on the tensors, so pass the ones it will run on; nothing is cached |
+| Triton | `source`, then `get_function(name)` | `compile_triton(kernel, *args, cfg)` | `cfg["grid"]` is required; pass scalars and constexprs positionally; other `cfg` keys are launch keywords |
 
 If a server lacks the toolchain a builtin needs, that builtin fails with
 `unavailable` and the rest of the server keeps working. `GET /health` lists the

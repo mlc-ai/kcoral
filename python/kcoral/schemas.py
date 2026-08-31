@@ -31,7 +31,6 @@ class Upload:
     id: str
     kind: Literal["module", "tensor", "bytes", "library"]
     source: str | None = None
-    entry: str | None = None
     language: Literal["python", "cuda"] = "python"
     blob: str | None = None
     dtype: str | None = None
@@ -221,7 +220,7 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
     if kind == "module":
         _check_fields(
             item,
-            {"op", "id", "kind", "source", "entry", "language"},
+            {"op", "id", "kind", "source", "language"},
             {"op", "id", "kind", "source"},
             f"instruction {index}",
         )
@@ -233,20 +232,7 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
             raise ValidationError(
                 f"module upload {item['id']!r}: unsupported language {language!r}"
             )
-        entry = item.get("entry")
-        if entry is not None and not (isinstance(entry, str) and entry.isidentifier()):
-            raise ValidationError(f"module upload {item['id']!r}: 'entry' must be an identifier")
-        if language == "cuda":
-            # Nothing executes a CUDA upload, so no entry can be inferred from it.
-            if entry is None:
-                raise ValidationError(
-                    f"module upload {item['id']!r}: a 'cuda' module must name its 'entry'"
-                )
-            if entry == "main":
-                raise ValidationError(
-                    f"module upload {item['id']!r}: C++ reserves 'main'; name the entry otherwise"
-                )
-        return Upload(id=item["id"], kind="module", source=source, entry=entry, language=language)
+        return Upload(id=item["id"], kind="module", source=source, language=language)
     if kind == "tensor":
         _check_fields(
             item,
@@ -287,19 +273,16 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
     if kind == "library":
         _check_fields(
             item,
-            {"op", "id", "kind", "blob", "entry"},
+            {"op", "id", "kind", "blob"},
             {"op", "id", "kind", "blob"},
             f"instruction {index}",
         )
         blob = item["blob"]
-        entry = item.get("entry")
         if not is_blob_hash(blob):
             raise ValidationError(
                 f"library upload {item['id']!r}: 'blob' must be a lowercase SHA-256 digest"
             )
-        if entry is not None and not (isinstance(entry, str) and entry.isidentifier()):
-            raise ValidationError(f"library upload {item['id']!r}: 'entry' must be an identifier")
-        return Upload(id=item["id"], kind="library", blob=blob, entry=entry)
+        return Upload(id=item["id"], kind="library", blob=blob)
     raise ValidationError(f"upload {item.get('id')!r}: unknown kind {kind!r}")
 
 

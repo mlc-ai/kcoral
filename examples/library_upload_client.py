@@ -20,7 +20,7 @@ from kcoral import Client, Program
 N = 1 << 20
 
 # The export macro is what makes the object loadable: it emits the
-# `__tvm_ffi_add_one` symbol the server looks up by `entry`. A server-side
+# `__tvm_ffi_add_one` symbol the server looks up by function name. A server-side
 # compile needs neither it nor the include — `compile_cuda` supplies both.
 SOURCE = r"""
 #include <tvm/ffi/container/tensor.h>
@@ -65,9 +65,11 @@ def build_library(arch: str, directory: str) -> bytes:
 
 def build_program(library: bytes) -> Program:
     program = Program()
-    # No compile instruction follows: the handle is already the callable.
-    kernel = program.upload(id="kernel", kind="library", value=library, entry="add_one")
-    reference = program.upload(id="reference", kind="module", source=REFERENCE)
+    # No compile instruction follows: get_function binds the precompiled callable.
+    module = program.upload(id="kernel_module", kind="library", value=library)
+    kernel = program.get_function(id="kernel", module=module, name="add_one")
+    reference_module = program.upload(id="reference_module", kind="module", source=REFERENCE)
+    reference = program.get_function(id="reference", module=reference_module, name="main")
 
     src = program.run(
         id="src", fn="builtin.randn", args=[{"shape": [N], "dtype": "float32", "seed": 0}]

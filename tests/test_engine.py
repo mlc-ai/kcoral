@@ -11,12 +11,13 @@ def ref(handle):
     return Ref(handle)
 
 
-def call_module(source, entry=None):
-    """Upload ``source``, call whatever object the handle bound, and return the outcome."""
+def call_module(source, name):
+    """Upload ``source``, select ``name``, call it, and return the outcome."""
     return execute(
         Program(
             [
-                Upload("fn", "module", source=source, entry=entry),
+                Upload("module", "module", source=source),
+                GetFunction("fn", ref("module"), name),
                 Run("answer", ref("fn"), [41]),
                 Return("value", ref("answer")),
             ]
@@ -30,10 +31,9 @@ def test_library_module_binds_multiple_functions_and_chains_results():
     digest = compute_blob_hash(b"fake-library")
 
     class LibraryRuntime(FakeRuntime):
-        def load_library(self, data, entry):
+        def load_library(self, data):
             assert data == b"fake-library"
-            module = {"add_one": lambda value: value + 1, "times_two": lambda value: value * 2}
-            return module if entry is None else self.get_function(module, entry)
+            return {"add_one": lambda value: value + 1, "times_two": lambda value: value * 2}
 
     outcome = execute(
         Program(
@@ -59,7 +59,7 @@ def test_missing_library_function_is_attributed_to_get_function():
     digest = compute_blob_hash(b"fake-library")
 
     class LibraryRuntime(FakeRuntime):
-        def load_library(self, data, entry):
+        def load_library(self, data):
             return {}
 
     outcome = execute(
@@ -169,42 +169,35 @@ def test_cpu_only_builtin_finalizes_deferred_gpu_result_under_lease():
 
 
 @pytest.mark.parametrize(
-    "source,entry",
+    "source,name",
     [
-        # The sole top-level definition is the entry, whatever it is named.
-        ("def matmul(x):\n    return x + 1\n", None),
-        # A module-level constant is not a definition, so it does not compete.
-        ("BLOCK = 127\n\ndef matmul(x):\n    return x + BLOCK - 126\n", None),
-        # ``main`` still wins when the source defines several names.
-        ("def helper(x):\n    return 0\n\ndef main(x):\n    return x + 1\n", None),
-        # An explicit ``entry`` outranks ``main``.
+        ("def matmul(x):\n    return x + 1\n", "matmul"),
+        ("BLOCK = 127\n\ndef matmul(x):\n    return x + BLOCK - 126\n", "matmul"),
+        ("def helper(x):\n    return 0\n\ndef main(x):\n    return x + 1\n", "main"),
         ("def main(x):\n    return 0\n\ndef matmul(x):\n    return x + 1\n", "matmul"),
     ],
 )
-def test_module_entry_resolution(source, entry):
-    outcome = call_module(source, entry)
+def test_python_module_function_selection(source, name):
+    outcome = call_module(source, name)
     assert outcome.status == "COMPLETED"
     assert outcome.results == {"value": {"type": "integer", "value": 42}}
 
 
 @pytest.mark.parametrize(
-    "source,entry,message",
+    "source,name",
     [
-        (
-            "def helper(x):\n    return 0\n\ndef matmul(x):\n    return x\n",
-            None,
-            "top-level names 'helper', 'matmul'",
-        ),
-        ("BLOCK = 128\n", None, "no top-level function or class"),
-        ("def matmul(x):\n    return x\n", "typo", "does not define 'typo'"),
+        ("def helper(x):\n    return 0\n\ndef matmul(x):\n    return x\n", "typo"),
+        ("BLOCK = 128\n", "main"),
+        ("def matmul(x):\n    return x\n", "main"),
     ],
 )
-def test_unresolvable_module_entry_fails_the_upload(source, entry, message):
-    outcome = call_module(source, entry)
+def test_missing_python_function_fails_get_function(source, name):
+    outcome = call_module(source, name)
     assert outcome.status == "FAILED"
     assert outcome.error["kind"] == "parse"
-    assert outcome.error["instruction_op"] == "upload"
-    assert message in outcome.error["message"]
+    assert outcome.error["instruction_op"] == "get_function"
+    assert outcome.error["instruction_id"] == "fn"
+    assert f"defines no name {name!r}" in outcome.error["message"]
 
 
 def test_unreturned_values_are_not_serialized():
@@ -217,7 +210,8 @@ def test_recursive_values_and_depth_first_binary_parts():
     outcome = execute(
         Program(
             [
-                Upload("fn", "module", source=source),
+                Upload("module", "module", source=source),
+                GetFunction("fn", ref("module"), "main"),
                 Run("nested", ref("fn"), []),
                 Return("nested", ref("nested")),
             ]
@@ -317,7 +311,8 @@ def test_failed_return_rolls_back_only_its_own_binary_parts():
             [
                 Run("blob", "builtin.binary", []),
                 Return("kept", ref("blob")),
-                Upload("fn", "module", source=source),
+                Upload("module", "module", source=source),
+                GetFunction("fn", ref("module"), "main"),
                 Run("mixed", ref("fn"), []),
                 Return("dropped", ref("mixed")),
             ]
@@ -330,7 +325,7 @@ def test_failed_return_rolls_back_only_its_own_binary_parts():
     # Without rollback the aborted return would leave an orphan 'return:1'.
     assert outcome.binary_parts == {"return:0": b"binary-result"}
     error = outcome.error
-    assert error["kind"] == "serialization" and error["instruction_index"] == 4
+    assert error["kind"] == "serialization" and error["instruction_index"] == 5
     assert error["instruction_op"] == "return" and error["instruction_id"] is None
 
 
@@ -369,7 +364,8 @@ def test_stdout_and_stderr_are_captured_for_the_request():
     outcome = execute(
         Program(
             [
-                Upload("fn", "module", source=source),
+                Upload("module", "module", source=source),
+                GetFunction("fn", ref("module"), "main"),
                 Run("value", ref("fn"), []),
                 Return("value", ref("value")),
             ]
@@ -384,7 +380,8 @@ def test_stdout_and_stderr_are_captured_for_the_request():
 def test_output_limit_is_shared_across_the_request():
     program = Program(
         [
-            Upload("fn", "module", source="print('12345')\ndef main():\n    print('67890')\n"),
+            Upload("module", "module", source="print('12345')\ndef main():\n    print('67890')\n"),
+            GetFunction("fn", ref("module"), "main"),
             Run("value", ref("fn"), []),
         ],
         options={"output_limit_bytes": 7},
@@ -410,24 +407,24 @@ class RecordingLease:
 class CudaAwareRuntime(FakeRuntime):
     """The fake runtime has no compiler; the real one binds CUDA source text."""
 
-    def load_module(self, source, entry=None, language="python"):
+    def load_module(self, source, language="python"):
         if language == "cuda":
             return object()
-        return super().load_module(source, entry, language)
+        return super().load_module(source, language)
 
 
 @pytest.mark.parametrize(
-    "language,source,entry,acquires",
+    "language,source,acquires",
     [
         # A CUDA upload runs nothing, so it never waits for a GPU.
-        ("cuda", "void go() {}", "go", 0),
+        ("cuda", "void go() {}", 0),
         # A Python upload execs the client's source, which could touch one.
-        ("python", "def main(x):\n    return x\n", None, 1),
+        ("python", "def main(x):\n    return x\n", 1),
     ],
 )
-def test_which_module_uploads_take_the_gpu(language, source, entry, acquires):
+def test_which_module_uploads_take_the_gpu(language, source, acquires):
     lease = RecordingLease()
-    program = Program([Upload("k", "module", source=source, entry=entry, language=language)])
+    program = Program([Upload("k", "module", source=source, language=language)])
     outcome = execute(program, CudaAwareRuntime(), lease)
     assert outcome.status == "COMPLETED"
     assert lease.acquires == acquires

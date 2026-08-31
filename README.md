@@ -177,7 +177,8 @@ def main(a, b):
 
 program = Program()
 module = program.upload(id="module", kind="module", source=source)
-result = program.run(id="sum", fn=module, args=[20, 22])
+function = program.get_function(id="function", module=module, name="main")
+result = program.run(id="sum", fn=function, args=[20, 22])
 program.return_(key="answer", value=result)
 
 with Client("http://localhost:8000") as client:
@@ -195,11 +196,12 @@ arch = client.target()["arch"]                # "sm_100a" — build the object f
 so_bytes = pathlib.Path("add_one.so").read_bytes()
 
 program = Program()
-kernel = program.upload(id="kernel", kind="library", value=so_bytes, entry="add_one")
+module = program.upload(id="kernel_module", kind="library", value=so_bytes)
+kernel = program.get_function(id="kernel", module=module, name="add_one")
 program.run(id="invoke", fn=kernel, args=[x, y])   # no compile instruction
 ```
 
-The server builds nothing here; it loads the shared object and calls `entry`. The
+The server builds nothing here; it loads the shared object and binds `add_one`. The
 protocol document states what a library must export, and
 [`examples/library_upload_client.py`](examples/library_upload_client.py) builds
 one end to end.

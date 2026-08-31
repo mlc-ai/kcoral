@@ -23,7 +23,12 @@ def test_parse_complete_program():
                     "id": "module",
                     "kind": "module",
                     "source": "def kernel(x):\n    return x\n",
-                    "entry": "kernel",
+                },
+                {
+                    "op": "get_function",
+                    "id": "kernel",
+                    "module": {"$ref": "module"},
+                    "name": "kernel",
                 },
                 {
                     "op": "upload",
@@ -33,21 +38,22 @@ def test_parse_complete_program():
                     "dtype": "float32",
                     "shape": [2, 3],
                 },
-                {"op": "run", "id": "result", "fn": {"$ref": "module"}, "args": [1]},
+                {"op": "run", "id": "result", "fn": {"$ref": "kernel"}, "args": [1]},
                 {"op": "return", "key": "answer", "value": {"$ref": "result"}},
             ],
             "options": {"timeout_seconds": 12, "output_limit_bytes": 0},
         }
     )
     assert isinstance(program.instructions[0], Upload)
-    assert program.instructions[0].entry == "kernel"
     assert program.instructions[0].language == "python"  # the default when unset
-    assert isinstance(program.instructions[2], Run)
-    assert isinstance(program.instructions[3], Return)
+    assert isinstance(program.instructions[1], GetFunction)
+    assert isinstance(program.instructions[3], Run)
+    assert isinstance(program.instructions[4], Return)
     # References are resolved to ``Ref`` at parse time; literals stay untouched.
-    assert program.instructions[2].fn == Ref("module")
-    assert program.instructions[2].args == [1]
-    assert program.instructions[3].value == Ref("result")
+    assert program.instructions[1].module == Ref("module")
+    assert program.instructions[3].fn == Ref("kernel")
+    assert program.instructions[3].args == [1]
+    assert program.instructions[4].value == Ref("result")
     assert program.options == {"timeout_seconds": 12.0, "output_limit_bytes": 0}
     assert program.blob_uploads()[0].blob == TENSOR_HASH
 
@@ -62,13 +68,18 @@ def test_parse_cuda_module_upload():
                     "kind": "module",
                     "language": "cuda",
                     "source": "void add(tvm::ffi::TensorView x) {}",
-                    "entry": "add",
-                }
+                },
+                {
+                    "op": "get_function",
+                    "id": "add",
+                    "module": {"$ref": "kernel"},
+                    "name": "add",
+                },
             ]
         }
     )
     assert program.instructions[0].language == "cuda"
-    assert program.instructions[0].entry == "add"
+    assert program.instructions[1] == GetFunction("add", Ref("kernel"), "add")
 
 
 def test_parse_library_upload():
@@ -80,13 +91,12 @@ def test_parse_library_upload():
                     "id": "kernel",
                     "kind": "library",
                     "blob": TENSOR_HASH,
-                    "entry": "add_one",
                 }
             ]
         }
     )
     upload = program.instructions[0]
-    assert upload.kind == "library" and upload.entry == "add_one"
+    assert upload.kind == "library"
     # blob-backed, so it joins tensors in the cache-admission path
     assert program.blob_uploads() == [upload]
 
@@ -111,7 +121,7 @@ def test_parse_library_module_and_get_function():
         }
     )
     upload, get_function = program.instructions
-    assert isinstance(upload, Upload) and upload.entry is None
+    assert isinstance(upload, Upload)
     assert isinstance(get_function, GetFunction)
     assert get_function.module == Ref("kernels") and get_function.name == "namespace.step"
 
@@ -164,8 +174,8 @@ def test_parse_bytes_upload():
         ({"op": "run", "id": "x", "fn": "builtin.zeros", "extra": 1}, "unknown field"),
         ({"op": "unknown", "id": "x"}, "unknown op"),
         (
-            {"op": "upload", "id": "x", "kind": "module", "source": "", "entry": "not an id"},
-            "'entry' must be an identifier",
+            {"op": "upload", "id": "x", "kind": "module", "source": "", "entry": "main"},
+            "unknown field",
         ),
         (
             {"op": "upload", "id": "x", "kind": "module", "source": "", "language": "rust"},
@@ -177,28 +187,13 @@ def test_parse_bytes_upload():
                 "id": "x",
                 "kind": "library",
                 "blob": TENSOR_HASH,
-                "entry": "not an id",
+                "entry": "add_one",
             },
-            "'entry' must be an identifier",
+            "unknown field",
         ),
         (
             {"op": "upload", "id": "x", "kind": "bytes", "blob": "sha256:old"},
             "lowercase SHA-256",
-        ),
-        (
-            {"op": "upload", "id": "x", "kind": "module", "source": "", "language": "cuda"},
-            "must name its 'entry'",
-        ),
-        (
-            {
-                "op": "upload",
-                "id": "x",
-                "kind": "module",
-                "source": "",
-                "language": "cuda",
-                "entry": "main",
-            },
-            "C\\+\\+ reserves 'main'",
         ),
     ],
 )

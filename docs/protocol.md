@@ -142,28 +142,20 @@ Uploads a module, tensor, byte string, or library and binds it to a handle.
 }
 ```
 
-`source` is UTF-8 Python source embedded in the `program` part. The handle binds
-to one object defined there, chosen in this order:
-
-1. the name given by `entry`, if the upload sets one;
-2. `main`, if the source defines it;
-3. the source's only top-level `def` or `class`.
-
-Several top-level definitions and no `main` is ambiguous: the upload fails and
-the error names the candidates. Only definitions count, so a module-level
-constant beside one kernel keeps the entry unambiguous.
+`source` is UTF-8 Python source embedded in the `program` part. The upload
+executes it and binds its complete namespace to the handle. A separate
+`get_function` instruction selects each object that later instructions use:
 
 ```json
 {
-  "op": "upload",
+  "op": "get_function",
   "id": "kernel",
-  "kind": "module",
-  "source": "def tile(x):\n    ...\n\ndef matmul(...):\n    ...\n",
-  "entry": "matmul"
+  "module": {"$ref": "kernels"},
+  "name": "matmul"
 }
 ```
 
-The entry object need not be callable: a decorator may bind a handle that a
+The selected object need not be callable: a decorator may bind a handle that a
 builtin consumes rather than one `run` calls directly. Using a non-callable
 handle as a `run` `fn` fails at run time.
 
@@ -175,19 +167,24 @@ makes `source` CUDA C that `builtin.compile_cuda` builds into a callable:
 ```json
 {
   "op": "upload",
-  "id": "kernel",
+  "id": "kernel_source",
   "kind": "module",
   "language": "cuda",
-  "source": "void add_one(tvm::ffi::TensorView x, tvm::ffi::TensorView y) { ... }",
-  "entry": "add_one"
+  "source": "void add_one(tvm::ffi::TensorView x, tvm::ffi::TensorView y) { ... }"
+},
+{
+  "op": "get_function",
+  "id": "kernel",
+  "module": {"$ref": "kernel_source"},
+  "name": "add_one"
 }
 ```
 
-A CUDA upload executes nothing, so it binds the source text rather than an
-object, and `entry` is required — there is no namespace to infer it from. The
-entry is exported through TVM FFI, so it takes `tvm::ffi::TensorView` parameters
-and returns `void`; the includes and the export macro are supplied by the server.
-`main` is rejected, because C++ reserves it as the program entry point.
+A CUDA upload executes nothing and binds the source text as a module.
+`get_function` selects the function that a compile builtin will export through
+TVM FFI, so it takes `tvm::ffi::TensorView` parameters and returns `void`; the
+includes and export macro are supplied by the server. `main` is rejected,
+because C++ reserves it as the program entry point.
 
 On a GPU worker, `compile_cuda` builds for that worker's arch-specific target
 (`sm_100a` on Blackwell, `sm_90a` on Hopper). On a CPU worker,
@@ -198,18 +195,18 @@ health response. Builds are cached on disk by source, target, and flags.
 #### CuTeDSL modules
 
 CuTeDSL needs no `language` of its own: a `@cute.jit` kernel is ordinary Python,
-so it uploads as one and `builtin.compile_cutedsl` compiles it. Name the
-`@cute.jit` entry `main` or set `entry` — a kernel and its launcher are two
-top-level definitions, which is otherwise ambiguous.
+so it uploads as one, `get_function` selects its launcher, and
+`builtin.compile_cutedsl` compiles it.
 
 ```json
 {
   "op": "upload",
-  "id": "kernel",
+  "id": "kernel_module",
   "kind": "module",
-  "source": "import cutlass.cute as cute\n\n@cute.kernel\ndef add_kernel(...):\n    ...\n\n@cute.jit\ndef add(...):\n    ...\n",
-  "entry": "add"
-}
+  "source": "import cutlass.cute as cute\n\n@cute.kernel\ndef add_kernel(...):\n    ...\n\n@cute.jit\ndef add(...):\n    ...\n"
+},
+{"op": "get_function", "id": "kernel",
+ "module": {"$ref": "kernel_module"}, "name": "add"}
 ```
 
 CuTeDSL specializes on the tensors it is compiled against, so `compile_cutedsl`
@@ -230,7 +227,8 @@ library instead skips the server-side compile entirely — see
 #### Triton modules
 
 A `@triton.jit` kernel is ordinary Python too, and `builtin.compile_triton`
-compiles it. What Triton needs beyond the other languages is a launch grid: it is
+compiles the handle selected by `get_function`. What Triton needs beyond the
+other languages is a launch grid: it is
 normally computed by the caller at `kernel[grid](...)`, and the server will not
 evaluate a client expression to get one, so it travels as `cfg.grid` — one to
 three positive ints.
@@ -294,28 +292,26 @@ nothing:
 ```json
 {
   "op": "upload",
-  "id": "kernel",
+  "id": "kernels",
   "kind": "library",
-  "blob": "<sha256>",
-  "entry": "add_one"
+  "blob": "<sha256>"
 }
 ```
 
-`blob` names the bytes of an ELF shared object for the server's platform. With
-`entry`, the server loads it with `tvm_ffi.load_module`, checks the export, and
-binds the upload handle directly to that callable. Without `entry`, the handle
-instead denotes the module, and later `get_function` instructions may bind any
-number of its exports. A library that cannot be loaded, or a requested function
-that is absent, fails with a `compile` error. Nothing else about the object is
-inspected, so any producer TVM FFI can load is accepted. Three are usual:
+`blob` names the bytes of an ELF shared object for the server's platform. The
+server loads it with `tvm_ffi.load_module` and binds the resulting module.
+Later `get_function` instructions may bind any number of its exports. A library
+that cannot be loaded, or a requested function that is absent, fails with a
+`compile` error. Nothing else about the object is inspected, so any producer
+TVM FFI can load is accepted. Three are usual:
 
 - `TVM_FFI_DLL_EXPORT_TYPED_FUNC`, which `tvm_ffi.cpp.build` applies for you,
-  emitting a `__tvm_ffi_<entry>` symbol. A code generator that emits that symbol
+  emitting a `__tvm_ffi_<name>` symbol. A code generator that emits that symbol
   directly works equally well;
 - `tvm.Executable.export_library`, which embeds a module blob rather than a
   plain symbol. Unpacking one needs the loader the TVM CUDA runtime registers,
   so it requires a server with tvm installed;
-- CuTeDSL's `--enable-tvm-ffi` export, which emits the same `__tvm_ffi_<entry>`
+- CuTeDSL's `--enable-tvm-ffi` export, which emits the same `__tvm_ffi_<name>`
   symbol but leaves the object linked against `libcute_dsl_runtime.so`, so it
   requires a server whose `versions` reports `cutlass`. An object built against a
   newer cutlass than the server's fails to load, naming the symbol it wanted.
@@ -324,7 +320,7 @@ The function takes DLPack-compatible tensors, and its device code must be built
 for the architecture `GET /health` reports. Building for another one fails later,
 at launch, with `cudaErrorNoKernelImageForDevice`.
 
-The exported entry has this shape — the body does not matter, only the interface.
+The exported function has this shape — the body does not matter, only the interface.
 Exporting it from C++:
 
 ```c++
@@ -335,7 +331,7 @@ TVM_FFI_DLL_EXPORT_TYPED_FUNC(add_one, add_one);
 ```
 
 Exporting the same interface from TIRx, where the function's own name becomes
-`entry` and naming the target explicitly is what lets a client build without a GPU
+the exported function name and naming the target explicitly let a client build without a GPU
 of its own:
 
 ```python
@@ -378,14 +374,15 @@ part, exactly as a tensor's do.
 
 ```python
 data = pathlib.Path("add_one.so").read_bytes()
-upload = {"op": "upload", "id": "kernel", "kind": "library",
-          "blob": hashlib.sha256(data).hexdigest(), "entry": "add_one"}
+upload = {"op": "upload", "id": "kernels", "kind": "library",
+          "blob": hashlib.sha256(data).hexdigest()}
 ```
 
-Nothing then stands between the upload and the call: the handle is already the
-callable, so no compile instruction appears.
+Select the exported function, then call it; no compile instruction appears.
 
 ```json
+{"op": "get_function", "id": "kernel",
+ "module": {"$ref": "kernels"}, "name": "add_one"}
 {"op": "run", "id": "invoke", "fn": {"$ref": "kernel"},
  "args": [{"$ref": "x"}, {"$ref": "y"}]}
 ```
@@ -393,18 +390,16 @@ callable, so no compile instruction appears.
 ### Fields
 
 A field is accepted exactly for the kinds it lists, and is rejected for the
-others: a `module` upload carries `source` and an optional `entry` and
-`language`, a `tensor` upload carries `blob`, `dtype`, and `shape`, a `bytes`
-upload carries `blob`, and a `library` upload carries `blob` and an optional
-`entry`.
+others: a `module` upload carries `source` and optional `language`, a `tensor`
+upload carries `blob`, `dtype`, and `shape`, a `bytes` upload carries `blob`,
+and a `library` upload carries `blob`.
 
 | Field | Kinds | Required for | Notes |
 |---|---|---|---|
 | `op` | all | all | `"upload"` |
 | `id` | all | all | Unique handle name |
 | `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, or `"library"` |
-| `source` | module | module | UTF-8 source defining the entry object |
-| `entry` | module, library | `cuda` modules | Identifier naming the entry object; omit it on a library to bind the module itself |
+| `source` | module | module | UTF-8 Python or CUDA source defining a module |
 | `language` | module | — | `"python"` (default) or `"cuda"` |
 | `blob` | tensor, bytes, library | tensor, bytes, library | SHA-256 of the raw bytes |
 | `dtype` | tensor | tensor | Tensor data type |
@@ -432,7 +427,8 @@ duplicates, hash mismatches, and unreferenced parts are invalid requests.
 
 ## `get_function`
 
-Binds one function exported by an earlier library module to a new handle:
+Binds one named object from an earlier Python or CUDA source module, or one
+exported function from a TVM-FFI library, to a new handle:
 
 ```json
 {
@@ -447,12 +443,15 @@ Binds one function exported by an earlier library module to a new handle:
 |---|---|---:|---|
 | `op` | string | yes | `"get_function"` |
 | `id` | string | yes | Handle for the callable |
-| `module` | `{"$ref": id}` | yes | Earlier library upload without `entry` |
-| `name` | string | yes | Non-empty TVM-FFI function name |
+| `module` | `{"$ref": id}` | yes | Earlier `module` or `library` upload |
+| `name` | string | yes | Non-empty function or object name |
 
-The module and function are request-local handles. The function keeps its
-defining module alive and is invoked in a TVM-FFI stream context corresponding
-to the worker's current PyTorch stream.
+For Python source, the name indexes the executed namespace. For CUDA source it
+produces the named source function consumed by `compile_cuda` or
+`compile_cuda_binary`; C++ `main` and non-identifiers are rejected. For a
+TVM-FFI library it calls the loaded module's `get_function`. That function keeps
+its defining module alive and is invoked in a TVM-FFI stream context
+corresponding to the worker's current PyTorch stream.
 
 Given a library that exports `init` and `step`, the Python client writes:
 
@@ -752,9 +751,15 @@ failure outside an instruction, or a server failure answers `ERROR`.
   "instructions": [
     {
       "op": "upload",
-      "id": "kernel",
+      "id": "kernel_module",
       "kind": "module",
       "source": "<TIRx source defining main>"
+    },
+    {
+      "op": "get_function",
+      "id": "kernel",
+      "module": {"$ref": "kernel_module"},
+      "name": "main"
     },
     {
       "op": "upload",
@@ -826,11 +831,12 @@ def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.con
 input_array = np.arange(256, dtype=np.float32)
 
 program = Program()
-kernel = program.upload(
-    id="kernel",
+kernel_module = program.upload(
+    id="kernel_module",
     kind="module",
     source=kernel_source,
 )
+kernel = program.get_function(id="kernel", module=kernel_module, name="main")
 input_tensor = program.upload(id="input", kind="tensor", value=input_array)
 output = program.run(
     id="output",
@@ -858,10 +864,10 @@ print(result.stdout, result.stderr)
 ```
 
 ```python
-Program.upload(id=..., kind="module", source=..., entry=None, language="python") -> Register
+Program.upload(id=..., kind="module", source=..., language="python") -> Register
 Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
 Program.upload(id=..., kind="bytes", value=...) -> Register
-Program.upload(id=..., kind="library", value=..., entry=None) -> Register
+Program.upload(id=..., kind="library", value=...) -> Register
 Program.get_function(id=..., module=..., name=...) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
