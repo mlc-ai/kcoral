@@ -3,7 +3,7 @@
 Several workers share each GPU, and a worker must hold its GPU's lease to run
 GPU instructions, so no two ever touch one at the same time. :class:`LeaseClient`
 is what the engine calls in the worker process; it sends messages to the parent,
-where :meth:`benchmark_server.worker.Worker.run` answers them out of the one
+where :meth:`kcoral.worker.Worker.run` answers them out of the one
 :class:`GPULeases` the pool owns.
 
 The parent arbitrates rather than the workers sharing an OS mutex: a killed

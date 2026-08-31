@@ -2,7 +2,7 @@
 
 The one :class:`Runtime` that touches a GPU; it runs inside the worker process
 and has no compiler of its own — compiling and running kernels are builtins (see
-:mod:`benchmark_server.builtin_ops`). torch is imported lazily, so importing this
+:mod:`kcoral.builtin_ops`). torch is imported lazily, so importing this
 module touches no GPU.
 """
 
@@ -401,7 +401,7 @@ def _preload_cute_dsl_runtime() -> None:
 def _library_dir() -> Path:
     global _LIBRARY_DIR
     if _LIBRARY_DIR is None:
-        _LIBRARY_DIR = Path(tempfile.mkdtemp(prefix="benchmark-server-lib-"))
+        _LIBRARY_DIR = Path(tempfile.mkdtemp(prefix="kcoral-lib-"))
     return _LIBRARY_DIR
 
 

@@ -1,10 +1,10 @@
 import pytest
 
-from benchmark_server.deferred import DeferredGPUResult
-from benchmark_server.engine import execute
-from benchmark_server.keys import compute_blob_hash
-from benchmark_server.schemas import Program, Ref, Return, Run, Upload
-from benchmark_server.testing import UNSHARED_GPU, FakeRuntime
+from kcoral.deferred import DeferredGPUResult
+from kcoral.engine import execute
+from kcoral.keys import compute_blob_hash
+from kcoral.schemas import Program, Ref, Return, Run, Upload
+from kcoral.testing import UNSHARED_GPU, FakeRuntime
 
 
 def ref(handle):

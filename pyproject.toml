@@ -3,7 +3,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "benchmark-server"
+name = "kcoral"
 version = "0.1.0"
 description = "Stateless remote execution engine for benchmarking GPU kernels (instruction-sequence protocol)"
 readme = "README.md"
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-benchmark-server = "benchmark_server.__main__:main"
+kcoral = "kcoral.__main__:main"
 
 [dependency-groups]
 test = [
@@ -48,7 +48,7 @@ torch = { index = "pytorch-cu130" }
 
 [tool.setuptools.packages.find]
 where = ["python"]
-include = ["benchmark_server*"]
+include = ["kcoral*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["python"]

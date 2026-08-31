@@ -1,21 +1,21 @@
-"""Run the benchmark server: ``benchmark-server`` or ``python -m benchmark_server``.
+"""Run KCoral: ``kcoral`` or ``python -m kcoral``.
 
 The front-end process itself touches no GPU. GPU workers import torch/tvm and
 are pinned to one GPU, which ``--workers-per-gpu`` of them share by taking turns
 through its lease. CPU workers need only TVM FFI and a CUDA toolchain, and
 compile uploaded source without importing a GPU runtime.
 
-    benchmark-server --gpus 1,2,3
-    benchmark-server --device cpu --num-workers 16
+    kcoral --gpus 1,2,3
+    kcoral --device cpu --num-workers 16
 
-Every ``ServerConfig`` field has a flag (see ``benchmark-server --help``). A few
+Every ``ServerConfig`` field has a flag (see ``kcoral --help``). A few
 flags default from the environment, so env-only deployments keep working:
 
-  BENCH_DEVICE     worker type: gpu or cpu (default "gpu")
-  BENCH_GPUS       comma-separated physical GPU ids the GPU workers pin (default "0")
-  BENCH_HOST       bind host (default 127.0.0.1)
-  BENCH_PORT       bind port (default 8000)
-  BENCH_LOG_DIR    directory for structured event logs (default "logs"; empty disables)
+  KCORAL_SERVER_DEVICE  worker type: gpu or cpu (default "gpu")
+  KCORAL_SERVER_GPUS    comma-separated physical GPU ids the GPU workers pin (default "0")
+  KCORAL_SERVER_HOST    bind host (default 127.0.0.1)
+  KCORAL_SERVER_PORT    bind port (default 8000)
+  KCORAL_LOG_DIR        directory for structured event logs (default "logs"; empty disables)
 
 The log is one JSONL stream per run under ``<log dir>/runs/``, uncapped, and it
 is mirrored to stderr unless ``--no-log-console`` says otherwise. Its first line
@@ -37,20 +37,22 @@ _DEFAULTS = ServerConfig()
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="benchmark-server",
-        description="Stateless kernel benchmark server (instruction protocol).",
+        prog="kcoral",
+        description="KCoral: stateless kernel benchmark server (instruction protocol).",
     )
-    parser.add_argument("--host", default=os.environ.get("BENCH_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.environ.get("BENCH_PORT", "8000")))
+    parser.add_argument("--host", default=os.environ.get("KCORAL_SERVER_HOST", "127.0.0.1"))
+    parser.add_argument(
+        "--port", type=int, default=int(os.environ.get("KCORAL_SERVER_PORT", "8000"))
+    )
     parser.add_argument(
         "--device",
         choices=("cpu", "gpu"),
-        default=os.environ.get("BENCH_DEVICE", _DEFAULTS.device),
+        default=os.environ.get("KCORAL_SERVER_DEVICE", _DEFAULTS.device),
         help="worker type: gpu or cpu (default: gpu)",
     )
     parser.add_argument(
         "--gpus",
-        default=os.environ.get("BENCH_GPUS", "0"),
+        default=os.environ.get("KCORAL_SERVER_GPUS", "0"),
         help="comma-separated physical GPU ids; used only with --device gpu (default: 0)",
     )
     parser.add_argument(
@@ -62,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-capacity-bytes", type=int, default=_DEFAULTS.cache_capacity_bytes)
     parser.add_argument(
         "--log-dir",
-        default=os.environ.get("BENCH_LOG_DIR", "logs"),
+        default=os.environ.get("KCORAL_LOG_DIR", "logs"),
         help="structured event log directory; empty disables logging (default: logs)",
     )
     parser.add_argument(

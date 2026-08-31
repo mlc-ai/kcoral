@@ -1,4 +1,4 @@
-from benchmark_server.cache import ByteCache
+from kcoral.cache import ByteCache
 
 
 def test_lru_eviction_over_budget():

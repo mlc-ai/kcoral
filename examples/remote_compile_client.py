@@ -13,7 +13,7 @@ import os
 
 import numpy as np
 
-from benchmark_server import Client, Program
+from kcoral import Client, Program
 
 N = 256
 
@@ -175,7 +175,7 @@ def triton_program() -> Program:
 
 def main() -> None:
     expected = np.arange(N, dtype=np.float32) + 1.0
-    with Client(os.environ.get("BENCH_URL", "http://localhost:8000")) as client:
+    with Client(os.environ.get("KCORAL_URL", "http://localhost:8000")) as client:
         programs = (
             ("TIRx", tirx_program()),
             ("CuTeDSL", cutedsl_program()),

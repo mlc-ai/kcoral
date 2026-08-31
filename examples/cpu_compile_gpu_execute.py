@@ -2,8 +2,8 @@
 
 Start two instances of the same server before running this example:
 
-    benchmark-server --device cpu --num-workers 8 --port 8000
-    benchmark-server --device gpu --gpus 0 --workers-per-gpu 8 --port 8001
+    kcoral --device cpu --num-workers 8 --port 8000
+    kcoral --device gpu --gpus 0 --workers-per-gpu 8 --port 8001
 
 Both requests use the regular ``POST /execute`` instruction protocol. The first
 returns shared-object bytes; the second uploads those bytes as ``kind="library"``.
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 
-from benchmark_server import Client, Program
+from kcoral import Client, Program
 
 N = 1 << 20
 
@@ -75,8 +75,8 @@ def benchmark_program(library: bytes) -> Program:
 
 
 def main() -> None:
-    cpu_url = os.environ.get("BENCH_CPU_URL", "http://localhost:8000")
-    gpu_url = os.environ.get("BENCH_GPU_URL", "http://localhost:8001")
+    cpu_url = os.environ.get("KCORAL_CPU_URL", "http://localhost:8000")
+    gpu_url = os.environ.get("KCORAL_GPU_URL", "http://localhost:8001")
     with Client(cpu_url) as cpu_client, Client(gpu_url) as gpu_client:
         arch = gpu_client.target()["arch"]
         compiled = cpu_client.execute(compile_program(arch), timeout_seconds=120)

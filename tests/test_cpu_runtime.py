@@ -2,9 +2,9 @@ import sys
 
 import pytest
 
-from benchmark_server.builtin_ops.cuda import CUDASource, compile_cuda_binary
-from benchmark_server.cpu_runtime import CPURuntime
-from benchmark_server.errors import ExecutionError
+from kcoral.builtin_ops.cuda import CUDASource, compile_cuda_binary
+from kcoral.cpu_runtime import CPURuntime
+from kcoral.errors import ExecutionError
 
 
 def test_cpu_runtime_binds_cuda_source_without_importing_torch(monkeypatch):

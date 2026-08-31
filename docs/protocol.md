@@ -768,7 +768,7 @@ automatically:
 ```python
 import numpy as np
 
-from benchmark_server import Client, Program
+from kcoral import Client, Program
 
 kernel_source = """
 from __future__ import annotations
@@ -835,5 +835,5 @@ starts without blob parts, retries a `CACHE_MISS` with the missing parts, and
 falls back to all local blobs if the cache changes between requests. Returned
 tensors decode to CPU `numpy.ndarray` (`bfloat16` and `float8_*` via
 `ml_dtypes`). Server errors, transport failures, and malformed responses use
-`BenchmarkServerError`, `TransportError`, and `ProtocolError`, which
-`benchmark_server` exports alongside `Client` and `Program`.
+`KCoralError`, `TransportError`, and `ProtocolError`, which
+`kcoral` exports alongside `Client` and `Program`.

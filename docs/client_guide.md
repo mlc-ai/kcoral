@@ -12,7 +12,7 @@ compile, check correctness, time it, return the results.
 
 ```python
 import numpy as np
-from benchmark_server import Client, Program
+from kcoral import Client, Program
 
 KERNEL = r"""
 from __future__ import annotations
@@ -252,7 +252,7 @@ through `run` instructions:
 
 ```python
 SOURCE = r"""
-from benchmark_server import builtin
+from kcoral import builtin
 
 def main(x):
     y = builtin.randn({"shape": [256], "dtype": "float32", "seed": 0})
@@ -260,7 +260,7 @@ def main(x):
 """
 ```
 
-`benchmark_server.builtin` resolves attributes through the same registry a
+`kcoral.builtin` resolves attributes through the same registry a
 `run` instruction uses, so `builtin.check_close` above is exactly the function
 `"builtin.check_close"` names on the wire — same behaviour, same error kinds.
 `dir()` on the module lists every registered name.
@@ -289,7 +289,7 @@ if result.status == "FAILED":
   `serialization`, `unavailable` or `engine`, and `error["instruction_id"]`
   names the instruction that failed.
 - **An exception** — the request never produced a program outcome at all.
-  `BenchmarkServerError` carries `status_code` and `kind`: `503` with a
+  `KCoralError` carries `status_code` and `kind`: `503` with a
   `Retry-After` header means no worker was free, and `504` means the program hit
   `timeout_seconds` (default 300 s, maximum 3600). `TransportError` means the
   request never reached the server, and `ProtocolError` means the response did

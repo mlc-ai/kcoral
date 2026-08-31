@@ -11,7 +11,7 @@ HTTP 503).
 
 More workers than GPUs is the point: while one compiles, another can measure on
 the GPU it is not using. They take turns through a per-GPU lease, so no two ever
-run on one GPU at once - see :mod:`benchmark_server.lease`.
+run on one GPU at once - see :mod:`kcoral.lease`.
 """
 
 from __future__ import annotations

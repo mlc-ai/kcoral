@@ -10,22 +10,22 @@ import numpy as np
 import pytest
 import uvicorn
 
-from benchmark_server import Client, Program, Register
-from benchmark_server.app import create_app
-from benchmark_server.client import (
+from kcoral import Client, Program, Register
+from kcoral.app import create_app
+from kcoral.client import (
     _NUMPY_DTYPES,
-    BenchmarkServerError,
+    KCoralError,
     ProtocolError,
     TransportError,
     _decode_tensor,
     _parse_program_result,
     _response_body,
 )
-from benchmark_server.config import ServerConfig
-from benchmark_server.keys import compute_blob_hash
-from benchmark_server.multipart import MultipartPart, encode_multipart
-from benchmark_server.schemas import DTYPE_ITEM_SIZES, expected_tensor_nbytes
-from benchmark_server.testing import fake_runtime_factory
+from kcoral.config import ServerConfig
+from kcoral.keys import compute_blob_hash
+from kcoral.multipart import MultipartPart, encode_multipart
+from kcoral.schemas import DTYPE_ITEM_SIZES, expected_tensor_nbytes
+from kcoral.testing import fake_runtime_factory
 
 
 def _start_server(app):
@@ -195,7 +195,7 @@ def test_timeout_raises_server_error(server_url):
     program = Program()
     program.run(id="sleep", fn="builtin.sleep", args=[5])
     with Client(server_url) as client:
-        with pytest.raises(BenchmarkServerError) as exc_info:
+        with pytest.raises(KCoralError) as exc_info:
             client.execute(program, timeout_seconds=0.5)
     assert exc_info.value.status_code == 504 and exc_info.value.kind == "timeout"
     assert exc_info.value.request_id
@@ -426,11 +426,11 @@ def test_client_rejects_invalid_json_in_multipart_result():
 
 
 @pytest.mark.skipif(
-    os.environ.get("BENCH_GPU_TEST") != "1",
-    reason="real tensor client test requires BENCH_GPU_TEST=1",
+    os.environ.get("KCORAL_GPU_TEST") != "1",
+    reason="real tensor client test requires KCORAL_GPU_TEST=1",
 )
 def test_tensor_round_trip_on_gpu():
-    from benchmark_server.gpu_runtime import gpu_runtime_factory
+    from kcoral.gpu_runtime import gpu_runtime_factory
 
     gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
     gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0

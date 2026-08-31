@@ -1,4 +1,4 @@
-from benchmark_server.gpu_runtime import _CUDAErrorAPI
+from kcoral.gpu_runtime import _CUDAErrorAPI
 
 
 class _Function:

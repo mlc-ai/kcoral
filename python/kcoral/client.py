@@ -17,7 +17,7 @@ from .multipart import parse_multipart
 from .schemas import DTYPE_ITEM_SIZES, expected_tensor_nbytes, strict_json_loads
 
 
-class BenchmarkServerError(Exception):
+class KCoralError(Exception):
     """A non-200 response from the server."""
 
     def __init__(
@@ -680,7 +680,7 @@ def _is_number(value: Any) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
 
 
-def _server_error(response: httpx.Response) -> BenchmarkServerError:
+def _server_error(response: httpx.Response) -> KCoralError:
     try:
         body = _json_body(response)
     except ProtocolError:
@@ -693,4 +693,4 @@ def _server_error(response: httpx.Response) -> BenchmarkServerError:
         message = str(error) if error else f"HTTP {response.status_code}"
         kind = None
     request_id = body.get("request_id") if isinstance(body, dict) else None
-    return BenchmarkServerError(response.status_code, message, kind=kind, request_id=request_id)
+    return KCoralError(response.status_code, message, kind=kind, request_id=request_id)

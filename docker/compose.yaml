@@ -1,21 +1,21 @@
-name: benchmark-server
+name: kcoral
 
 services:
-  benchmark-server:
+  kcoral:
     build:
       context: ..
       dockerfile: docker/Dockerfile.cu130.dev
-    image: benchmark-server:cu130-dev
+    image: kcoral:cu130-dev
     init: true
     gpus: all
     environment:
-      BENCH_GPUS: "${BENCH_GPUS:-0}"
-      BENCH_HOST: 0.0.0.0
-      BENCH_PORT: "8000"
+      KCORAL_SERVER_GPUS: "${KCORAL_SERVER_GPUS:-0}"
+      KCORAL_SERVER_HOST: 0.0.0.0
+      KCORAL_SERVER_PORT: "8000"
     ports:
-      - "127.0.0.1:${BENCH_PORT:-8000}:8000"
+      - "127.0.0.1:${KCORAL_SERVER_PORT:-8000}:8000"
     volumes:
-      - ..:/workspace/benchmark-server
+      - ..:/workspace/kcoral
     healthcheck:
       test:
         - CMD

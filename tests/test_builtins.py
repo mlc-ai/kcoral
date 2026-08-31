@@ -7,12 +7,12 @@ import types
 
 import pytest
 
-from benchmark_server import gpu_runtime
-from benchmark_server.builtin_ops import _common, _registry, cuda
-from benchmark_server.builtin_ops.cuda import CUDASource, compile_cuda, compile_cuda_binary
-from benchmark_server.builtin_ops.tirx import compile_tirx
-from benchmark_server.deferred import DeferredGPUResult
-from benchmark_server.errors import ExecutionError
+from kcoral import gpu_runtime
+from kcoral.builtin_ops import _common, _registry, cuda
+from kcoral.builtin_ops.cuda import CUDASource, compile_cuda, compile_cuda_binary
+from kcoral.builtin_ops.tirx import compile_tirx
+from kcoral.deferred import DeferredGPUResult
+from kcoral.errors import ExecutionError
 
 
 def test_compile_tirx_unavailable_without_tvm(monkeypatch):
@@ -189,8 +189,8 @@ def test_short_keeps_both_ends_of_a_compiler_error():
 
 
 def test_builtin_module_exposes_the_registry():
-    from benchmark_server import builtin
-    from benchmark_server.builtin_ops import resolve
+    from kcoral import builtin
+    from kcoral.builtin_ops import resolve
 
     assert builtin.check_close is resolve("builtin.check_close")
     assert builtin.compile_cuda is resolve("builtin.compile_cuda")
@@ -202,7 +202,7 @@ def test_builtin_module_exposes_the_registry():
 
 
 TAMPERING = """
-from benchmark_server.builtin_ops import _registry
+from kcoral.builtin_ops import _registry
 
 _registry._REGISTRY["builtin.check_close"] = lambda *args: {"passed": True}
 _registry._CPU_ONLY.add("builtin.check_close")

@@ -6,13 +6,13 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 
-from benchmark_server.app import create_app
-from benchmark_server.config import ServerConfig
-from benchmark_server.gpu_runtime import gpu_runtime_factory
-from benchmark_server.keys import compute_blob_hash
-from benchmark_server.multipart import parse_multipart
-from benchmark_server.schemas import strict_json_loads
-from benchmark_server.testing import fake_runtime_factory
+from kcoral.app import create_app
+from kcoral.config import ServerConfig
+from kcoral.gpu_runtime import gpu_runtime_factory
+from kcoral.keys import compute_blob_hash
+from kcoral.multipart import parse_multipart
+from kcoral.schemas import strict_json_loads
+from kcoral.testing import fake_runtime_factory
 
 ADD_ONE = "def main(value):\n    return value + 1\n"
 
@@ -111,7 +111,7 @@ def _cuda_toolchain_available() -> bool:
     Probed rather than opted into: unlike a GPU test, compiling contends with
     nothing, so it should run wherever it can."""
     try:
-        from benchmark_server.builtin_ops.cuda import _require_cuda_toolchain
+        from kcoral.builtin_ops.cuda import _require_cuda_toolchain
 
         _require_cuda_toolchain()
     except Exception:
@@ -124,7 +124,7 @@ def _cuda_toolchain_available() -> bool:
     reason="needs the compiler group and a CUDA toolchain (nvcc, ninja, c++)",
 )
 def test_cpu_cuda_compilation_end_to_end():
-    arch = os.environ.get("BENCH_CPU_COMPILE_ARCH", "sm_90a")
+    arch = os.environ.get("KCORAL_CPU_COMPILE_ARCH", "sm_90a")
     program = {
         "instructions": [
             {
@@ -482,8 +482,8 @@ def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.con
 
 
 @pytest.mark.skipif(
-    os.environ.get("BENCH_GPU_TEST") != "1",
-    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
+    os.environ.get("KCORAL_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires KCORAL_GPU_TEST=1",
 )
 def test_real_kernel_end_to_end():
     import numpy as np
@@ -566,7 +566,7 @@ void stale_launch() {
 CUDA_SYNC = """
 def main():
     import torch
-    from benchmark_server.errors import ExecutionError
+    from kcoral.errors import ExecutionError
     try:
         torch.cuda.synchronize()
     except RuntimeError as exc:
@@ -606,8 +606,8 @@ def run(x):
 
 
 @pytest.mark.skipif(
-    os.environ.get("BENCH_GPU_TEST") != "1",
-    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
+    os.environ.get("KCORAL_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires KCORAL_GPU_TEST=1",
 )
 def test_prebuilt_library_is_cached_like_a_tensor(tmp_path):
     """A client-compiled library goes through the same content-addressed cache as a
@@ -674,8 +674,8 @@ def test_prebuilt_library_is_cached_like_a_tensor(tmp_path):
 
 
 @pytest.mark.skipif(
-    os.environ.get("BENCH_GPU_TEST") != "1",
-    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
+    os.environ.get("KCORAL_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires KCORAL_GPU_TEST=1",
 )
 def test_cuda_c_kernel_end_to_end():
     import numpy as np
@@ -732,8 +732,8 @@ def test_cuda_c_kernel_end_to_end():
 
 
 @pytest.mark.skipif(
-    os.environ.get("BENCH_GPU_TEST") != "1",
-    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
+    os.environ.get("KCORAL_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires KCORAL_GPU_TEST=1",
 )
 def test_illegal_access_replaces_only_worker_and_next_gpu_request_recovers():
     poison_program = {
@@ -792,8 +792,8 @@ def test_illegal_access_replaces_only_worker_and_next_gpu_request_recovers():
 
 
 @pytest.mark.skipif(
-    os.environ.get("BENCH_GPU_TEST") != "1",
-    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
+    os.environ.get("KCORAL_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires KCORAL_GPU_TEST=1",
 )
 def test_parallel_triton_illegal_accesses_match_and_workers_recover(tmp_path, monkeypatch):
     import numpy as np
@@ -857,8 +857,8 @@ def test_parallel_triton_illegal_accesses_match_and_workers_recover(tmp_path, mo
 
 
 @pytest.mark.skipif(
-    os.environ.get("BENCH_GPU_TEST") != "1",
-    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
+    os.environ.get("KCORAL_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires KCORAL_GPU_TEST=1",
 )
 def test_cuda_last_error_fails_current_request_without_replacing_worker():
     stale_error_program = {
@@ -914,8 +914,8 @@ def test_cuda_last_error_fails_current_request_without_replacing_worker():
 
 
 @pytest.mark.skipif(
-    os.environ.get("BENCH_GPU_TEST") != "1",
-    reason="real-kernel end-to-end test requires BENCH_GPU_TEST=1",
+    os.environ.get("KCORAL_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires KCORAL_GPU_TEST=1",
 )
 def test_compiling_does_not_hold_the_gpu():
     """The point of the lease, against the real toolchain: `compile_tirx` is the

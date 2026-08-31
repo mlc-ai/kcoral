@@ -1,12 +1,12 @@
-"""Benchmark Server - a stateless remote execution engine for GPU kernels.
+"""KCoral - a stateless remote execution engine for GPU kernels.
 
 A request is a program (an instruction sequence). See ``docs/protocol.md``.
 """
 
 from .app import create_app
 from .client import (
-    BenchmarkServerError,
     Client,
+    KCoralError,
     Program,
     ProgramResult,
     ProtocolError,
@@ -17,8 +17,8 @@ from .config import ServerConfig
 from .schemas import parse_program
 
 __all__ = [
-    "BenchmarkServerError",
     "Client",
+    "KCoralError",
     "Program",
     "ProgramResult",
     "ProtocolError",

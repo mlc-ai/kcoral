@@ -4,7 +4,7 @@ An uploaded module executes in the worker process, where the server package is
 importable, so it can call builtins directly rather than through ``run``
 instructions::
 
-    from benchmark_server import builtin
+    from kcoral import builtin
 
 
     def main(x):

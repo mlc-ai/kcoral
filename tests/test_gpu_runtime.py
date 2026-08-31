@@ -6,14 +6,14 @@ import pathlib
 
 import pytest
 
-from benchmark_server.engine import execute
-from benchmark_server.keys import compute_blob_hash
-from benchmark_server.schemas import Program, Ref, Return, Run, Upload
-from benchmark_server.testing import UNSHARED_GPU
+from kcoral.engine import execute
+from kcoral.keys import compute_blob_hash
+from kcoral.schemas import Program, Ref, Return, Run, Upload
+from kcoral.testing import UNSHARED_GPU
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("BENCH_GPU_TEST") != "1",
-    reason="GPU integration test requires BENCH_GPU_TEST=1",
+    os.environ.get("KCORAL_GPU_TEST") != "1",
+    reason="GPU integration test requires KCORAL_GPU_TEST=1",
 )
 
 KERNEL = """from __future__ import annotations
@@ -83,7 +83,7 @@ def build_library(source, entry, tmp_path):
     import tvm_ffi.cpp
     from tvm_ffi.cpp import extension
 
-    from benchmark_server.builtin_ops.cuda import _cuda_arch_list
+    from kcoral.builtin_ops.cuda import _cuda_arch_list
 
     os.environ.setdefault("TVM_FFI_CUDA_ARCH_LIST", _cuda_arch_list())
     cu = tmp_path / f"{entry}.cu"
@@ -96,7 +96,7 @@ def build_tirx_library(tmp_path):
     consulted. The exported name comes from the function, not the IRModule key."""
     import tvm
 
-    from benchmark_server.gpu_runtime import GPURuntime, describe_target
+    from kcoral.gpu_runtime import GPURuntime, describe_target
 
     prim_func = GPURuntime().load_module(PRIM_KERNEL.replace("def main(", "def add_one("))
     target = tvm.target.Target({"kind": "cuda", "arch": describe_target()["arch"]})
@@ -178,7 +178,7 @@ def ref(handle):
 
 
 def runtime():
-    from benchmark_server.gpu_runtime import GPURuntime
+    from kcoral.gpu_runtime import GPURuntime
 
     return GPURuntime()
 
@@ -474,7 +474,7 @@ def test_library_with_a_wrong_entry_fails_to_compile(tmp_path):
 def test_library_cache_is_only_a_memoization(tmp_path):
     """A cold worker must behave exactly like a warm one: every request carries the
     bytes, so dropping the cache changes speed and nothing else."""
-    from benchmark_server import gpu_runtime
+    from kcoral import gpu_runtime
 
     data = build_library(CUDA_KERNEL, "add_one", tmp_path)
     digest = compute_blob_hash(data)
@@ -503,7 +503,7 @@ def test_library_cache_is_only_a_memoization(tmp_path):
 
 
 def test_compile_tirx_reuses_an_already_compiled_kernel():
-    from benchmark_server.builtin_ops import tirx
+    from kcoral.builtin_ops import tirx
 
     tirx._COMPILED.clear()
     rt = runtime()
@@ -544,7 +544,7 @@ def test_benchmark_budget_counts_and_no_flush():
 def test_direct_cupti_benchmarks_multiple_gpu_activities_twice():
     import torch
 
-    from benchmark_server.builtin_ops import resolve
+    from kcoral.builtin_ops import resolve
 
     source = torch.randn(4096, dtype=torch.float32, device="cuda")
     output = torch.empty_like(source)
@@ -565,7 +565,7 @@ def test_direct_cupti_benchmarks_multiple_gpu_activities_twice():
 def test_data_dependent_work_is_measured_and_flagged_unstable():
     import torch
 
-    from benchmark_server.builtin_ops import resolve
+    from kcoral.builtin_ops import resolve
 
     source = torch.randn(4096, dtype=torch.float32, device="cuda")
     output = torch.empty_like(source)
@@ -587,8 +587,8 @@ def test_data_dependent_work_is_measured_and_flagged_unstable():
 def test_direct_cupti_cleans_up_after_the_callable_fails():
     import torch
 
-    from benchmark_server.builtin_ops import resolve
-    from benchmark_server.errors import ExecutionError
+    from kcoral.builtin_ops import resolve
+    from kcoral.errors import ExecutionError
 
     source = torch.randn(4096, dtype=torch.float32, device="cuda")
     output = torch.empty_like(source)
@@ -771,7 +771,7 @@ def test_uploaded_and_returned_tensor_bytes():
     )
 
 
-BUILTIN_CALLER = """from benchmark_server import builtin
+BUILTIN_CALLER = """from kcoral import builtin
 
 def main(x):
     y = builtin.randn({"shape": [256], "dtype": "float32", "seed": 0})
@@ -781,7 +781,7 @@ def main(x):
 
 def test_uploaded_code_calls_builtins_directly():
     """The same seed on both sides must produce identical tensors, which proves
-    ``benchmark_server.builtin`` hands uploaded code the very functions the run
+    ``kcoral.builtin`` hands uploaded code the very functions the run
     instructions name."""
     program = Program(
         [
@@ -803,7 +803,7 @@ def test_benchmark_budgets_survive_the_l2_flush():
     silently shrink both budgets by that factor."""
     import torch
 
-    from benchmark_server.builtin_ops import resolve
+    from kcoral.builtin_ops import resolve
 
     x = torch.randn(4096, dtype=torch.float32, device="cuda")
     y = torch.empty_like(x)

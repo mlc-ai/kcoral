@@ -1,7 +1,7 @@
 import pytest
 
-from benchmark_server.errors import ValidationError
-from benchmark_server.schemas import Ref, Return, Run, Upload, parse_program, strict_json_loads
+from kcoral.errors import ValidationError
+from kcoral.schemas import Ref, Return, Run, Upload, parse_program, strict_json_loads
 
 TENSOR_HASH = "0" * 64
 

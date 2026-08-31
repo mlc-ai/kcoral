@@ -1,6 +1,6 @@
-# benchmark-server
+# KCoral
 
-`benchmark-server` executes GPU benchmark programs over HTTP. The same server
+KCoral executes GPU benchmark programs over HTTP. The same server
 can also run without a GPU as a CUDA compilation service. A program uploads
 modules and tensors, runs registered functions, and explicitly returns selected
 values.
@@ -72,18 +72,18 @@ uv sync --group compiler
 ## Run the server
 
 ```bash
-benchmark-server --host 127.0.0.1 --port 8000
+kcoral --host 127.0.0.1 --port 8000
 ```
 
-The server binds to `127.0.0.1` by default. Use `--host` or `BENCH_HOST` to
+The server binds to `127.0.0.1` by default. Use `--host` or `KCORAL_SERVER_HOST` to
 select another address.
 
 To compile on a machine without a GPU and execute on a separate GPU machine,
 run two instances of this same command:
 
 ```bash
-benchmark-server --device cpu --num-workers 16 --host 0.0.0.0 --port 8000
-benchmark-server --device gpu --gpus 0 --workers-per-gpu 8 --host 0.0.0.0 --port 8001
+kcoral --device cpu --num-workers 16 --host 0.0.0.0 --port 8000
+kcoral --device gpu --gpus 0 --workers-per-gpu 8 --host 0.0.0.0 --port 8001
 ```
 
 Useful options include:
@@ -168,7 +168,7 @@ PyTorch tensors, objects implementing the DLPack protocol, or raw bytes
 accompanied by `dtype` and `shape`.
 
 ```python
-from benchmark_server import Client, Program
+from kcoral import Client, Program
 
 source = r"""
 def main(a, b):
@@ -259,7 +259,7 @@ ruff format --check python tests
 The GPU integration tests are opt-in, and need the GPU environment:
 
 ```bash
-BENCH_GPU_TEST=1 pytest -q
+KCORAL_GPU_TEST=1 pytest -q
 ```
 
 The CPU compilation integration test needs the compiler group and a CUDA

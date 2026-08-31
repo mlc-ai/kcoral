@@ -4,11 +4,11 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from benchmark_server.app import create_app
-from benchmark_server.config import ServerConfig
-from benchmark_server.events import EventLogger
-from benchmark_server.pool import PoolBusy
-from benchmark_server.testing import fake_runtime_factory
+from kcoral.app import create_app
+from kcoral.config import ServerConfig
+from kcoral.events import EventLogger
+from kcoral.pool import PoolBusy
+from kcoral.testing import fake_runtime_factory
 
 STRUCTURAL_PROGRAM = {
     "instructions": [
@@ -257,7 +257,7 @@ def test_a_server_that_cannot_start_says_so_on_disk(tmp_path):
 
 
 def test_an_unhandled_front_end_error_still_finishes_the_request(tmp_path, monkeypatch):
-    import benchmark_server.app as app_module
+    import kcoral.app as app_module
 
     def boom(payload, parts):
         raise RuntimeError("simulated front-end bug")

@@ -15,7 +15,7 @@ import os
 import pathlib
 import tempfile
 
-from benchmark_server import Client, Program
+from kcoral import Client, Program
 
 N = 1 << 20
 
@@ -87,7 +87,7 @@ def build_program(library: bytes) -> Program:
 
 
 def main() -> None:
-    with Client(os.environ.get("BENCH_URL", "http://localhost:8000")) as client:
+    with Client(os.environ.get("KCORAL_URL", "http://localhost:8000")) as client:
         arch = client.target()["arch"]
         with tempfile.TemporaryDirectory() as directory:
             library = build_library(arch, directory)

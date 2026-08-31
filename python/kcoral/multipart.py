@@ -64,7 +64,7 @@ def encode_multipart(parts: list[MultipartPart]) -> tuple[bytes, str]:
     if not parts:
         raise ValueError("at least one multipart part is required")
     while True:
-        boundary = f"benchmark-server-{secrets.token_hex(16)}"
+        boundary = f"kcoral-{secrets.token_hex(16)}"
         delimiter = f"\r\n--{boundary}".encode("ascii")
         if all(delimiter not in part.data for part in parts):
             break

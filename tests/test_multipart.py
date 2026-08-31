@@ -1,7 +1,7 @@
 import pytest
 
-from benchmark_server.errors import ValidationError
-from benchmark_server.multipart import MultipartPart, encode_multipart, parse_multipart
+from kcoral.errors import ValidationError
+from kcoral.multipart import MultipartPart, encode_multipart, parse_multipart
 
 
 def test_multipart_round_trip_preserves_binary_data():

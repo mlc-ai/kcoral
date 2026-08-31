@@ -21,7 +21,7 @@ RUN apt-get update \
 
 COPY --from=uv /uv /uvx /bin/
 
-WORKDIR /workspace/benchmark-server
+WORKDIR /workspace/kcoral
 
 # Install locked third-party dependencies in a layer unaffected by source edits.
 COPY pyproject.toml uv.lock README.md ./
@@ -32,8 +32,8 @@ COPY python ./python
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --group gpu --group test
 
-ENV BENCH_HOST=0.0.0.0
+ENV KCORAL_SERVER_HOST=0.0.0.0
 
 EXPOSE 8000
 
-CMD ["python", "-m", "benchmark_server"]
+CMD ["python", "-m", "kcoral"]

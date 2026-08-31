@@ -1,14 +1,14 @@
 ---
-name: benchmark-server-client
+name: kcoral-client
 description: >-
-  Write client code for the benchmark server's POST /execute instruction
+  Write client code for KCoral's POST /execute instruction
   protocol. Use when writing, reviewing, or debugging programs that upload
   kernels (TIRx, CUDA C, CuTeDSL, Triton), create tensors, compile, check
   correctness, or benchmark on a remote GPU server, or when using the
-  benchmark_server Client and Program API.
+  kcoral Client and Program API.
 ---
 
-# Benchmark server client
+# KCoral client
 
 Facts needed to write a protocol-conformant client. `docs/protocol.md` is the
 authoritative field-level specification; where this page and that file
@@ -36,7 +36,7 @@ check correctness, time it, return the results:
 
 ```python
 import numpy as np
-from benchmark_server import Client, Program
+from kcoral import Client, Program
 
 KERNEL = r"""
 from __future__ import annotations
@@ -156,7 +156,7 @@ work.
 | `builtin.assert_close` | same as `check_close` | comparison statistics; fails on mismatch |
 
 Uploaded code can call builtins directly via
-`from benchmark_server import builtin` — same registry, same behaviour. The
+`from kcoral import builtin` — same registry, same behaviour. The
 `compile_*` builtins release the GPU lease only when run as their own
 instruction, so compiles belong at the instruction level.
 
@@ -224,7 +224,7 @@ A missing toolchain fails that builtin with an `unavailable` error;
   `message`, `instruction_index`, `instruction_id`, `traceback`.
 - `CACHE_MISS` — blobs missing; the Python client retries this once
   automatically.
-- Exceptions: `BenchmarkServerError` (carries `status_code` and `kind`; 503
+- Exceptions: `KCoralError` (carries `status_code` and `kind`; 503
   means no worker free, 504 means `timeout_seconds` hit), `TransportError`
   (request never reached the server), `ProtocolError` (malformed response).
 

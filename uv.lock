@@ -96,57 +96,6 @@ wheels = [
 ]
 
 [[package]]
-name = "benchmark-server"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "fastapi", marker = "sys_platform == 'linux'" },
-    { name = "httpx", marker = "sys_platform == 'linux'" },
-    { name = "ml-dtypes", marker = "sys_platform == 'linux'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform == 'linux'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' and sys_platform == 'linux'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' and sys_platform == 'linux'" },
-    { name = "uvicorn", marker = "sys_platform == 'linux'" },
-]
-
-[package.dev-dependencies]
-compiler = [
-    { name = "apache-tvm-ffi", extra = ["cpp"], marker = "sys_platform == 'linux'" },
-]
-gpu = [
-    { name = "apache-tvm", marker = "sys_platform == 'linux'" },
-    { name = "apache-tvm-ffi", extra = ["cpp"], marker = "sys_platform == 'linux'" },
-    { name = "cupti-python", marker = "sys_platform == 'linux'" },
-    { name = "flashinfer-python", marker = "sys_platform == 'linux'" },
-    { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "sys_platform == 'linux'" },
-    { name = "torch", marker = "sys_platform == 'linux'" },
-]
-test = [
-    { name = "pytest", marker = "sys_platform == 'linux'" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = ">=0.110" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "ml-dtypes", specifier = ">=0.5" },
-    { name = "numpy", specifier = ">=1.24" },
-    { name = "uvicorn", specifier = ">=0.29" },
-]
-
-[package.metadata.requires-dev]
-compiler = [{ name = "apache-tvm-ffi", extras = ["cpp"], specifier = "==0.1.13.post2" }]
-gpu = [
-    { name = "apache-tvm", specifier = ">=0.26.0" },
-    { name = "apache-tvm-ffi", extras = ["cpp"], specifier = "==0.1.13.post2" },
-    { name = "cupti-python", specifier = ">=13.0.1" },
-    { name = "flashinfer-python", specifier = ">=0.6.17" },
-    { name = "nvidia-cutlass-dsl", extras = ["cu13"], specifier = "==4.7.0" },
-    { name = "torch", specifier = ">=2.9", index = "https://download.pytorch.org/whl/cu130" },
-]
-test = [{ name = "pytest", specifier = ">=8" }]
-
-[[package]]
 name = "certifi"
 version = "2026.7.22"
 source = { registry = "https://pypi.org/simple" }
@@ -599,6 +548,57 @@ sdist = { url = "https://files.pythonhosted.org/packages/df/bf/f7da0350254c0ed7c
 wheels = [
     { url = "https://files.pythonhosted.org/packages/62/a1/3d680cbfd5f4b8f15abc1d571870c5fc3e594bb582bc3b64ea099db13e56/jinja2-3.1.6-py3-none-any.whl", hash = "sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67", size = 134899, upload-time = "2025-03-05T20:05:00.369Z" },
 ]
+
+[[package]]
+name = "kcoral"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "fastapi", marker = "sys_platform == 'linux'" },
+    { name = "httpx", marker = "sys_platform == 'linux'" },
+    { name = "ml-dtypes", marker = "sys_platform == 'linux'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform == 'linux'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' and sys_platform == 'linux'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' and sys_platform == 'linux'" },
+    { name = "uvicorn", marker = "sys_platform == 'linux'" },
+]
+
+[package.dev-dependencies]
+compiler = [
+    { name = "apache-tvm-ffi", extra = ["cpp"], marker = "sys_platform == 'linux'" },
+]
+gpu = [
+    { name = "apache-tvm", marker = "sys_platform == 'linux'" },
+    { name = "apache-tvm-ffi", extra = ["cpp"], marker = "sys_platform == 'linux'" },
+    { name = "cupti-python", marker = "sys_platform == 'linux'" },
+    { name = "flashinfer-python", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "sys_platform == 'linux'" },
+    { name = "torch", marker = "sys_platform == 'linux'" },
+]
+test = [
+    { name = "pytest", marker = "sys_platform == 'linux'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "ml-dtypes", specifier = ">=0.5" },
+    { name = "numpy", specifier = ">=1.24" },
+    { name = "uvicorn", specifier = ">=0.29" },
+]
+
+[package.metadata.requires-dev]
+compiler = [{ name = "apache-tvm-ffi", extras = ["cpp"], specifier = "==0.1.13.post2" }]
+gpu = [
+    { name = "apache-tvm", specifier = ">=0.26.0" },
+    { name = "apache-tvm-ffi", extras = ["cpp"], specifier = "==0.1.13.post2" },
+    { name = "cupti-python", specifier = ">=13.0.1" },
+    { name = "flashinfer-python", specifier = ">=0.6.17" },
+    { name = "nvidia-cutlass-dsl", extras = ["cu13"], specifier = "==4.7.0" },
+    { name = "torch", specifier = ">=2.9", index = "https://download.pytorch.org/whl/cu130" },
+]
+test = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "markupsafe"

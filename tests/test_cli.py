@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmark_server.__main__ import build_parser, config_from_args
+from kcoral.__main__ import build_parser, config_from_args
 
 
 def parse(argv):
@@ -27,15 +27,12 @@ def test_host_default_and_flag():
 
 
 def test_host_env():
-    code = (
-        "from benchmark_server.__main__ import build_parser; "
-        "print(build_parser().parse_args([]).host)"
-    )
+    code = "from kcoral.__main__ import build_parser; print(build_parser().parse_args([]).host)"
     out = subprocess.run(
         [sys.executable, "-c", code],
         env={
             **os.environ,
-            "BENCH_HOST": "192.0.2.1",
+            "KCORAL_SERVER_HOST": "192.0.2.1",
             "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "python"),
         },
         capture_output=True,

@@ -121,7 +121,7 @@ def create_app(
             events.emit("server_stopped")
             events.close()
 
-    app = FastAPI(title="Benchmark Server", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="KCoral", version="0.1.0", lifespan=lifespan)
 
     @app.get("/health")
     async def health(request: Request) -> dict[str, object]:
