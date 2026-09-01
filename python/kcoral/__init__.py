@@ -3,7 +3,8 @@
 A request is a program (an instruction sequence). See ``docs/protocol.md``.
 """
 
-from .app import create_app
+from typing import TYPE_CHECKING, Any
+
 from .client import (
     Client,
     KCoralError,
@@ -15,6 +16,9 @@ from .client import (
 )
 from .config import ServerConfig
 from .schemas import parse_program
+
+if TYPE_CHECKING:
+    from .app import create_app
 
 __all__ = [
     "Client",
@@ -29,3 +33,11 @@ __all__ = [
     "parse_program",
 ]
 __version__ = "0.1.0"
+
+
+def __getattr__(name: str) -> Any:
+    if name == "create_app":
+        from .app import create_app
+
+        return create_app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -29,7 +29,6 @@ import os
 import sys
 from pathlib import Path
 
-from .app import create_app
 from .config import ServerConfig
 
 _DEFAULTS = ServerConfig()
@@ -158,14 +157,19 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
 
 
 def main() -> None:
-    import uvicorn
-
     args = build_parser().parse_args()
     config = config_from_args(args)
     if config.device == "gpu":
         _warn_if_visible_devices_set()
-    app = create_app(config)
-    uvicorn.run(app, host=args.host, port=args.port)
+    try:
+        import uvicorn
+
+        from .app import create_app
+    except ImportError as exc:
+        raise SystemExit(
+            f"cannot start the server: {exc}. Install the front-end: pip install 'kcoral[server]'"
+        ) from exc
+    uvicorn.run(create_app(config), host=args.host, port=args.port)
 
 
 def _warn_if_visible_devices_set() -> None:

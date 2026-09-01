@@ -14,13 +14,27 @@ and validation rules.
 
 Python 3.10 or newer is required.
 
+### The client
+
 ```bash
 pip install .
 ```
 
-This gives the Python client and the HTTP front-end, neither of which touches a
-GPU. Running programs needs a worker environment holding more, and how much
-depends on what the programs use:
+This gives the Python client on its own, which is all that sending programs to
+a running server needs. It does not depend on a GPU, so it can install on a
+machine with no GPU, no CUDA and no compiler.
+
+### The server
+
+The `server` extra adds the HTTP front-end, FastAPI and uvicorn, which the
+client never imports:
+
+```bash
+pip install '.[server]'
+```
+
+Neither the client nor the front-end touches a GPU. Running programs needs a
+worker environment holding more, and how much depends on what the programs use:
 
 | To run | The worker environment needs |
 |---|---|
@@ -36,7 +50,7 @@ depends on what the programs use:
 A builtin whose requirement is absent answers `unavailable` and the rest of the
 server is unaffected, so a partial environment is a usable deployment.
 
-Build whichever of the two environments below matches the work.
+Build whichever of the environments below matches the work.
 
 ### Front-end, engine, and client
 
@@ -45,6 +59,8 @@ The lockfile builds this one, CPU-only, with no GPU or compiler needed:
 ```bash
 uv sync
 ```
+
+`uv sync --no-default-groups` narrows it to the client's dependencies alone.
 
 ### Running GPU programs
 

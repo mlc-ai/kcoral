@@ -554,26 +554,35 @@ name = "kcoral"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "fastapi", marker = "sys_platform == 'linux'" },
     { name = "httpx", marker = "sys_platform == 'linux'" },
     { name = "ml-dtypes", marker = "sys_platform == 'linux'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform == 'linux'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' and sys_platform == 'linux'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' and sys_platform == 'linux'" },
+]
+
+[package.optional-dependencies]
+server = [
+    { name = "fastapi", marker = "sys_platform == 'linux'" },
     { name = "uvicorn", marker = "sys_platform == 'linux'" },
 ]
 
 [package.dev-dependencies]
 compiler = [
     { name = "apache-tvm-ffi", extra = ["cpp"], marker = "sys_platform == 'linux'" },
+    { name = "kcoral", extra = ["server"], marker = "sys_platform == 'linux'" },
 ]
 gpu = [
     { name = "apache-tvm", marker = "sys_platform == 'linux'" },
     { name = "apache-tvm-ffi", extra = ["cpp"], marker = "sys_platform == 'linux'" },
     { name = "cupti-python", marker = "sys_platform == 'linux'" },
     { name = "flashinfer-python", marker = "sys_platform == 'linux'" },
+    { name = "kcoral", extra = ["server"], marker = "sys_platform == 'linux'" },
     { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "sys_platform == 'linux'" },
     { name = "torch", marker = "sys_platform == 'linux'" },
+]
+server = [
+    { name = "kcoral", extra = ["server"], marker = "sys_platform == 'linux'" },
 ]
 test = [
     { name = "pytest", marker = "sys_platform == 'linux'" },
@@ -581,23 +590,29 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", specifier = ">=0.110" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "ml-dtypes", specifier = ">=0.5" },
     { name = "numpy", specifier = ">=1.24" },
-    { name = "uvicorn", specifier = ">=0.29" },
+    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.29" },
 ]
+provides-extras = ["server"]
 
 [package.metadata.requires-dev]
-compiler = [{ name = "apache-tvm-ffi", extras = ["cpp"], specifier = "==0.1.13.post2" }]
+compiler = [
+    { name = "apache-tvm-ffi", extras = ["cpp"], specifier = "==0.1.13.post2" },
+    { name = "kcoral", extras = ["server"] },
+]
 gpu = [
     { name = "apache-tvm", specifier = ">=0.26.0" },
     { name = "apache-tvm-ffi", extras = ["cpp"], specifier = "==0.1.13.post2" },
     { name = "cupti-python", specifier = ">=13.0.1" },
     { name = "flashinfer-python", specifier = ">=0.6.17" },
+    { name = "kcoral", extras = ["server"] },
     { name = "nvidia-cutlass-dsl", extras = ["cu13"], specifier = "==4.7.0" },
     { name = "torch", specifier = ">=2.9", index = "https://download.pytorch.org/whl/cu130" },
 ]
+server = [{ name = "kcoral", extras = ["server"] }]
 test = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
