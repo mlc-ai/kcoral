@@ -53,12 +53,12 @@ default-groups = ["server"]
 environments = ["sys_platform == 'linux'"]
 
 [[tool.uv.index]]
-name = "pytorch-cu130"
-url = "https://download.pytorch.org/whl/cu130"
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu130" }
+torch = { index = "pytorch-cu132" }
 
 [tool.setuptools.packages.find]
 where = ["python"]

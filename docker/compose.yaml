@@ -4,8 +4,8 @@ services:
   kcoral:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.cu130.dev
-    image: kcoral:cu130-dev
+      dockerfile: docker/Dockerfile.cu132.dev
+    image: kcoral:cu132-dev
     init: true
     gpus: all
     environment:
