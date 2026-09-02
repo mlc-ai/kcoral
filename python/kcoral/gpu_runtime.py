@@ -47,7 +47,6 @@ class LoadedPythonModule:
 class LoadedLibrary:
     """A request-local view of one cached TVM-FFI module."""
 
-    digest: str
     module: Any
 
 
@@ -386,7 +385,7 @@ def _materialize_library(data: bytes) -> LoadedLibrary:
         _LOADED_LIBRARIES[digest] = cached
         if len(_LOADED_LIBRARIES) > _LOADED_LIBRARIES_LIMIT:
             _LOADED_LIBRARIES.popitem(last=False)
-    return LoadedLibrary(digest=digest, module=cached)
+    return LoadedLibrary(module=cached)
 
 
 def _register_library_loaders() -> None:

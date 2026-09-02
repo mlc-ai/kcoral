@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-from kcoral.builtin_ops.cuda import CUDAModule, CUDASource, compile_cuda_binary
+from kcoral.builtin_ops.cuda import CUDAModule, compile_cuda_binary
 from kcoral.cpu_runtime import CPURuntime
 from kcoral.errors import ExecutionError
 
@@ -15,7 +15,7 @@ def test_cpu_runtime_binds_cuda_source_without_importing_torch(monkeypatch):
     source = runtime.get_function(module, "add")
 
     assert module == CUDAModule(source="void add() {}")
-    assert source == CUDASource(source="void add() {}", name="add")
+    assert source == CUDAModule(source="void add() {}", name="add")
     assert runtime.builtin("builtin.compile_cuda_binary") is compile_cuda_binary
     assert runtime.cpu_only_builtins() == frozenset({"builtin.compile_cuda_binary"})
     assert runtime.target() == {}

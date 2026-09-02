@@ -21,24 +21,17 @@ from ._registry import register_builtin
 
 @dataclass(frozen=True)
 class CUDAModule:
-    """Uploaded CUDA C source before a function has been selected."""
+    """Uploaded CUDA C source, optionally with a selected exported function."""
 
     source: str
+    name: str | None = None
 
-    def get_function(self, name: str) -> CUDASource:
+    def get_function(self, name: str) -> CUDAModule:
         if not name.isidentifier():
             raise ExecutionError("parse", "a CUDA function name must be an identifier")
         if name == "main":
             raise ExecutionError("parse", "C++ reserves 'main'; name the function otherwise")
-        return CUDASource(source=self.source, name=name)
-
-
-@dataclass(frozen=True)
-class CUDASource:
-    """CUDA C source text and the name of the function it exports."""
-
-    source: str
-    name: str
+        return CUDAModule(source=self.source, name=name)
 
 
 @register_builtin("compile_cuda", cpu_only=True)
@@ -75,9 +68,10 @@ def compile_cuda_binary(src: Any, cfg: Any = None) -> bytes:
 
 
 def _validate_compile_request(src: Any, cfg: Any, builtin: str) -> dict:
-    if not isinstance(src, CUDASource):
+    if not isinstance(src, CUDAModule) or src.name is None:
         raise ExecutionError(
-            "compile", f"{builtin} expects a module upload whose language is 'cuda'"
+            "compile",
+            f"{builtin} expects a function selected from a module upload whose language is 'cuda'",
         )
     options = cfg if cfg is not None else {}
     if not isinstance(options, dict):
@@ -85,7 +79,7 @@ def _validate_compile_request(src: Any, cfg: Any, builtin: str) -> dict:
     return options
 
 
-def _build_cuda(src: CUDASource, cuda_cflags: list[str], arch_list: str | None = None) -> str:
+def _build_cuda(src: CUDAModule, cuda_cflags: list[str], arch_list: str | None = None) -> str:
     _require_cuda_toolchain()
     import tvm_ffi.cpp
 
