@@ -3,7 +3,7 @@ import pytest
 from kcoral.deferred import DeferredGPUResult
 from kcoral.engine import execute
 from kcoral.keys import compute_blob_hash
-from kcoral.schemas import GetFunction, Program, Ref, Return, Run, Upload
+from kcoral.schemas import FileUpload, GetFunction, Program, Ref, Return, Run, Upload
 from kcoral.testing import UNSHARED_GPU, FakeRuntime
 
 
@@ -405,6 +405,75 @@ class RecordingLease:
         if self.held:
             self.releases += 1
         self.held = False
+
+
+def test_file_upload_copies_nested_file_without_taking_the_gpu(tmp_path):
+    raw = b"tensor contents\x00\xff"
+    digest = compute_blob_hash(raw)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    lease = RecordingLease()
+
+    outcome = execute(
+        Program([FileUpload(blob=digest, path="nested/tensor")], blob_bytes={digest: raw}),
+        FakeRuntime(),
+        lease,
+        workspace_dir=str(workspace),
+    )
+
+    assert outcome.status == "COMPLETED"
+    assert (workspace / "nested/tensor").read_bytes() == raw
+    assert lease.acquires == 0
+
+
+def test_uploaded_module_reads_file_relative_to_request_workspace():
+    raw = b"script input"
+    digest = compute_blob_hash(raw)
+    source = "DATA = open('input/data.bin', 'rb').read()\ndef main():\n    return DATA\n"
+    outcome = execute(
+        Program(
+            [
+                FileUpload(blob=digest, path="input/data.bin"),
+                Upload("module", "module", source=source),
+                GetFunction("fn", ref("module"), "main"),
+                Run("value", ref("fn"), []),
+                Return("value", ref("value")),
+            ],
+            blob_bytes={digest: raw},
+        ),
+        FakeRuntime(),
+        UNSHARED_GPU,
+    )
+
+    assert outcome.status == "COMPLETED"
+    part = outcome.results["value"]["part"]
+    assert outcome.binary_parts[part] == raw
+
+
+def test_file_upload_does_not_follow_workspace_symlink(tmp_path):
+    raw = b"must stay contained"
+    digest = compute_blob_hash(raw)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    source = f"import os\nos.symlink({str(outside)!r}, 'escape')\n"
+
+    outcome = execute(
+        Program(
+            [
+                Upload("module", "module", source=source),
+                FileUpload(blob=digest, path="escape/tensor"),
+            ],
+            blob_bytes={digest: raw},
+        ),
+        FakeRuntime(),
+        UNSHARED_GPU,
+    )
+
+    assert outcome.status == "FAILED"
+    assert outcome.error["kind"] == "runtime"
+    assert outcome.error["instruction_index"] == 1
+    assert outcome.error["instruction_id"] is None
+    assert not (outside / "tensor").exists()
 
 
 class CudaAwareRuntime(FakeRuntime):

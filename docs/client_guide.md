@@ -266,6 +266,35 @@ types carried by `ml_dtypes`. To hand one to torch, reinterpret the raw bytes:
 torch.from_numpy(value.view(np.uint8)).view(torch.bfloat16)
 ```
 
+## Files used by uploaded scripts
+
+Use a file upload when existing Python code expects a path and changing it to
+accept in-memory bytes would be invasive:
+
+```python
+program = Program()
+program.upload(kind="file", blob=tensor_bytes, path="./inputs/tensor.bin")
+module = program.upload(id="reader_module", kind="module", source=READER_SOURCE)
+reader = program.get_function(id="reader", module=module, name="main")
+result = program.run(id="result", fn=reader)
+```
+
+The file instruction returns no register. It copies the bytes to
+`inputs/tensor.bin` in a fresh request-local working directory, so the uploaded
+module can use `open("inputs/tensor.bin", "rb")` unchanged. Put the file
+instruction before a Python module when that module reads the file from its
+top-level code.
+
+Paths must be relative and cannot contain `..`; nested parent directories are
+created automatically. The server removes the complete working directory when
+the request finishes, including after a failure, timeout, or worker crash. The
+content-addressed blob remains cached, so another execution with identical bytes
+normally avoids the network upload even though it receives a newly copied file.
+
+The path restriction contains files created by the upload instruction; it is not
+a sandbox for arbitrary Python code, which can still open any path available to
+the worker process.
+
 ## Calling builtins from uploaded code
 
 An uploaded module executes in the worker process, where the server package

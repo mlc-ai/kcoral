@@ -1,4 +1,4 @@
-"""SHA-256 helpers for content-addressed tensor blobs."""
+"""SHA-256 helpers for content-addressed binary blobs."""
 
 from __future__ import annotations
 

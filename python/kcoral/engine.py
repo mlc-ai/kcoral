@@ -18,6 +18,7 @@ from .keys import compute_blob_hash
 from .lease import Lease
 from .schemas import (
     DTYPE_ITEM_SIZES,
+    FileUpload,
     GetFunction,
     Instruction,
     Program,
@@ -27,6 +28,7 @@ from .schemas import (
     Run,
     Upload,
     expected_tensor_nbytes,
+    normalize_file_path,
 )
 
 DEFAULT_OUTPUT_LIMIT_BYTES = 1024**2
@@ -56,6 +58,7 @@ def execute(
     progress: Callable[[int], None] | None = None,
     cleanup_failed: Callable[[BaseException], None] | None = None,
     capture_dir: str | None = None,
+    workspace_dir: str | None = None,
 ) -> ProgramOutcome:
     """Run a program and serialize only values selected by return instructions.
 
@@ -64,6 +67,30 @@ def execute(
     function the program declared ``cpu_only`` at ``get_function``, which is also
     watched for CUDA calls.
     """
+    with _request_workspace(workspace_dir) as active_workspace:
+        return _execute_in_workspace(
+            program,
+            runtime,
+            lease,
+            cpu_only,
+            progress=progress,
+            cleanup_failed=cleanup_failed,
+            capture_dir=capture_dir,
+            workspace_dir=active_workspace,
+        )
+
+
+def _execute_in_workspace(
+    program: Program,
+    runtime: Runtime,
+    lease: Lease,
+    cpu_only: frozenset[str],
+    *,
+    progress: Callable[[int], None] | None,
+    cleanup_failed: Callable[[BaseException], None] | None,
+    capture_dir: str | None,
+    workspace_dir: str,
+) -> ProgramOutcome:
     env: dict[str, Any] = {}
     results: dict[str, dict[str, Any]] = {}
     encoder = _ValueEncoder(runtime)
@@ -84,7 +111,13 @@ def execute(
                     if progress is not None:
                         progress(current_index)
                     _place(instruction, off_gpu, runtime, lease)
-                    if isinstance(instruction, Upload):
+                    if isinstance(instruction, FileUpload):
+                        _materialize_file(
+                            workspace_dir,
+                            instruction.path,
+                            program.blob_bytes[instruction.blob],
+                        )
+                    elif isinstance(instruction, Upload):
                         if instruction.kind == "module":
                             assert instruction.source is not None
                             env[instruction.id] = runtime.load_module(
@@ -217,10 +250,76 @@ def _invoke(
         return fn(*args)
 
 
+@contextmanager
+def _request_workspace(workspace_dir: str | None) -> Iterator[str]:
+    """Enter one request's working directory.
+
+    Production workers pass a parent-owned directory so it can still be removed
+    after the child is killed. Direct engine callers get the same semantics from
+    a locally owned temporary directory.
+    """
+    if workspace_dir is None:
+        with tempfile.TemporaryDirectory(prefix="kcoral-program-") as temporary:
+            with _working_directory(temporary):
+                yield temporary
+        return
+    workspace_dir = os.path.abspath(workspace_dir)
+    with _working_directory(workspace_dir):
+        yield workspace_dir
+
+
+@contextmanager
+def _working_directory(directory: str) -> Iterator[None]:
+    previous = os.open(".", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.chdir(directory)
+        yield
+    finally:
+        os.fchdir(previous)
+        os.close(previous)
+
+
+def _materialize_file(workspace_dir: str, path: str, data: bytes) -> None:
+    """Copy one blob beneath ``workspace_dir`` without following symlinks."""
+    try:
+        path = normalize_file_path(path)
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        directory_fds = [os.open(workspace_dir, directory_flags)]
+        try:
+            parent_fd = directory_fds[0]
+            parts = path.split("/")
+            for part in parts[:-1]:
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=parent_fd)
+                except FileExistsError:
+                    pass
+                parent_fd = os.open(part, directory_flags, dir_fd=parent_fd)
+                directory_fds.append(parent_fd)
+
+            file_fd = os.open(
+                parts[-1],
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=parent_fd,
+            )
+            with os.fdopen(file_fd, "wb") as file:
+                file.write(data)
+        finally:
+            for directory_fd in reversed(directory_fds):
+                os.close(directory_fd)
+    except Exception as exc:
+        raise ExecutionError(
+            "runtime", f"cannot materialize file {path!r}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 def _place(
     instruction: Instruction, off_gpu: frozenset[str | Ref], runtime: Runtime, lease: Lease
 ) -> None:
     """Hold or drop the GPU for the instruction about to run."""
+    if isinstance(instruction, FileUpload):
+        _drop_gpu(runtime, lease)
+        return
     if isinstance(instruction, Run) and instruction.fn in off_gpu:
         # A compile, typically: hand the GPU over so another worker can measure on it.
         _drop_gpu(runtime, lease)

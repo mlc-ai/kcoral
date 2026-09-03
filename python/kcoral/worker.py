@@ -17,6 +17,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import os
 import signal
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -109,7 +110,7 @@ def worker_main(
             return
         if message is None:  # shutdown signal
             return
-        program, cpu_only = message
+        program, cpu_only, workspace_dir = message
         cleanup_error: BaseException | None = None
 
         def mark_cleanup_failed(exc: BaseException) -> None:
@@ -125,6 +126,7 @@ def worker_main(
             progress=lambda index: conn.send({"__instruction__": index}),
             cleanup_failed=mark_cleanup_failed,
             capture_dir=capture_dir,
+            workspace_dir=workspace_dir,
         )
         requests_served += 1
         # The only reasons this side can name are the two that retire it; None
@@ -321,6 +323,21 @@ class Worker:
         crash, then re-raise. A poisoned context is respawned after preserving its
         outcome. Returns the outcome, the lease timings, and the finish_reason.
 
+        The parent owns the workspace so it is removed even when the child is
+        killed before its own cleanup handlers can run.
+        """
+        with tempfile.TemporaryDirectory(prefix="kcoral-program-") as workspace_dir:
+            return self._run_in_workspace(program, timeout, leases, workspace_dir)
+
+    def _run_in_workspace(
+        self,
+        program,
+        timeout: float,
+        leases: GPULeases | NoopLeases,
+        workspace_dir: str,
+    ) -> tuple:
+        """Worker protocol loop for a program whose workspace already exists.
+
         The deadline covers only the worker's own work - time blocked on a lease
         another worker holds is not counted, or ``timeout_seconds`` would mean
         different things at different loads.
@@ -331,7 +348,7 @@ class Worker:
         held_since: float | None = None
         instruction_index: int | None = None
         try:
-            self._conn.send((program, self.cpu_only))
+            self._conn.send((program, self.cpu_only, workspace_dir))
             while True:
                 waited_from = time.monotonic()
                 if not self._conn.poll(remaining):  # no answer by the deadline -> hung

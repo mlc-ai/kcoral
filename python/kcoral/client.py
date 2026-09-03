@@ -14,7 +14,13 @@ import numpy as np
 
 from .keys import compute_blob_hash, is_blob_hash, verify_blob
 from .multipart import parse_multipart
-from .schemas import DTYPE_ITEM_SIZES, expected_tensor_nbytes, strict_json_loads
+from .schemas import (
+    DTYPE_ITEM_SIZES,
+    _add_file_path,
+    expected_tensor_nbytes,
+    normalize_file_path,
+    strict_json_loads,
+)
 
 
 class KCoralError(Exception):
@@ -54,6 +60,7 @@ class Program:
     _blobs: dict[str, bytes] = field(default_factory=dict, init=False)
     _ids: set[str] = field(default_factory=set, init=False)
     _return_keys: set[str] = field(default_factory=set, init=False)
+    _file_paths: set[str] = field(default_factory=set, init=False)
 
     @property
     def instructions(self) -> list[dict[str, Any]]:
@@ -62,14 +69,38 @@ class Program:
     def upload(
         self,
         *,
-        id: str,
+        id: str | None = None,
         kind: str,
         source: str | None = None,
         language: str = "python",
         value: Any = None,
         dtype: str | None = None,
         shape: list[int] | None = None,
-    ) -> Register:
+        blob: Any = None,
+        path: str | None = None,
+    ) -> Register | None:
+        if kind == "file":
+            if id is not None:
+                raise TypeError("file upload does not accept 'id'")
+            if source is not None or value is not None or dtype is not None or shape is not None:
+                raise TypeError("file upload accepts only 'blob' and 'path'")
+            if language != "python":
+                raise TypeError("file upload does not accept 'language'")
+            normalized_path = normalize_file_path(path)
+            try:
+                raw = blob if isinstance(blob, bytes) else bytes(memoryview(blob))
+            except TypeError as exc:
+                raise TypeError("file upload requires a bytes-like 'blob'") from exc
+            _add_file_path(normalized_path, self._file_paths)
+            blob_hash = compute_blob_hash(raw)
+            self._blobs.setdefault(blob_hash, raw)
+            self._instructions.append(
+                {"op": "upload", "kind": "file", "blob": blob_hash, "path": normalized_path}
+            )
+            return None
+
+        if blob is not None or path is not None:
+            raise TypeError(f"{kind} upload does not accept file fields")
         if kind == "module":
             if not isinstance(source, str):
                 raise TypeError("module upload requires string 'source'")
@@ -130,7 +161,9 @@ class Program:
                 "blob": blob_hash,
             }
         else:
-            raise ValueError("upload kind must be 'module', 'tensor', 'bytes', or 'library'")
+            raise ValueError(
+                "upload kind must be 'module', 'tensor', 'bytes', 'library', or 'file'"
+            )
         self._add_id(id)
         self._instructions.append(instruction)
         return Register(id)
@@ -192,7 +225,7 @@ class Program:
         self._return_keys.add(key)
         self._instructions.append({"op": "return", "key": key, "value": reference})
 
-    def _add_id(self, instruction_id: str) -> None:
+    def _add_id(self, instruction_id: str | None) -> None:
         if not isinstance(instruction_id, str) or not instruction_id:
             raise ValueError("instruction id must be a non-empty string")
         if instruction_id in self._ids:

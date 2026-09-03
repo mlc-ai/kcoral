@@ -6,7 +6,7 @@ import pytest
 
 from kcoral.lease import GPULeases
 from kcoral.pool import PoolBusy, WorkerPool
-from kcoral.schemas import Program, Ref, Return, Run
+from kcoral.schemas import GetFunction, Program, Ref, Return, Run, Upload
 from kcoral.testing import fake_runtime_factory
 from kcoral.worker import Worker, WorkerCrashed, WorkerTimeout, worker_main
 
@@ -68,6 +68,29 @@ def test_cpu_timeout_respawns_without_a_gpu():
     assert recovered.execution.status == "COMPLETED"
     assert recovered.lease_wait_ms == 0
     assert recovered.lease_held_ms == 0
+
+
+def test_timeout_removes_the_parent_owned_request_workspace(pool, tmp_path):
+    marker = tmp_path / "workspace-path"
+    source = (
+        "import os, time\n"
+        "def main():\n"
+        f"    with open({str(marker)!r}, 'w') as marker:\n"
+        "        marker.write(os.getcwd())\n"
+        "    time.sleep(10)\n"
+    )
+    program = prog(
+        Upload("module", "module", source=source),
+        GetFunction("fn", Ref("module"), "main"),
+        Run("call", Ref("fn"), []),
+    )
+
+    with pytest.raises(WorkerTimeout):
+        pool.submit(program, timeout=0.5)
+
+    workspace = marker.read_text()
+    assert os.path.basename(workspace).startswith("kcoral-program-")
+    assert not os.path.exists(workspace)
 
 
 def test_crash_replaces_worker_and_recovers(pool):

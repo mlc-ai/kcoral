@@ -38,6 +38,16 @@ class Upload:
     op: Literal["upload"] = "upload"
 
 
+@dataclass
+class FileUpload:
+    """A blob materialized as a regular file in the request workspace."""
+
+    blob: str
+    path: str
+    kind: Literal["file"] = "file"
+    op: Literal["upload"] = "upload"
+
+
 @dataclass(frozen=True)
 class Ref:
     """A validated reference to an earlier handle; wire form is ``{"$ref": id}``."""
@@ -69,7 +79,7 @@ class Return:
     op: Literal["return"] = "return"
 
 
-Instruction = Upload | GetFunction | Run | Return
+Instruction = Upload | FileUpload | GetFunction | Run | Return
 
 
 @dataclass
@@ -79,12 +89,13 @@ class Program:
     # Filled by the HTTP front-end after multipart validation and cache lookup.
     blob_bytes: dict[str, bytes] = field(default_factory=dict)
 
-    def blob_uploads(self) -> list[Upload]:
+    def blob_uploads(self) -> list[Upload | FileUpload]:
         """Uploads whose payload comes from the content-addressed blob cache."""
         return [
             instruction
             for instruction in self.instructions
-            if isinstance(instruction, Upload) and instruction.blob is not None
+            if isinstance(instruction, FileUpload)
+            or (isinstance(instruction, Upload) and instruction.blob is not None)
         ]
 
 
@@ -152,6 +163,7 @@ def parse_program(body: Any) -> Program:
 
     handles: set[str] = set()
     return_keys: set[str] = set()
+    file_paths: set[str] = set()
     instructions: list[Instruction] = []
 
     # Instructions may appear in any order; ``handles`` grows as they are parsed,
@@ -163,6 +175,9 @@ def parse_program(body: Any) -> Program:
         if op == "return":
             instruction = _parse_return(item, index, handles, return_keys)
             return_keys.add(instruction.key)
+        elif op == "upload" and item.get("kind") == "file":
+            instruction = _parse_file_upload(item, index)
+            _add_file_path(instruction.path, file_paths)
         elif op in ("upload", "get_function", "run"):
             instruction_id = item.get("id")
             if not isinstance(instruction_id, str) or not instruction_id:
@@ -181,6 +196,46 @@ def parse_program(body: Any) -> Program:
         instructions.append(instruction)
 
     return Program(instructions=instructions, options=options)
+
+
+def normalize_file_path(value: Any) -> str:
+    """Validate and canonicalize a request-workspace-relative POSIX path.
+
+    Inspect the raw components before normalization so ``a/../b`` is rejected
+    rather than silently turned into a path that appears safe afterwards.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValidationError("file upload 'path' must be a non-empty string")
+    if "\x00" in value:
+        raise ValidationError("file upload 'path' must not contain NUL")
+    if "\\" in value:
+        raise ValidationError("file upload 'path' must use POSIX '/' separators")
+    if value.startswith("/"):
+        raise ValidationError("file upload 'path' must be relative")
+
+    raw_parts = value.split("/")
+    if ".." in raw_parts:
+        raise ValidationError("file upload 'path' must not contain a '..' component")
+    parts = [part for part in raw_parts if part not in ("", ".")]
+    if not parts:
+        raise ValidationError("file upload 'path' must name a file")
+    for part in parts:
+        if len(part.encode("utf-8")) > 255:
+            raise ValidationError("file upload 'path' contains a component longer than 255 bytes")
+    normalized = "/".join(parts)
+    if len(normalized.encode("utf-8")) > 4096:
+        raise ValidationError("file upload 'path' is longer than 4096 bytes")
+    return normalized
+
+
+def _add_file_path(path: str, paths: set[str]) -> None:
+    """Reject two file declarations that would need one path to be a directory."""
+    for existing in paths:
+        if path == existing:
+            raise ValidationError(f"duplicate file upload path: {path!r}")
+        if path.startswith(existing + "/") or existing.startswith(path + "/"):
+            raise ValidationError(f"conflicting file upload paths: {existing!r} and {path!r}")
+    paths.add(path)
 
 
 def expected_tensor_nbytes(dtype: str, shape: list[int]) -> int:
@@ -285,6 +340,19 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
             )
         return Upload(id=item["id"], kind="library", blob=blob)
     raise ValidationError(f"upload {item.get('id')!r}: unknown kind {kind!r}")
+
+
+def _parse_file_upload(item: dict[str, Any], index: int) -> FileUpload:
+    _check_fields(
+        item,
+        {"op", "kind", "blob", "path"},
+        {"op", "kind", "blob", "path"},
+        f"instruction {index}",
+    )
+    blob = item["blob"]
+    if not is_blob_hash(blob):
+        raise ValidationError("file upload: 'blob' must be a lowercase SHA-256 digest")
+    return FileUpload(blob=blob, path=normalize_file_path(item["path"]))
 
 
 def _parse_get_function(item: dict[str, Any], index: int, handles: set[str]) -> GetFunction:

@@ -23,6 +23,7 @@ from .keys import is_blob_hash, verify_blob
 from .multipart import MultipartPart, encode_multipart, parse_multipart
 from .pool import PoolBusy, SubmitOutcome, WorkerPool
 from .schemas import (
+    FileUpload,
     Program,
     ProgramOutcome,
     Run,
@@ -465,7 +466,7 @@ def _program_shape(program: Program) -> dict[str, object]:
     builtins: set[str] = set()
     for instruction in program.instructions:
         ops[instruction.op] += 1
-        if isinstance(instruction, Upload):
+        if isinstance(instruction, (Upload, FileUpload)):
             kind = instruction.kind
             uploads[f"{kind}:{instruction.language}" if kind == "module" else kind] += 1
         elif isinstance(instruction, Run) and isinstance(instruction.fn, str):

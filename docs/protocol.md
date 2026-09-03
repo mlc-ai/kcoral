@@ -60,7 +60,7 @@ The request contains:
 | Part | Content type | Required | Notes |
 |---|---|---:|---|
 | `program` | `application/json` | yes | Instructions and options |
-| `blob:<sha256>` | `application/octet-stream` | no | Tensor, byte, or library data |
+| `blob:<sha256>` | `application/octet-stream` | no | Tensor, byte, file, or library data |
 
 `<sha256>` is the lowercase 64-character SHA-256 of the part bytes.
 
@@ -122,14 +122,16 @@ response.raise_for_status()
 multipart part. The higher-level client described below also handles caching
 and response decoding.
 
-Each `upload` and `run` has a unique string `id`. A reference has the exact form
-`{"$ref": "<id>"}` and must point to an earlier instruction.
+Each handle-producing `upload` and `run` has a unique string `id`. A reference
+has the exact form `{"$ref": "<id>"}` and must point to an earlier instruction.
+File uploads are side effects and have no `id`.
 
 ---
 
 ## `upload`
 
-Uploads a module, tensor, byte string, or library and binds it to a handle.
+Uploads a module, tensor, byte string, file, or library. All except files bind a
+handle; a file is copied into the request's working directory instead.
 
 ### Module
 
@@ -283,6 +285,34 @@ The handle binds the blob's bytes unchanged. They stay in CPU memory and can be
 passed to uploaded Python code, which makes this kind suitable for files and
 other binary formats that the server should parse.
 
+### File
+
+```json
+{
+  "op": "upload",
+  "kind": "file",
+  "blob": "<sha256>",
+  "path": "data/tensor.bin"
+}
+```
+
+The blob is copied to `path` as a regular file with mode `0600`. Missing parent
+directories are created with mode `0700`. The instruction is a filesystem side
+effect rather than a handle, so it has no `id` and cannot be referenced or
+returned. It does not need the GPU.
+
+Every program runs with a fresh temporary directory as its current working
+directory. That directory is owned by the parent process and removed after the
+program completes, fails, times out, or crashes its worker. Blob cache entries
+remain available after the materialized files have been removed.
+
+`path` uses POSIX `/` separators. It must be relative, must name a file, and must
+not contain a `..` component, a backslash, or NUL. `.` and repeated `/`
+components are removed, so `./data//tensor.bin` becomes `data/tensor.bin`.
+Normalized paths must be unique and cannot conflict as a file and directory;
+for example, one program cannot upload both `data` and `data/tensor.bin`. The
+server creates and opens every component without following symbolic links.
+
 ### Library
 
 A library is an already-built shared object, whether its bytes came from the
@@ -391,26 +421,28 @@ Select the exported function, then call it; no compile instruction appears.
 
 A field is accepted exactly for the kinds it lists, and is rejected for the
 others: a `module` upload carries `source` and optional `language`, a `tensor`
-upload carries `blob`, `dtype`, and `shape`, a `bytes` upload carries `blob`,
-and a `library` upload carries `blob`.
+upload carries `blob`, `dtype`, and `shape`, a `bytes` or `library` upload
+carries `blob`, and a `file` upload carries `blob` and `path`.
 
 | Field | Kinds | Required for | Notes |
 |---|---|---|---|
 | `op` | all | all | `"upload"` |
-| `id` | all | all | Unique handle name |
-| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, or `"library"` |
+| `id` | module, tensor, bytes, library | module, tensor, bytes, library | Unique handle name; rejected for file |
+| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, or `"library"` |
 | `source` | module | module | UTF-8 Python or CUDA source defining a module |
 | `language` | module | — | `"python"` (default) or `"cuda"` |
-| `blob` | tensor, bytes, library | tensor, bytes, library | SHA-256 of the raw bytes |
+| `blob` | tensor, bytes, file, library | tensor, bytes, file, library | SHA-256 of the raw bytes |
+| `path` | file | file | Relative destination in the request working directory |
 | `dtype` | tensor | tensor | Tensor data type |
 | `shape` | tensor | tensor | Tensor shape |
 
 ### Blob cache
 
 The server verifies supplied blobs against their part names and caches them by
-hash. A tensor, byte string, or library may reference a cached blob without
-supplying its multipart part, so unchanged data is uploaded once and later
-requests cost only its hash. If any blob is missing, the program does not run:
+hash. A tensor, byte string, file, or library may reference a cached blob
+without supplying its multipart part, so unchanged data is uploaded once and
+later requests cost only its hash. If any blob is missing, the program does not
+run:
 
 ```json
 {
@@ -708,7 +740,7 @@ A `FAILED` response's `error` describes that instruction:
 | `message` | string | Human-readable description |
 | `instruction_index` | integer | Zero-based position in `instructions` |
 | `instruction_op` | string | `"upload"`, `"get_function"`, `"run"`, or `"return"` |
-| `instruction_id` | string \| null | The instruction's `id`; `null` for `return` |
+| `instruction_id` | string \| null | The instruction's `id`; `null` for `return` and file upload |
 | `traceback` | string | Server-side traceback, truncated to 8192 bytes |
 
 Instruction error kinds are `parse`, `compile`, `runtime`, `gpu_access`,
@@ -721,7 +753,7 @@ the stack at that call.
 |---:|---|---|
 | 200 | `status: COMPLETED` | Program completed |
 | 200 | `status: FAILED` | An instruction failed or terminated its worker; `results` holds the returns that ran |
-| 200 | `status: CACHE_MISS` | Tensor blobs are missing; program did not run |
+| 200 | `status: CACHE_MISS` | Referenced blobs are missing; program did not run |
 | 400 | `status: ERROR` | Malformed request or program, including duplicate JSON keys and NaN/Infinity |
 | 413 | `status: ERROR` | Request body exceeds the server's size limit |
 | 503 | `status: ERROR` | No worker is available; includes `Retry-After` |
@@ -879,6 +911,7 @@ Program.upload(id=..., kind="module", source=..., language="python") -> Register
 Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
 Program.upload(id=..., kind="bytes", value=...) -> Register
 Program.upload(id=..., kind="library", value=...) -> Register
+Program.upload(kind="file", blob=..., path=...) -> None
 Program.get_function(id=..., module=..., name=..., cpu_only=False) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
@@ -890,10 +923,11 @@ Client.target() -> dict          # the health response's `target`, e.g. {"arch":
 Client.close() -> None
 ```
 
-For tensors, the client derives `blob`, `dtype`, and `shape` from `value`. It
-starts without blob parts, retries a `CACHE_MISS` with the missing parts, and
-falls back to all local blobs if the cache changes between requests. Returned
-tensors decode to CPU `numpy.ndarray` (`bfloat16` and `float8_*` via
+For tensors, the client derives `blob`, `dtype`, and `shape` from `value`; for
+files, the `blob` argument is bytes-like and the client puts its digest on the
+wire. It starts without blob parts, retries a `CACHE_MISS` with the missing
+parts, and falls back to all local blobs if the cache changes between requests.
+Returned tensors decode to CPU `numpy.ndarray` (`bfloat16` and `float8_*` via
 `ml_dtypes`). Server errors, transport failures, and malformed responses use
-`KCoralError`, `TransportError`, and `ProtocolError`, which
-`kcoral` exports alongside `Client` and `Program`.
+`KCoralError`, `TransportError`, and `ProtocolError`, which `kcoral` exports
+alongside `Client` and `Program`.

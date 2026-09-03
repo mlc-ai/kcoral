@@ -180,7 +180,8 @@ costs a few KB per request; `--no-log-programs` turns it off.
 ## Python client
 
 The client builds the protocol JSON and binary parts. Byte uploads preserve
-files and other binary data unchanged. Tensor uploads can use NumPy arrays,
+binary data unchanged, while file uploads copy it to a request-local path for
+scripts that expect to read from disk. Tensor uploads can use NumPy arrays,
 PyTorch tensors, objects implementing the DLPack protocol, or raw bytes
 accompanied by `dtype` and `shape`.
 
@@ -203,6 +204,14 @@ with Client("http://localhost:8000") as client:
 
 print(response.status)
 print(response.results["answer"])
+```
+
+An existing script can keep opening a relative file path without being rewritten
+to accept bytes. The directory is private to this execution and is removed when
+the program ends; identical content still benefits from the blob cache:
+
+```python
+program.upload(kind="file", blob=tensor_bytes, path="./inputs/tensor.bin")
 ```
 
 A kernel built elsewhere can be uploaded instead of source, which is the path
@@ -229,9 +238,10 @@ shows the two-server form: the client reads the GPU target, sends a normal
 another normal `/execute` request to upload and run that library on the GPU
 server. No additional endpoint or instruction format is involved.
 
-`Program.upload()` and `Program.run()` return a `Register`, which can be passed
-to later instructions. `Program.return_()` adds an explicit result; run values
-that are not returned do not appear in the response.
+Handle-producing `Program.upload()` calls and `Program.run()` return a
+`Register`, which can be passed to later instructions. A file upload returns
+`None` because it is a filesystem side effect. `Program.return_()` adds an
+explicit result; run values that are not returned do not appear in the response.
 
 The client starts with a cache-only request. When the server reports a
 `CACHE_MISS`, it retries with only the requested blobs. If concurrent cache
@@ -248,9 +258,10 @@ torch.from_numpy(value.view(np.uint8)).view(torch.bfloat16)
 
 A request contains one `program` JSON part and zero or more binary parts named
 `blob:<sha256>`. The SHA-256 digest is calculated over the raw bytes.
-Programs contain three instruction types:
+Programs contain four instruction types:
 
-- `upload`: register module source, raw bytes, a tensor, or a library.
+- `upload`: register module source, raw bytes, a tensor, or a library, or copy a file.
+- `get_function`: select a named object from an uploaded module or library.
 - `run`: call a registered function with recursively encoded arguments.
 - `return`: expose a previously computed value under a result key.
 

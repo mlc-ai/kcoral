@@ -2,6 +2,7 @@ import pytest
 
 from kcoral.errors import ValidationError
 from kcoral.schemas import (
+    FileUpload,
     GetFunction,
     Ref,
     Return,
@@ -146,6 +147,51 @@ def test_parse_bytes_upload():
     assert program.blob_uploads() == [upload]
 
 
+def test_parse_file_upload_normalizes_relative_path_without_creating_a_handle():
+    program = parse_program(
+        {
+            "instructions": [
+                {
+                    "op": "upload",
+                    "kind": "file",
+                    "blob": TENSOR_HASH,
+                    "path": "./weights//tensor.bin",
+                }
+            ]
+        }
+    )
+    upload = program.instructions[0]
+    assert upload == FileUpload(blob=TENSOR_HASH, path="weights/tensor.bin")
+    assert program.blob_uploads() == [upload]
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["", ".", "..", "../tensor", "data/../tensor", "/tmp/tensor", "data\\tensor", "x\x00y"],
+)
+def test_file_upload_rejects_unsafe_paths(path):
+    with pytest.raises(ValidationError, match="file upload 'path'"):
+        parse_program(
+            {"instructions": [{"op": "upload", "kind": "file", "blob": TENSOR_HASH, "path": path}]}
+        )
+
+
+@pytest.mark.parametrize(
+    "paths,match",
+    [
+        (["a", "./a"], "duplicate"),
+        (["a", "a/b"], "conflicting"),
+        (["a/b", "a"], "conflicting"),
+    ],
+)
+def test_file_upload_rejects_duplicate_and_file_directory_conflicts(paths, match):
+    instructions = [
+        {"op": "upload", "kind": "file", "blob": TENSOR_HASH, "path": path} for path in paths
+    ]
+    with pytest.raises(ValidationError, match=match):
+        parse_program({"instructions": instructions})
+
+
 @pytest.mark.parametrize(
     "instruction,match",
     [
@@ -195,6 +241,20 @@ def test_parse_bytes_upload():
         ),
         (
             {"op": "upload", "id": "x", "kind": "bytes", "blob": "sha256:old"},
+            "lowercase SHA-256",
+        ),
+        (
+            {
+                "op": "upload",
+                "id": "file-has-no-handle",
+                "kind": "file",
+                "blob": TENSOR_HASH,
+                "path": "tensor",
+            },
+            "unknown field",
+        ),
+        (
+            {"op": "upload", "kind": "file", "blob": "sha256:old", "path": "tensor"},
             "lowercase SHA-256",
         ),
     ],

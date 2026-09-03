@@ -112,6 +112,34 @@ def test_bytes_cache_retry_and_result(server_url):
     assert second.results == expected
 
 
+def test_file_cache_retry_is_read_from_a_request_local_workspace(server_url):
+    value = b"safetensors contents\x00\xff"
+    program = Program()
+    assert program.upload(kind="file", blob=value, path="./assets//tensor") is None
+    inspect_module = program.upload(
+        id="inspect_module",
+        kind="module",
+        source=(
+            "import os\n"
+            "def main():\n"
+            "    data = open('assets/tensor', 'rb').read()\n"
+            "    return {'data': data, 'cwd': os.getcwd()}\n"
+        ),
+    )
+    inspect_file = program.get_function(id="inspect_file", module=inspect_module, name="main")
+    result = program.run(id="result", fn=inspect_file)
+    program.return_(key="file", value=result)
+
+    with Client(server_url) as client:
+        first = client.execute(program)
+        second = client.execute(program)
+
+    for outcome in (first, second):
+        assert outcome.results["file"]["data"] == value
+        assert not os.path.exists(outcome.results["file"]["cwd"])
+    assert first.results["file"]["cwd"] != second.results["file"]["cwd"]
+
+
 def test_cache_churn_falls_back_to_all_blobs():
     app = create_app(
         ServerConfig(gpus=[0], workers_per_gpu=1, cache_capacity_bytes=16),
@@ -377,6 +405,29 @@ def test_bytes_builder_hashes_bytes_without_tensor_metadata():
     }
     with pytest.raises(TypeError, match="bytes-like"):
         Program().upload(id="file", kind="bytes", value="text")
+
+
+def test_file_builder_hashes_blob_and_validates_its_side_effect_only_fields():
+    value = bytearray(b"file contents")
+    program = Program()
+    assert program.upload(kind="file", blob=value, path="./data//tensor") is None
+    assert program.instructions == [
+        {
+            "op": "upload",
+            "kind": "file",
+            "blob": compute_blob_hash(bytes(value)),
+            "path": "data/tensor",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="must be relative"):
+        Program().upload(kind="file", blob=b"x", path="/tmp/tensor")
+    with pytest.raises(ValueError, match=r"'\.\.' component"):
+        Program().upload(kind="file", blob=b"x", path="data/../tensor")
+    with pytest.raises(TypeError, match="does not accept 'id'"):
+        Program().upload(id="file", kind="file", blob=b"x", path="tensor")
+    with pytest.raises(TypeError, match="bytes-like"):
+        Program().upload(kind="file", blob="text", path="tensor")
 
 
 def test_numpy_tensor_builder_uses_raw_byte_hash():
