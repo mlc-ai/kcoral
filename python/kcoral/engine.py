@@ -8,12 +8,12 @@ import sys
 import tempfile
 import traceback
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import IO, Any, Protocol
 
 from .deferred import DeferredGPUResult
-from .errors import ExecutionError
+from .errors import ExecutionError, GPUAccessViolation
 from .keys import compute_blob_hash
 from .lease import Lease
 from .schemas import (
@@ -41,6 +41,7 @@ class Runtime(Protocol):
     def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None: ...
     def builtin(self, name: str) -> Callable: ...
     def cpu_only_builtins(self) -> frozenset[str]: ...
+    def forbid_gpu(self) -> AbstractContextManager[None]: ...
     def synchronize(self) -> None: ...
     def take_last_error(self) -> str | None: ...
     def reset(self) -> None: ...
@@ -59,12 +60,18 @@ def execute(
     """Run a program and serialize only values selected by return instructions.
 
     The GPU is claimed on the first instruction that needs it and given up around
-    each builtin the caller names in ``cpu_only``, so a worker compiling does not
-    keep a GPU that another worker could be measuring on.
+    each call that runs off it: a builtin the caller names in ``cpu_only``, or a
+    function the program declared ``cpu_only`` at ``get_function``, which is also
+    watched for CUDA calls.
     """
     env: dict[str, Any] = {}
     results: dict[str, dict[str, Any]] = {}
     encoder = _ValueEncoder(runtime)
+    off_gpu: frozenset[str | Ref] = cpu_only | {
+        Ref(instruction.id)
+        for instruction in program.instructions
+        if isinstance(instruction, GetFunction) and instruction.cpu_only
+    }
     error: dict[str, Any] | None = None
     current_index: int | None = None
     current: Instruction | None = None
@@ -76,7 +83,7 @@ def execute(
                     current = instruction
                     if progress is not None:
                         progress(current_index)
-                    _place(instruction, cpu_only, runtime, lease)
+                    _place(instruction, off_gpu, runtime, lease)
                     if isinstance(instruction, Upload):
                         if instruction.kind == "module":
                             assert instruction.source is not None
@@ -108,7 +115,7 @@ def execute(
                             env[instruction.module.id], instruction.name
                         )
                     elif isinstance(instruction, Run):
-                        value = _invoke(instruction, env, runtime)
+                        value = _invoke(instruction, env, runtime, off_gpu)
                         if isinstance(value, DeferredGPUResult):
                             # The builtin completed its host-only phase without the
                             # lease.  Driver/module loading must be serialized with
@@ -128,6 +135,12 @@ def execute(
                         except BaseException:
                             encoder.rollback(checkpoint)
                             raise
+            except GPUAccessViolation as exc:
+                error = _instruction_error(exc.kind, exc.message, current_index, current)
+                error["traceback"] = exc.call_stack[-MAX_TRACEBACK_BYTES:]  # at the CUDA call
+                error["cuda_call"] = exc.cuda_call
+                error["location"] = exc.location
+                error["detected_at_ns"] = exc.detected_at_ns  # for the parent; not answered
             except ExecutionError as exc:
                 error = _instruction_error(exc.kind, exc.message, current_index, current)
             except Exception as exc:
@@ -161,7 +174,10 @@ def execute(
                 # A launch-configuration error can sit in CUDA's last-error slot
                 # without failing synchronize. Consume it here so it belongs to this
                 # request; reading clears it, and the context is still healthy.
-                if last_error is not None:
+                if last_error is not None and error is not None and error["kind"] == "gpu_access":
+                    # The violation is the earlier fault, and the parent reads its fields.
+                    error["message"] += f"; CUDA also reports {last_error}"
+                elif last_error is not None:
                     error = _instruction_error("runtime", last_error, current_index, current)
         env.clear()
         try:
@@ -187,24 +203,28 @@ def execute(
     )
 
 
-def _invoke(instruction: Run, env: dict[str, Any], runtime: Runtime) -> Any:
+def _invoke(
+    instruction: Run, env: dict[str, Any], runtime: Runtime, off_gpu: frozenset[str | Ref]
+) -> Any:
     """Call one ``Run``'s target, in its own frame so the handle and arguments die
     with the instruction. Left in ``execute``'s locals they keep an uploaded
     module's namespace alive past the ``runtime.reset()`` meant to free it."""
     fn = _resolve_fn(instruction.fn, env, runtime)
     args = [env[arg.id] if isinstance(arg, Ref) else arg for arg in instruction.args]
-    return fn(*args)
+    # The program's declaration is checked; a builtin's registration is trusted.
+    watched = isinstance(instruction.fn, Ref) and instruction.fn in off_gpu
+    with runtime.forbid_gpu() if watched else nullcontext():
+        return fn(*args)
 
 
 def _place(
-    instruction: Instruction, cpu_only: frozenset[str], runtime: Runtime, lease: Lease
+    instruction: Instruction, off_gpu: frozenset[str | Ref], runtime: Runtime, lease: Lease
 ) -> None:
     """Hold or drop the GPU for the instruction about to run."""
-    if isinstance(instruction, Run) and isinstance(instruction.fn, str):
-        # A compile: hand the GPU over so another worker can measure on it.
-        if instruction.fn in cpu_only:
-            _drop_gpu(runtime, lease)
-            return
+    if isinstance(instruction, Run) and instruction.fn in off_gpu:
+        # A compile, typically: hand the GPU over so another worker can measure on it.
+        _drop_gpu(runtime, lease)
+        return
     if isinstance(instruction, Upload) and instruction.kind == "bytes":
         return
     if isinstance(instruction, Upload) and instruction.kind == "module":

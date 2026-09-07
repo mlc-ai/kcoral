@@ -26,6 +26,7 @@ def until(predicate, timeout=2.0):
 class FakeWorker:
     gpu_id: int
     name: str
+    request_id: str | None = None
 
 
 def test_the_gpu_goes_to_waiters_in_arrival_order():
@@ -71,6 +72,29 @@ def test_abandoning_the_holder_hands_the_gpu_to_the_next_waiter():
     leases.release(0, "next")
     waiter.join()
     assert leases.depth(0) == 0
+
+
+def test_request_at_names_the_request_that_held_the_gpu_then():
+    """What the pool asks when a worker reports a cpu_only function touching the
+    GPU: whose measurement might it have disturbed?"""
+    leases = GPULeases([0])
+    before = time.monotonic_ns()
+    time.sleep(0.001)
+    first = FakeWorker(0, "a", request_id="request-a")
+    leases.acquire(0, first)
+    during = time.monotonic_ns()
+    assert leases.request_at(0, during) == "request-a"  # the holder right now
+    assert leases.request_at(0, before) is None  # nobody held it then
+
+    time.sleep(0.001)
+    leases.release(0, first)
+    time.sleep(0.001)
+    between = time.monotonic_ns()
+    time.sleep(0.001)
+    leases.acquire(0, FakeWorker(0, "b"))  # a worker initializing serves no request
+    assert leases.request_at(0, during) == "request-a"  # from the record, once handed on
+    assert leases.request_at(0, between) is None
+    assert leases.request_at(0, time.monotonic_ns()) is None
 
 
 def test_workers_come_from_the_least_loaded_gpu():

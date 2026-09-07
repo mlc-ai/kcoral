@@ -180,6 +180,26 @@ def test_failed_instruction_is_data(server_url):
     assert outcome.error["kind"] == "runtime"
 
 
+def test_a_cpu_only_function_touching_the_gpu_fails_with_the_call_named(server_url):
+    program = Program()
+    module = program.upload(
+        id="module",
+        kind="module",
+        source="from kcoral.testing import simulate_cuda_call\n\n"
+        "def main():\n"
+        "    simulate_cuda_call('cudaMalloc')\n",
+    )
+    fn = program.get_function(id="fn", module=module, name="main", cpu_only=True)
+    program.run(id="call", fn=fn)
+    with Client(server_url) as client:
+        outcome = client.execute(program)
+    assert outcome.status == "FAILED"
+    assert outcome.error["kind"] == "gpu_access" and outcome.error["instruction_id"] == "call"
+    assert outcome.error["cuda_call"] == "cudaMalloc"
+    assert outcome.error["location"] == "<uploaded>:1 in main"
+    assert outcome.error["interfered_request_id"] is None  # nobody else held the GPU
+
+
 def test_interleaved_return_survives_a_later_failure(server_url):
     program = Program()
     module = program.upload(
@@ -325,6 +345,23 @@ def test_get_function_builder_validates_its_module_and_name():
         program.get_function(id="bad", module=module, name="")
     with pytest.raises(TypeError, match="module must be"):
         program.get_function(id="bad", module={"not": "a ref"}, name="step")
+    with pytest.raises(TypeError, match="cpu_only must be a bool"):
+        program.get_function(id="bad", module=module, name="step", cpu_only="yes")
+
+
+def test_get_function_builder_emits_cpu_only_when_declared():
+    program = Program()
+    module = program.upload(id="module", kind="module", source="def main():\n    pass\n")
+    program.get_function(id="device", module=module, name="main")
+    program.get_function(id="host", module=module, name="main", cpu_only=True)
+    assert "cpu_only" not in program.instructions[1]  # the default stays off the wire
+    assert program.instructions[2] == {
+        "op": "get_function",
+        "id": "host",
+        "module": {"$ref": "module"},
+        "name": "main",
+        "cpu_only": True,
+    }
 
 
 def test_bytes_builder_hashes_bytes_without_tensor_metadata():

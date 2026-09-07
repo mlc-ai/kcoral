@@ -96,7 +96,7 @@ def check_close(actual: Any, expected: Any, *rest: Any) -> dict:
     try:
         torch.cuda.synchronize()
         a = actual.float()
-        e = expected.float()
+        e = expected.float().to(a.device)  # a reference computed on the CPU compares as is
         diff = (a - e).abs()
         max_abs = float(diff.max())
         # max |a-e|/|e| over nonzero e; masking keeps it finite (JSON-safe).

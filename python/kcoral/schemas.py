@@ -58,6 +58,7 @@ class GetFunction:
     id: str
     module: Ref
     name: str
+    cpu_only: bool = False
     op: Literal["get_function"] = "get_function"
 
 
@@ -289,7 +290,7 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
 def _parse_get_function(item: dict[str, Any], index: int, handles: set[str]) -> GetFunction:
     _check_fields(
         item,
-        {"op", "id", "module", "name"},
+        {"op", "id", "module", "name", "cpu_only"},
         {"op", "id", "module", "name"},
         f"instruction {index}",
     )
@@ -299,10 +300,14 @@ def _parse_get_function(item: dict[str, Any], index: int, handles: set[str]) -> 
     name = item["name"]
     if not isinstance(name, str) or not name:
         raise ValidationError(f"get_function {item['id']!r}: 'name' must be a non-empty string")
+    cpu_only = item.get("cpu_only", False)
+    if not isinstance(cpu_only, bool):
+        raise ValidationError(f"get_function {item['id']!r}: 'cpu_only' must be a boolean")
     return GetFunction(
         id=item["id"],
         module=_resolve_ref(module, handles, item["id"]),
         name=name,
+        cpu_only=cpu_only,
     )
 
 

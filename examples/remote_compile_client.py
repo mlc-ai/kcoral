@@ -1,10 +1,10 @@
 """Compile a kernel on the server, in TIRx, CuTeDSL, CUDA C and Triton.
 
 All four programs have the same shape — upload the kernel as text, compile it
-with a builtin, run and time the result — so the only difference is the language
-and which `compile_*` builtin reads it. None needs a CUDA toolchain on the
-client, and the compile runs off the GPU lease, leaving the card to another
-worker.
+with a builtin, run it, check it against a CPU reference, time it — so the only
+difference is the language and which `compile_*` builtin reads it. None needs a
+CUDA toolchain on the client, and both the compile and the reference run off the
+GPU lease, leaving the card to another worker.
 """
 
 from __future__ import annotations
@@ -83,6 +83,25 @@ def add_one(x_ptr, y_ptr, n, BLOCK: tl.constexpr):
 """
 
 
+# The reference needs no GPU, so it is declared cpu_only when selected: the worker
+# hands the GPU over for the call and fails it should it touch CUDA after all.
+# assert_close takes its CPU result as is.
+CPU_REFERENCE = r"""
+import torch
+
+
+def expected(n):
+    return torch.arange(n, dtype=torch.float32) + 1.0
+"""
+
+
+def check_against_cpu_reference(program: Program, dst) -> None:
+    module = program.upload(id="reference_module", kind="module", source=CPU_REFERENCE)
+    reference = program.get_function(id="reference", module=module, name="expected", cpu_only=True)
+    expected = program.run(id="expected", fn=reference, args=[N])
+    program.run(id="check", fn="builtin.assert_close", args=[dst, expected])
+
+
 def tirx_program() -> Program:
     program = Program()
     module = program.upload(id="kernel_module", kind="module", source=TIRX_KERNEL)
@@ -93,6 +112,7 @@ def tirx_program() -> Program:
     # `bindings` supplies the T.constexpr values the @T.jit kernel specializes on.
     compiled = program.run(id="compiled", fn="builtin.compile_tirx", args=[kernel, {"N": N}])
     program.run(id="invoke", fn=compiled, args=[src, dst])
+    check_against_cpu_reference(program, dst)
     timing = program.run(
         id="timing",
         fn="builtin.benchmark",
@@ -114,6 +134,7 @@ def cutedsl_program() -> Program:
     # back is called with the same plain ones.
     compiled = program.run(id="compiled", fn="builtin.compile_cutedsl", args=[kernel, src, dst])
     program.run(id="invoke", fn=compiled, args=[src, dst])
+    check_against_cpu_reference(program, dst)
     timing = program.run(
         id="timing",
         fn="builtin.benchmark",
@@ -137,6 +158,7 @@ def cuda_program() -> Program:
     # recompiling the same source is much cheaper. `cfg` takes extra_cuda_cflags.
     compiled = program.run(id="compiled", fn="builtin.compile_cuda", args=[kernel])
     program.run(id="invoke", fn=compiled, args=[src, dst])
+    check_against_cpu_reference(program, dst)
     timing = program.run(
         id="timing",
         fn="builtin.benchmark",
@@ -163,6 +185,7 @@ def triton_program() -> Program:
         args=[kernel, src, dst, N, 256, {"grid": [1], "num_warps": 4}],
     )
     program.run(id="invoke", fn=compiled, args=[src, dst, N, 256])
+    check_against_cpu_reference(program, dst)
     timing = program.run(
         id="timing",
         fn="builtin.benchmark",
@@ -187,7 +210,7 @@ def main() -> None:
             if result.status != "COMPLETED":
                 print(f"{language}: {result.status} — {result.error}")
                 continue
-            # Only lease_held_ms occupied the GPU; the rest compiled off it.
+            # Only lease_held_ms occupied the GPU; the compile and reference ran off it.
             print(
                 f"{language}: {result.elapsed_ms:.0f} ms total, "
                 f"{result.lease_held_ms:.0f} ms on the GPU, "

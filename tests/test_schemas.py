@@ -29,6 +29,7 @@ def test_parse_complete_program():
                     "id": "kernel",
                     "module": {"$ref": "module"},
                     "name": "kernel",
+                    "cpu_only": True,
                 },
                 {
                     "op": "upload",
@@ -47,6 +48,7 @@ def test_parse_complete_program():
     assert isinstance(program.instructions[0], Upload)
     assert program.instructions[0].language == "python"  # the default when unset
     assert isinstance(program.instructions[1], GetFunction)
+    assert program.instructions[1].cpu_only is True  # False when unset
     assert isinstance(program.instructions[3], Run)
     assert isinstance(program.instructions[4], Return)
     # References are resolved to ``Ref`` at parse time; literals stay untouched.
@@ -289,6 +291,16 @@ def test_forward_references_rejected():
         (
             {"op": "get_function", "id": "fn", "module": {"$ref": "module"}, "name": ""},
             "non-empty string",
+        ),
+        (
+            {
+                "op": "get_function",
+                "id": "fn",
+                "module": {"$ref": "module"},
+                "name": "step",
+                "cpu_only": "yes",
+            },
+            "'cpu_only' must be a boolean",
         ),
         (
             {

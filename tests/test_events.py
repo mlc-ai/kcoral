@@ -1,5 +1,6 @@
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
@@ -238,6 +239,56 @@ def _settled(pool, timeout=30.0):
                 return
         time.sleep(0.01)
     raise AssertionError("a worker replacement never finished")
+
+
+# Its cpu_only call sleeps first, so a neighbour can take the GPU before it is touched.
+CPU_ONLY_TOUCHING_GPU = (
+    "import time\n"
+    "from kcoral.testing import simulate_cuda_call\n\n"
+    "def main():\n"
+    "    time.sleep(0.5)\n"
+    "    simulate_cuda_call('cudaMalloc')\n"
+)
+VIOLATING_PROGRAM = {
+    "instructions": [
+        {"op": "upload", "id": "m", "kind": "module", "source": CPU_ONLY_TOUCHING_GPU},
+        {
+            "op": "get_function",
+            "id": "fn",
+            "module": {"$ref": "m"},
+            "name": "main",
+            "cpu_only": True,
+        },
+        {"op": "run", "id": "call", "fn": {"$ref": "fn"}},
+    ]
+}
+
+
+def test_a_cpu_only_function_touching_the_gpu_is_a_warning_naming_both_requests(tmp_path):
+    holding = {"instructions": [{"op": "run", "id": "hold", "fn": "builtin.sleep", "args": [1.0]}]}
+    with _make_client(tmp_path, workers_per_gpu=2) as client:
+        alone = _post(client, VIOLATING_PROGRAM).json()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            violator = pool.submit(_post, client, VIOLATING_PROGRAM)
+            time.sleep(0.2)  # into its cpu_only call, with the GPU released
+            holder = pool.submit(_post, client, holding)
+            violator, holder = violator.result().json(), holder.result().json()
+
+    assert alone["status"] == "FAILED" and alone["error"]["interfered_request_id"] is None
+    assert holder["status"] == "COMPLETED"
+    assert violator["status"] == "FAILED"
+    error = violator["error"]
+    assert error["kind"] == "gpu_access" and error["cuda_call"] == "cudaMalloc"
+    assert error["interfered_request_id"] == holder["request_id"]
+
+    warnings = _named(_read_events(tmp_path), "gpu_access_violation")
+    assert [warning["interfered_request_id"] for warning in warnings] == [
+        None,
+        holder["request_id"],
+    ]
+    assert warnings[1]["level"] == "WARNING"
+    assert warnings[1]["request_id"] == violator["request_id"]
+    assert warnings[1]["instruction_id"] == "call" and warnings[1]["cuda_call"] == "cudaMalloc"
 
 
 # --- failures outside a request ----------------------------------------------

@@ -567,6 +567,71 @@ def test_real_kernel_end_to_end():
     np.testing.assert_allclose(returned, np.arange(256, dtype=np.float32) + 1)
 
 
+@pytest.mark.skipif(
+    os.environ.get("KCORAL_GPU_TEST") != "1",
+    reason="real-kernel end-to-end test requires KCORAL_GPU_TEST=1",
+)
+def test_a_cpu_only_violation_names_the_request_it_may_have_disturbed(tmp_path):
+    """Two workers on one GPU: one holds the lease while the other's cpu_only
+    function, running off it, reaches CUDA. The response and the log name the holder."""
+    violating = {
+        "instructions": [
+            {
+                "op": "upload",
+                "id": "m",
+                "kind": "module",
+                "source": (
+                    "import time, torch\n\n"
+                    "def main():\n"
+                    "    time.sleep(0.5)\n"
+                    "    return float(torch.zeros(1, device='cuda').sum())\n"
+                ),
+            },
+            {
+                "op": "get_function",
+                "id": "fn",
+                "module": {"$ref": "m"},
+                "name": "main",
+                "cpu_only": True,
+            },
+            {"op": "run", "id": "call", "fn": {"$ref": "fn"}},
+        ],
+        "options": {"timeout_seconds": 60},
+    }
+    holding = {  # a Python upload runs on the GPU lease, and this one sits on it
+        "instructions": [
+            {
+                "op": "upload",
+                "id": "m",
+                "kind": "module",
+                "source": "import time\ntime.sleep(1.0)\n",
+            }
+        ],
+        "options": {"timeout_seconds": 60},
+    }
+    app = gpu_app(workers_per_gpu=2, log_dir=tmp_path)
+    with TestClient(app) as client:
+        run_dir = app.state.events.run_dir
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            violator = executor.submit(post_program, client, violating)
+            time.sleep(0.2)  # into its cpu_only call, with the GPU released
+            holder = executor.submit(post_program, client, holding)
+            violator, _ = response_parts(violator.result())
+            holder, _ = response_parts(holder.result())
+
+    assert holder["status"] == "COMPLETED", holder.get("error")
+    assert violator["status"] == "FAILED"
+    error = violator["error"]
+    assert error["kind"] == "gpu_access" and error["cuda_call"].startswith("cu")
+    assert error["location"].startswith("<uploaded:")
+    assert error["interfered_request_id"] == holder["request_id"]
+
+    events = [json.loads(line) for line in (run_dir / "events.jsonl").read_text().splitlines()]
+    warning = next(event for event in events if event["event"] == "gpu_access_violation")
+    assert warning["level"] == "WARNING" and warning["request_id"] == violator["request_id"]
+    assert warning["interfered_request_id"] == holder["request_id"]
+
+
 CUDA_KERNEL = """
 __global__ void scale_kernel(const float* x, float* y, int n) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;

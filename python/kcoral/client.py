@@ -141,6 +141,7 @@ class Program:
         id: str,
         module: Register | dict[str, str],
         name: str,
+        cpu_only: bool = False,
     ) -> Register:
         reference = _reference(module) if isinstance(module, Register) else module
         if not (
@@ -153,10 +154,13 @@ class Program:
             raise ValueError(f"get_function {id!r} references unknown handle {reference['$ref']!r}")
         if not isinstance(name, str) or not name:
             raise ValueError("function name must be a non-empty string")
+        if not isinstance(cpu_only, bool):
+            raise TypeError("cpu_only must be a bool")
+        instruction = {"op": "get_function", "id": id, "module": reference, "name": name}
+        if cpu_only:
+            instruction["cpu_only"] = True
         self._add_id(id)
-        self._instructions.append(
-            {"op": "get_function", "id": id, "module": reference, "name": name}
-        )
+        self._instructions.append(instruction)
         return Register(id)
 
     def run(
@@ -531,18 +535,30 @@ def _parse_error(error: Any) -> dict[str, Any]:
         "instruction_id",
         "traceback",
     }
+    if error.get("kind") == "gpu_access":
+        expected |= {"cuda_call", "location", "interfered_request_id"}
     if set(error) != expected:
         raise ValueError("error details have unexpected fields")
     if error["kind"] not in {
         "parse",
         "compile",
         "runtime",
+        "gpu_access",
         "correctness",
         "serialization",
         "unavailable",
         "engine",
     }:
         raise ValueError("error kind is invalid")
+    if error["kind"] == "gpu_access" and not (
+        isinstance(error["cuda_call"], str)
+        and isinstance(error["location"], str)
+        and (
+            error["interfered_request_id"] is None
+            or isinstance(error["interfered_request_id"], str)
+        )
+    ):
+        raise ValueError("gpu_access error details have the wrong types")
     if not isinstance(error["message"], str) or not isinstance(error["traceback"], str):
         raise ValueError("error message and traceback must be strings")
     if isinstance(error["instruction_index"], bool) or not isinstance(

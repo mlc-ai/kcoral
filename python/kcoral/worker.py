@@ -169,6 +169,7 @@ class Worker:
 
     # Replaced from the worker's ready message; empty means nothing runs off-lease.
     cpu_only: frozenset[str] = frozenset()
+    request_id: str | None = None  # set by the pool while a request is served
 
     # Identity for the log. ``worker_id`` names a seat on a GPU and outlives the
     # processes that sit in it; ``generation`` and ``pid`` say which one does now.

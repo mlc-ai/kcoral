@@ -44,7 +44,7 @@ worker environment holding more, and how much depends on what the programs use:
 | `compile_cuda` | `nvcc`, a host C++ compiler, and `ninja` as well |
 | `compile_cutedsl`, or a CuTeDSL library upload | `nvidia-cutlass-dsl` as well |
 | `compile_triton` | `triton`, which the CUDA PyTorch wheels already carry |
-| `benchmark` | `cupti-python` as well |
+| `benchmark`, or a `cpu_only` function | `cupti-python` as well |
 | a program importing FlashInfer | `flashinfer-python` 0.6.17 or newer as well |
 
 A builtin whose requirement is absent answers `unavailable` and the rest of the
@@ -159,7 +159,8 @@ after the record naming its worker.
 | `rejected`, `cache_miss`, `server_error` | never reached a worker | untouched |
 
 A failing program is the client's kernel and stays `INFO`; only what the server
-itself did wrong reaches `ERROR`.
+itself did wrong reaches `ERROR`. A `cpu_only` function caught touching the GPU
+is a `gpu_access_violation` record at `WARNING`.
 
 ```bash
 jq -c 'select(.level == "ERROR")' logs/runs/*/events.jsonl

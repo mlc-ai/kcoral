@@ -293,6 +293,39 @@ the worker holds the GPU, so its time counts against `lease_held_ms` and
 blocks other workers' measurements. Create tensors, compare, and time freely
 from code; keep compiles at the instruction level.
 
+## Running your own code off the GPU
+
+The compile builtins give the GPU up while they run. Uploaded code can do the
+same when it needs no GPU — a reference computed on the CPU, a custom build
+step, parsing an uploaded file — by declaring the function `cpu_only` when
+selecting it:
+
+```python
+CPU_REFERENCE = r"""
+import torch
+
+def main(n):
+    x = torch.arange(n, dtype=torch.float32)  # CPU tensors throughout
+    return x + 1.0
+"""
+
+module = program.upload(id="reference_module", kind="module", source=CPU_REFERENCE)
+reference = program.get_function(id="reference", module=module, name="main", cpu_only=True)
+expected = program.run(id="expected", fn=reference, args=[256])
+check = program.run(id="check", fn="builtin.assert_close", args=[dst, expected])
+```
+
+A `run` of a `cpu_only` handle releases the GPU lease first, so its time lands
+outside `lease_held_ms`. Anything that touches CUDA — creating a tensor on the
+device, reading a GPU tensor back with `.cpu()` — fails the instruction with a
+`gpu_access` error naming the call and the source line, so give such a function
+CPU data. `check_close` and `assert_close` accept its CPU result as `expected`.
+The check is best effort: it cannot see a child process, and it catches a call
+only after it reached the GPU. The flag applies to the handle as a `run` target
+only; passed to `benchmark`, the function runs on the GPU's time.
+[`../examples/remote_compile_client.py`](../examples/remote_compile_client.py)
+checks every kernel against such a reference.
+
 ## Handling failures
 
 A submission ends in one of three ways, and the difference between them matters:
@@ -307,9 +340,9 @@ if result.status == "FAILED":
 - **`FAILED`** — one instruction failed, and the instructions after it were
   skipped. Returns that already ran are still in `results`, so putting a
   `return_` before a risky instruction preserves the work up to that point.
-  `error["kind"]` is one of `parse`, `compile`, `runtime`, `correctness`,
-  `serialization`, `unavailable` or `engine`, and `error["instruction_id"]`
-  names the instruction that failed.
+  `error["kind"]` is one of `parse`, `compile`, `runtime`, `gpu_access`,
+  `correctness`, `serialization`, `unavailable` or `engine`, and
+  `error["instruction_id"]` names the instruction that failed.
 - **An exception** — the request never produced a program outcome at all.
   `KCoralError` carries `status_code` and `kind`: `503` with a
   `Retry-After` header means no worker was free, and `504` means the program hit

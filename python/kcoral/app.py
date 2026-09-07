@@ -302,6 +302,19 @@ def create_app(
                 gpu_id=outcome.gpu_id,
             )
             return _error_response(500, "engine", "invalid worker response", request_id)
+        if execution.error is not None and execution.error.get("kind") == "gpu_access":
+            execution.error["interfered_request_id"] = outcome.interfered_request_id
+            events.emit(
+                "gpu_access_violation",
+                level="WARNING",
+                request_id=request_id,
+                worker_id=outcome.worker_id,
+                gpu_id=outcome.gpu_id,
+                instruction_id=execution.error.get("instruction_id"),
+                cuda_call=execution.error.get("cuda_call"),
+                location=execution.error.get("location"),
+                interfered_request_id=outcome.interfered_request_id,
+            )
         payload: dict[str, object] = {
             "status": execution.status,
             "request_id": request_id,

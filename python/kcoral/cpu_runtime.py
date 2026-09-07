@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.metadata
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
 from . import builtin_ops
@@ -68,6 +69,9 @@ class CPURuntime:
 
     def cpu_only_builtins(self) -> frozenset[str]:
         return frozenset({_COMPILE_BUILTIN})
+
+    def forbid_gpu(self) -> AbstractContextManager[None]:
+        return nullcontext()  # there is no GPU here to touch
 
     def synchronize(self) -> None:
         pass

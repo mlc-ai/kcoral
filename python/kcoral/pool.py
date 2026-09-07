@@ -107,6 +107,7 @@ class SubmitOutcome:
     lease_held_ms: float = 0.0
     worker_id: str = ""
     finish_reason: str = "completed"
+    interfered_request_id: str | None = None  # who held the GPU when a cpu_only call touched it
 
 
 class WorkerPool:
@@ -182,6 +183,7 @@ class WorkerPool:
         )
         run_started = time.monotonic()
         finish_reason = None
+        worker.request_id = request_id
         try:
             execution, lease_wait_ms, lease_held_ms, finish_reason = worker.run(
                 program, timeout, self._leases
@@ -195,6 +197,7 @@ class WorkerPool:
                 lease_held_ms,
                 worker.worker_id,
                 finish_reason,
+                self._interfered_request(worker, execution, request_id),
             )
         except (WorkerTimeout, WorkerCrashed) as exc:
             exc.worker_id = worker.worker_id
@@ -204,7 +207,16 @@ class WorkerPool:
             raise
         finally:
             self._leases.abandon(worker.gpu_id, worker)  # no-op unless it still holds
+            worker.request_id = None
             self._release_or_replace(worker, finish_reason)
+
+    def _interfered_request(self, worker: Worker, execution, request_id: str | None) -> str | None:
+        """The request holding the GPU when this one's ``cpu_only`` call touched it."""
+        error = getattr(execution, "error", None)
+        if not isinstance(error, dict) or error.get("kind") != "gpu_access":
+            return None
+        holder = self._leases.request_at(worker.gpu_id, error.pop("detected_at_ns"))
+        return None if holder == request_id else holder  # its own release may reach us late
 
     def _release_or_replace(self, worker: Worker, finish_reason: str | None) -> None:
         """Hand the worker back, replacing its process first if it retired.

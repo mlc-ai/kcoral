@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from .errors import ExecutionError
+from .errors import ExecutionError, GPUAccessViolation
 from .gpu_runtime import LoadedPythonModule  # imports no GPU libraries
 
 
@@ -69,6 +70,15 @@ def _crash_after_output(*_args: Any):
 def _sleep(seconds: Any = 0.0, *_args: Any) -> dict[str, float]:
     time.sleep(float(seconds))
     return {"slept": float(seconds)}
+
+
+_watched_cuda_calls: list[str] | None = None  # recorded while a forbid_gpu guard is up
+
+
+def simulate_cuda_call(name: str = "cudaMalloc") -> None:
+    """What uploaded test source calls in place of a CUDA API call."""
+    if _watched_cuda_calls is not None:
+        _watched_cuda_calls.append(name)
 
 
 _BUILTINS: dict[str, Callable] = {
@@ -146,6 +156,17 @@ class FakeRuntime:
 
     def cpu_only_builtins(self) -> frozenset[str]:
         return frozenset({"builtin.cpu_sleep"})
+
+    @contextmanager
+    def forbid_gpu(self) -> Iterator[None]:
+        global _watched_cuda_calls
+        _watched_cuda_calls = calls = []
+        try:
+            yield
+        finally:
+            _watched_cuda_calls = None
+            if calls:
+                raise GPUAccessViolation(calls[0], "<uploaded>:1 in main", "", time.monotonic_ns())
 
     def synchronize(self) -> None:
         pass

@@ -394,6 +394,7 @@ class RecordingLease:
     def __init__(self) -> None:
         self.held = False
         self.acquires = 0
+        self.releases = 0
 
     def acquire(self) -> None:
         if not self.held:
@@ -401,6 +402,8 @@ class RecordingLease:
         self.held = True
 
     def release(self) -> None:
+        if self.held:
+            self.releases += 1
         self.held = False
 
 
@@ -428,6 +431,84 @@ def test_which_module_uploads_take_the_gpu(language, source, acquires):
     outcome = execute(program, CudaAwareRuntime(), lease)
     assert outcome.status == "COMPLETED"
     assert lease.acquires == acquires
+
+
+def test_a_cpu_only_function_hands_the_gpu_over_for_its_call():
+    source = "def main(x):\n    return x + 1\n"
+    lease = RecordingLease()
+    program = Program(
+        [
+            Upload("module", "module", source=source),  # a Python upload takes the GPU
+            GetFunction("host", ref("module"), "main", cpu_only=True),
+            Run("off", ref("host"), [1]),  # released for the call
+            GetFunction("device", ref("module"), "main"),  # taken back
+            Run("on", ref("device"), [1]),
+            Return("off", ref("off")),
+            Return("on", ref("on")),
+        ]
+    )
+    outcome = execute(program, FakeRuntime(), lease)
+    assert outcome.status == "COMPLETED"
+    assert outcome.results["off"] == outcome.results["on"] == {"type": "integer", "value": 2}
+    assert lease.acquires == 2 and lease.releases == 2  # once for the call, once at the end
+
+
+# Stands in for uploaded code that reaches the CUDA API despite its declaration.
+CUDA_TOUCHING = (
+    "from kcoral.testing import simulate_cuda_call\n\n"
+    "def main():\n"
+    "    simulate_cuda_call('cudaMalloc')\n"
+    "    return 1\n"
+)
+
+
+def test_a_cpu_only_function_that_reaches_cuda_fails_naming_the_call():
+    def call(cpu_only):
+        return execute(
+            Program(
+                [
+                    Upload("module", "module", source=CUDA_TOUCHING),
+                    GetFunction("fn", ref("module"), "main", cpu_only=cpu_only),
+                    Run("value", ref("fn"), []),
+                    Return("value", ref("value")),
+                ]
+            ),
+            FakeRuntime(),
+            UNSHARED_GPU,
+        )
+
+    outcome = call(cpu_only=True)
+    assert outcome.status == "FAILED" and outcome.results == {}
+    error = outcome.error
+    assert error["kind"] == "gpu_access" and error["instruction_id"] == "value"
+    assert error["cuda_call"] == "cudaMalloc" and "cudaMalloc" in error["message"]
+    assert error["location"] == "<uploaded>:1 in main"
+    assert isinstance(error["detected_at_ns"], int)
+    # Undeclared, the same function holds the GPU and may use it freely.
+    assert call(cpu_only=False).status == "COMPLETED"
+
+
+def test_a_gpu_access_error_keeps_its_kind_over_a_stale_cuda_error():
+    class StaleErrorRuntime(FakeRuntime):
+        def take_last_error(self):
+            return "CUDA error cudaErrorInvalidValue (1): invalid argument"
+
+    outcome = execute(
+        Program(
+            [
+                Upload("module", "module", source=CUDA_TOUCHING),
+                GetFunction("fn", ref("module"), "main", cpu_only=True),
+                Run("value", ref("fn"), []),
+            ]
+        ),
+        StaleErrorRuntime(),
+        UNSHARED_GPU,
+    )
+    error = outcome.error
+    assert error["kind"] == "gpu_access" and error["cuda_call"] == "cudaMalloc"
+    assert error["message"].endswith(
+        "; CUDA also reports CUDA error cudaErrorInvalidValue (1): invalid argument"
+    )
 
 
 def test_a_program_cannot_talk_its_worker_out_of_the_gpu_lease():

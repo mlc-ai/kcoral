@@ -82,7 +82,7 @@ Program.upload(id=..., kind="module", source=..., language="python") -> Register
 Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
 Program.upload(id=..., kind="bytes", value=...) -> Register
 Program.upload(id=..., kind="library", value=...) -> Register
-Program.get_function(id=..., module=..., name=...) -> Register
+Program.get_function(id=..., module=..., name=..., cpu_only=False) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
 
@@ -119,6 +119,11 @@ A module upload binds its full source namespace. Use `get_function` to select a
 named Python object or CUDA source function. Uploaded Python is ordinary code
 executed on the worker (torch included), so a plain function works as a
 reference baseline.
+
+`get_function(..., cpu_only=True)` declares a function that touches no GPU: a
+`run` of it releases the GPU lease, and a CUDA call from it (reading a GPU
+tensor counts) fails with a `gpu_access` error naming the call and source line.
+The check is best effort.
 
 A `bytes` upload binds the blob's bytes unchanged. They stay in CPU memory and
 can be passed to uploaded Python code, which suits files and other binary
@@ -221,8 +226,8 @@ A missing toolchain fails that builtin with an `unavailable` error;
 - `COMPLETED` — every instruction ran; `results` holds the returned values.
 - `FAILED` — one instruction failed and the rest were skipped; returns that
   already ran stay in `results`. `error` carries `kind` (`parse`, `compile`,
-  `runtime`, `correctness`, `serialization`, `unavailable`, `engine`),
-  `message`, `instruction_index`, `instruction_id`, `traceback`.
+  `runtime`, `gpu_access`, `correctness`, `serialization`, `unavailable`,
+  `engine`), `message`, `instruction_index`, `instruction_id`, `traceback`.
 - `CACHE_MISS` — blobs missing; the Python client retries this once
   automatically.
 - Exceptions: `KCoralError` (carries `status_code` and `kind`; 503

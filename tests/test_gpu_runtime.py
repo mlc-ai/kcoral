@@ -242,8 +242,8 @@ def test_python_module_get_function_selects_named_objects():
     assert times_two(add_one(20)) == 42
 
 
-def test_compile_correctness_and_benchmark():
-    program = Program(
+def tirx_benchmark_program():
+    return Program(
         [
             Upload("kernel_module", "module", source=KERNEL),
             GetFunction("kernel", ref("kernel_module"), "main"),
@@ -264,12 +264,106 @@ def test_compile_correctness_and_benchmark():
             Return("timing", ref("timing")),
         ]
     )
-    outcome = execute(program, runtime(), UNSHARED_GPU)
+
+
+def test_compile_correctness_and_benchmark():
+    outcome = execute(tirx_benchmark_program(), runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     check = decode_structural(outcome.results["check"])
     timing = decode_structural(outcome.results["timing"])
     assert check["passed"] and check["max_abs_err"] == 0
     assert timing["latency_ms_median"] > 0 and timing["repeat"] == 20
+
+
+CPU_REFERENCE = (
+    "import torch\n\n"
+    "def main(n):\n"
+    "    x = torch.arange(n, dtype=torch.float32)\n"
+    "    return float(x @ x)\n"
+)
+CUDA_IN_CPU_ONLY = (
+    "import torch\n\ndef main(n):\n    return float(torch.zeros(n, device='cuda').sum())\n"
+)
+
+
+def cpu_only_call(source, gpu_runtime):
+    return execute(
+        Program(
+            [
+                Upload("module", "module", source=source),
+                GetFunction("fn", ref("module"), "main", cpu_only=True),
+                Run("value", ref("fn"), [256]),
+                Return("value", ref("value")),
+            ]
+        ),
+        gpu_runtime,
+        UNSHARED_GPU,
+    )
+
+
+def test_a_cpu_only_function_is_checked_against_the_cuda_api():
+    gpu_runtime = runtime()
+    host = cpu_only_call(CPU_REFERENCE, gpu_runtime)
+    assert host.status == "COMPLETED", host.error
+    assert host.results["value"]["value"] == sum(i * i for i in range(256))
+
+    device = cpu_only_call(CUDA_IN_CPU_ONLY, gpu_runtime)
+    assert device.status == "FAILED"
+    error = device.error
+    assert error["kind"] == "gpu_access" and error["instruction_id"] == "value"
+    assert error["cuda_call"].startswith("cu")
+    assert error["location"].startswith("<uploaded:") and error["location"].endswith(" in main")
+    assert "torch.zeros" in error["traceback"]
+
+    # CUPTI is shared with the benchmark builtin: each leaves it usable by the other.
+    timed = execute(tirx_benchmark_program(), gpu_runtime, UNSHARED_GPU)
+    assert timed.status == "COMPLETED", timed.error
+    assert cpu_only_call(CUDA_IN_CPU_ONLY, gpu_runtime).error["kind"] == "gpu_access"
+
+
+HOST_LIBRARY = """
+int64_t add_one(int64_t value) { return value + 1; }
+"""
+
+
+def test_a_cpu_only_library_function_runs_off_the_gpu(tmp_path):
+    """Calling into a library must not touch CUDA on the function's behalf."""
+    data = build_library(HOST_LIBRARY, "add_one", tmp_path)
+    outcome = execute(
+        Program(
+            [
+                Upload("library", "library", blob=compute_blob_hash(data)),
+                GetFunction("add_one", ref("library"), "add_one", cpu_only=True),
+                Run("value", ref("add_one"), [41]),
+                Return("value", ref("value")),
+            ],
+            blob_bytes={compute_blob_hash(data): data},
+        ),
+        runtime(),
+        UNSHARED_GPU,
+    )
+    assert outcome.status == "COMPLETED", outcome.error
+    assert outcome.results["value"] == {"type": "integer", "value": 42}
+
+
+def test_a_cpu_reference_compares_against_a_gpu_tensor_as_is():
+    source = "import torch\n\ndef main(n):\n    return torch.zeros(n)\n"
+    outcome = execute(
+        Program(
+            [
+                Upload("module", "module", source=source),
+                GetFunction("reference", ref("module"), "main", cpu_only=True),
+                Run("expected", ref("reference"), [256]),
+                Run("actual", "builtin.zeros", [{"shape": [256], "dtype": "float32"}]),
+                Run("check", "builtin.check_close", [ref("actual"), ref("expected")]),
+                Return("check", ref("check")),
+            ]
+        ),
+        runtime(),
+        UNSHARED_GPU,
+    )
+    assert outcome.status == "COMPLETED", outcome.error
+    assert decode_structural(outcome.results["check"])["passed"]
 
 
 def test_cuda_c_compile_correctness_and_benchmark():

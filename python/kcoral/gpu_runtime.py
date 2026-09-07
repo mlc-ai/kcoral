@@ -16,15 +16,18 @@ import importlib.metadata
 import linecache
 import os
 import tempfile
+import time
+import traceback
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import Any
 
 from . import builtin_ops, process_state
-from .errors import ExecutionError
+from .errors import ExecutionError, GPUAccessViolation
 
 # Libraries already dlopened by this worker, keyed by the SHA-256 of their bytes.
 # Purely a memoization — every request carries the bytes it needs. Bounded because
@@ -52,18 +55,13 @@ class LoadedLibrary:
 
 @dataclass(frozen=True)
 class LoadedFunction:
-    """A callable that keeps its defining module alive and propagates Torch's stream."""
+    """A callable that keeps its defining module alive."""
 
     owner: LoadedLibrary
     function: Callable
 
     def __call__(self, *args: Any) -> Any:
-        import tvm_ffi
-
-        # Tensor conversion also propagates a stream, but a launcher may accept
-        # only scalar handles and still call TVMFFIEnvGetStream.
-        with tvm_ffi.use_torch_stream():
-            return self.function(*args)
+        return self.function(*args)
 
 
 class GPURuntime:
@@ -156,6 +154,56 @@ class GPURuntime:
     def cpu_only_builtins(self) -> frozenset[str]:
         return builtin_ops.cpu_only_builtins()
 
+    @contextmanager
+    def forbid_gpu(self) -> Iterator[None]:
+        """Fail the guarded call once it has entered any CUDA runtime or driver API.
+        Best effort: the call is seen from inside, and a child process not at all."""
+        try:
+            from cupti import cupti
+        except ImportError as exc:
+            raise ExecutionError(
+                "unavailable",
+                "verifying a cpu_only function needs cupti-python in the worker environment",
+            ) from exc
+
+        violation: GPUAccessViolation | None = None
+
+        def record_first_call(_userdata, _domain, callback_id, callback_data) -> None:
+            nonlocal violation
+            if (
+                violation is not None
+                or callback_data.callback_site != cupti.ApiCallbackSite.API_ENTER
+            ):
+                return
+            detected_at_ns = time.monotonic_ns()
+            cuda_call = str(callback_data.function_name or f"CUDA callback {callback_id}")
+            try:
+                frames = traceback.extract_stack()[:-1]  # below this callback
+                location, call_stack = _call_site(frames), "".join(traceback.format_list(frames))
+            except Exception:  # nothing may escape into the CUDA call
+                location, call_stack = "an unknown call site", ""
+            violation = GPUAccessViolation(cuda_call, location, call_stack, detected_at_ns)
+
+        domains = (cupti.CallbackDomain.RUNTIME_API, cupti.CallbackDomain.DRIVER_API)
+        try:
+            subscriber = cupti.subscribe(record_first_call, 0)
+            for domain in domains:
+                cupti.enable_domain(1, subscriber, domain)
+        except cupti.cuptiError as exc:
+            raise ExecutionError(
+                "unavailable", f"CUPTI cannot watch for CUDA calls: {exc}"
+            ) from exc
+        try:
+            yield
+        finally:
+            try:
+                for domain in domains:
+                    cupti.enable_domain(0, subscriber, domain)
+            finally:
+                cupti.unsubscribe(subscriber)
+            if violation is not None:
+                raise violation
+
     def synchronize(self) -> None:
         """Drain the GPU, so no kernel of this request is still running when the
         lease is given up and another worker starts measuring."""
@@ -209,6 +257,20 @@ class GPURuntime:
         except Exception as exc:
             raise ExecutionError("parse", f"{type(exc).__name__}: {exc}") from exc
         return LoadedPythonModule(namespace=ns)
+
+
+def _call_site(frames: list[traceback.FrameSummary]) -> str:
+    """Where the program's own code made the call: the innermost uploaded frame,
+    else the innermost one outside this package."""
+    package = os.path.dirname(__file__)
+    for accept in (
+        lambda frame: frame.filename.startswith("<uploaded:"),
+        lambda frame: not frame.filename.startswith(package),
+    ):
+        for frame in reversed(frames):
+            if accept(frame):
+                return f"{frame.filename}:{frame.lineno} in {frame.name}"
+    return "an unknown call site"
 
 
 class _CUDAErrorAPI:

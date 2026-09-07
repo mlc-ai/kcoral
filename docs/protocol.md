@@ -445,13 +445,13 @@ exported function from a TVM-FFI library, to a new handle:
 | `id` | string | yes | Handle for the callable |
 | `module` | `{"$ref": id}` | yes | Earlier `module` or `library` upload |
 | `name` | string | yes | Non-empty function or object name |
+| `cpu_only` | boolean | no | Defaults to `false`: the function touches no GPU |
 
 For Python source, the name indexes the executed namespace. For CUDA source it
 produces the named source function consumed by `compile_cuda` or
 `compile_cuda_binary`; C++ `main` and non-identifiers are rejected. For a
-TVM-FFI library it calls the loaded module's `get_function`. That function keeps
-its defining module alive and is invoked in a TVM-FFI stream context
-corresponding to the worker's current PyTorch stream.
+TVM-FFI library it calls the loaded module's `get_function`; the function keeps
+its defining module alive.
 
 Given a library that exports `init` and `step`, the Python client writes:
 
@@ -465,6 +465,12 @@ program.run(id="invoke", fn=step, args=[input_tensor, output_tensor])
 
 Module and function handles are request-local capabilities and cannot be
 returned in a response.
+
+A function declared `cpu_only` touches no GPU. A `run` of that handle releases
+the worker's GPU lease first, and a CUDA runtime or driver API call from it, as
+seen by CUPTI, fails the instruction with error kind `gpu_access`. The check is
+best effort: it sees a call only after it has begun, and none from a child
+process. The declaration applies to the handle as a `run` target only.
 
 ---
 
@@ -514,7 +520,8 @@ one call — kernels, copies, and memsets, plus host time between them; the flus
 and host work outside those endpoints are excluded. `activities_stable` is
 `false` when the iterations did not all launch the same activities.
 
-`check_close` and `assert_close` return `passed`, `max_abs_err`, `max_rel_err`,
+`check_close` and `assert_close` compare on `actual`'s device, so `expected` may
+be a CPU tensor, and return `passed`, `max_abs_err`, `max_rel_err`,
 `rtol`, and `atol`.
 
 The four `compile_*` builtins are registered `cpu_only`, so a worker drops its GPU
@@ -524,7 +531,8 @@ lease, then the worker reacquires it before loading the shared object and
 registering its CUDA module. A new builtin should declare `cpu_only` only when its
 off-lease phase touches no GPU at all. Any driver/module-loading finalization must
 be deferred until the engine reacquires the lease; otherwise it can perturb a
-neighbouring worker's kernel or timing.
+neighbouring worker's kernel or timing. A `get_function` handle declared
+`cpu_only` runs off the lease the same way, and is checked.
 
 ---
 
@@ -703,8 +711,11 @@ A `FAILED` response's `error` describes that instruction:
 | `instruction_id` | string \| null | The instruction's `id`; `null` for `return` |
 | `traceback` | string | Server-side traceback, truncated to 8192 bytes |
 
-Instruction error kinds are `parse`, `compile`, `runtime`, `correctness`,
-`serialization`, `unavailable`, and `engine`.
+Instruction error kinds are `parse`, `compile`, `runtime`, `gpu_access`,
+`correctness`, `serialization`, `unavailable`, and `engine`. A `gpu_access`
+error means a `cpu_only` function that entered the CUDA API; it adds
+`cuda_call`, `location`, and `interfered_request_id`, and its `traceback` is
+the stack at that call.
 
 | HTTP | Body | Meaning |
 |---:|---|---|
@@ -868,7 +879,7 @@ Program.upload(id=..., kind="module", source=..., language="python") -> Register
 Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
 Program.upload(id=..., kind="bytes", value=...) -> Register
 Program.upload(id=..., kind="library", value=...) -> Register
-Program.get_function(id=..., module=..., name=...) -> Register
+Program.get_function(id=..., module=..., name=..., cpu_only=False) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
 
