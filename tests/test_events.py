@@ -147,6 +147,14 @@ def test_request_limit_is_the_reason_a_healthy_worker_retires(tmp_path):
     )
     with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as client:
         assert _post(client, STRUCTURAL_PROGRAM).status_code == 200
+        # Recycling is allowed while serving, but is interrupted by shutdown.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if sum(e["event"] == "worker_ready" for e in _read_events(tmp_path)) == 2:
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("replacement never became ready")
     events = _read_events(tmp_path)
     finished = _one(events, "request_finished")
     assert finished["finish_reason"] == "request_limit" and finished["status"] == "COMPLETED"

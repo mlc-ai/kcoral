@@ -117,9 +117,20 @@ def create_app(
         try:
             yield
         finally:
-            app.state.pool.shutdown()
-            events.emit("server_stopped")
-            events.close()
+            cleanup = asyncio.create_task(app.state.pool.shutdown_async())
+            cancelled = False
+            try:
+                while not cleanup.done():
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError:
+                        cancelled = True
+                cleanup.result()
+                events.emit("server_stopped")
+            finally:
+                events.close()
+            if cancelled:
+                raise asyncio.CancelledError
 
     app = FastAPI(title="KCoral", version="0.1.0", lifespan=lifespan)
 

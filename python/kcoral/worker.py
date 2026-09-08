@@ -17,6 +17,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import os
 import signal
+import threading
 import time
 from collections.abc import Callable
 
@@ -190,6 +191,8 @@ class Worker:
         events: EventLogger | None = None,
         capture_dir: str | None = None,
     ) -> None:
+        self._lifecycle_lock = threading.RLock()
+        self._closing = threading.Event()
         self.gpu_id = gpu_id
         self.worker_id = f"cpu/w{index}" if gpu_id is None else f"gpu{gpu_id}/w{index}"
         if events is not None:
@@ -226,18 +229,21 @@ class Worker:
 
     def _start_process(self) -> None:
         """Spawn a worker and finish its explicitly host-only preparation."""
-        self.started_at = time.monotonic()
-        parent, child = self._ctx.Pipe()
-        self._conn = parent
-        self._proc = self._ctx.Process(
-            target=worker_main,
-            args=(self._device, child, self._factory, self._max_requests, self._capture_dir),
-            daemon=True,
-        )
-        self._proc.start()
-        self.generation += 1
-        self.pid = self._proc.pid
-        child.close()  # parent keeps only its end, so it sees EOF if the child dies
+        with self._lifecycle_lock:
+            if self._closing.is_set():
+                raise WorkerCrashed("worker is shutting down")
+            self.started_at = time.monotonic()
+            parent, child = self._ctx.Pipe()
+            self._conn = parent
+            self._proc = self._ctx.Process(
+                target=worker_main,
+                args=(self._device, child, self._factory, self._max_requests, self._capture_dir),
+                daemon=True,
+            )
+            self._proc.start()
+            self.generation += 1
+            self.pid = self._proc.pid
+            child.close()  # parent keeps only its end, so it sees EOF if the child dies
         msg = self._await_startup_message("prepare")
         if not (isinstance(msg, dict) and msg.get("__startup__") == "prepared"):
             self._kill()
@@ -246,7 +252,10 @@ class Worker:
     def _initialize_process(self) -> None:
         """Create the worker runtime; GPU callers serialize this phase."""
         try:
-            self._conn.send({"__startup__": "initialize"})
+            with self._lifecycle_lock:
+                if self._closing.is_set():
+                    raise WorkerCrashed("worker is shutting down")
+                self._conn.send({"__startup__": "initialize"})
         except _WORKER_PIPE_FAILURES as exc:
             self._kill()
             raise WorkerCrashed(f"{self._description()} failed before initialization") from exc
@@ -260,15 +269,18 @@ class Worker:
         self.cpu_only = frozenset(described["cpu_only"])
         self.device_uuid: str | None = described.get("device_uuid")
         self._require_expected_device()
-        self._events.emit(
-            "worker_ready",
-            worker_id=self.worker_id,
-            gpu_id=self.gpu_id,
-            generation=self.generation,
-            pid=self.pid,
-            device=self._device,
-            arch=self.target.get("arch"),
-        )
+        with self._lifecycle_lock:
+            if self._closing.is_set():
+                raise WorkerCrashed("worker shutdown interrupted initialization")
+            self._events.emit(
+                "worker_ready",
+                worker_id=self.worker_id,
+                gpu_id=self.gpu_id,
+                generation=self.generation,
+                pid=self.pid,
+                device=self._device,
+                arch=self.target.get("arch"),
+            )
 
     def _require_expected_device(self) -> None:
         """Refuse a worker that came up on another card: it would measure someone
@@ -287,7 +299,14 @@ class Worker:
 
     def _await_startup_message(self, phase: str):
         try:
-            ready = self._conn.poll(self._spawn_timeout)
+            deadline = time.monotonic() + self._spawn_timeout
+            ready = False
+            while time.monotonic() < deadline:
+                if self._closing.is_set():
+                    raise WorkerCrashed("worker shutdown interrupted startup")
+                if self._conn.poll(min(0.05, max(0, deadline - time.monotonic()))):
+                    ready = True
+                    break
             msg = self._conn.recv() if ready else None
         except _WORKER_PIPE_FAILURES as exc:
             self._kill()
@@ -403,6 +422,8 @@ class Worker:
         )
         self._kill()
         leases.abandon(self.gpu_id, self)
+        if getattr(self, "_closing", None) is not None and self._closing.is_set():
+            return
         try:
             self._start_process()
             leases.acquire(self.gpu_id, self)
@@ -411,11 +432,18 @@ class Worker:
             finally:
                 leases.release(self.gpu_id, self)
         except Exception as exc:
+            if getattr(self, "_closing", None) is not None and self._closing.is_set():
+                return
             self._log_failure("respawn", exc)
             raise
 
     def _description(self) -> str:
         return "CPU worker" if self.gpu_id is None else f"worker on GPU {self.gpu_id}"
+
+    def begin_shutdown(self) -> None:
+        # Initialization waits must stay outside this lock.
+        with self._lifecycle_lock:
+            self._closing.set()
 
     def _kill(self) -> None:
         try:

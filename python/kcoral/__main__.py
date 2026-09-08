@@ -38,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kcoral",
         description="KCoral: stateless kernel benchmark server (instruction protocol).",
+        epilog="Ctrl+C stops new work and reports remaining benchmarks while they finish.",
     )
     parser.add_argument("--host", default=os.environ.get("KCORAL_SERVER_HOST", "127.0.0.1"))
     parser.add_argument(
@@ -165,11 +166,13 @@ def main() -> None:
         import uvicorn
 
         from .app import create_app
+        from .shutdown import ShutdownServer
     except ImportError as exc:
         raise SystemExit(
             f"cannot start the server: {exc}. Install the front-end: pip install 'kcoral[server]'"
         ) from exc
-    uvicorn.run(create_app(config), host=args.host, port=args.port)
+    app = create_app(config)
+    ShutdownServer(uvicorn.Config(app, host=args.host, port=args.port), app).run()
 
 
 def _warn_if_visible_devices_set() -> None:

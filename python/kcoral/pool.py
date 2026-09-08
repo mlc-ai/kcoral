@@ -16,10 +16,12 @@ run on one GPU at once - see :mod:`kcoral.lease`.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from collections import deque
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from .events import EventLogger
@@ -38,6 +40,7 @@ class IdleWorkers:
 
     def __init__(self, workers: list[Worker]) -> None:
         self._lock = threading.Lock()
+        self._closed = False
         self._idle: dict[int | None, list[Worker]] = {}  # device -> its free workers
         self._assigned: dict[int | None, int] = {}  # device -> how many are out
         for worker in workers:
@@ -48,6 +51,8 @@ class IdleWorkers:
     def acquire(self, timeout: float) -> Worker | None:
         """A worker from the least-loaded GPU, or None if none frees up in time."""
         with self._lock:
+            if self._closed:
+                return None
             worker = self._claim_least_loaded()
             if worker is not None:
                 return worker
@@ -57,7 +62,7 @@ class IdleWorkers:
             self._waiters.append(ticket)
         if not ticket.event.wait(timeout):
             with self._lock:
-                if ticket.value is None:  # nothing arrived while we timed out
+                if ticket.value is None and not self._closed:  # nothing arrived while we timed out
                     self._waiters.remove(ticket)
                     return None
         return ticket.value
@@ -65,11 +70,19 @@ class IdleWorkers:
     def release(self, worker: Worker) -> None:
         with self._lock:
             self._assigned[worker.gpu_id] -= 1
+            if self._closed:
+                return
             self._idle[worker.gpu_id].append(worker)
             if self._waiters:
                 ticket = self._waiters.popleft()
                 ticket.value = self._claim_least_loaded()  # never None: one just returned
                 ticket.event.set()
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            while self._waiters:
+                self._waiters.popleft().event.set()
 
     def _claim_least_loaded(self) -> Worker | None:
         """A free worker from the GPU with fewest out, marked out. Needs ``_lock``."""
@@ -140,6 +153,11 @@ class WorkerPool:
             devices = [(None, index) for index in range(cpu_workers)]
         else:
             devices = [(gpu, index) for gpu in gpus for index in range(workers_per_gpu)]
+        self._closing = threading.Event()
+        self._condition = threading.Condition()
+        self._active = 0
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_done = False
         self._workers = [
             Worker(
                 device,
@@ -152,13 +170,12 @@ class WorkerPool:
             )
             for device, index in devices
         ]
-        self._require_one_target()
         self._gpus = list(dict.fromkeys(gpus))
         self._idle = IdleWorkers(self._workers)
         self._leases = NoopLeases() if cpu_workers is not None else GPULeases(self._gpus)
         self._replacing: set[threading.Thread] = set()
         self._replacing_lock = threading.Lock()  # so shutdown can copy it mid-flight
-        self._closing = threading.Event()
+        self._require_one_target()
 
     def submit(
         self,
@@ -167,11 +184,19 @@ class WorkerPool:
         worker_wait_timeout: float = 0.0,
         request_id: str | None = None,
     ) -> SubmitOutcome:
+        with self._condition:
+            if self._closing.is_set():
+                raise PoolBusy("server is shutting down")
         queue_started = time.monotonic()
         worker = self._idle.acquire(worker_wait_timeout)
         queue_ms = (time.monotonic() - queue_started) * 1000
         if worker is None:
             raise PoolBusy("all workers busy", queue_ms=queue_ms)
+        with self._condition:
+            if self._closing.is_set():
+                self._idle.release(worker)
+                raise PoolBusy("server is shutting down", queue_ms=queue_ms)
+            self._active += 1
         self._events.emit(
             "request_routed",
             request_id=request_id,
@@ -208,7 +233,14 @@ class WorkerPool:
         finally:
             self._leases.abandon(worker.gpu_id, worker)  # no-op unless it still holds
             worker.request_id = None
-            self._release_or_replace(worker, finish_reason)
+            try:
+                self._release_or_replace(worker, finish_reason)
+            finally:
+                with self._condition:
+                    self._active -= 1
+                    if self._closing.is_set():
+                        self._events.emit("shutdown_waiting", remaining=self._active)
+                    self._condition.notify_all()
 
     def _interfered_request(self, worker: Worker, execution, request_id: str | None) -> str | None:
         """The request holding the GPU when this one's ``cpu_only`` call touched it."""
@@ -225,23 +257,32 @@ class WorkerPool:
         its replacement is ready. Building it on its own thread keeps it out of the
         answered request's timings; a crash or timeout respawned in place already.
         """
-        if finish_reason not in RETIRING_FINISH_REASONS or self._closing.is_set():
-            self._idle.release(worker)
-            return
-        thread = threading.Thread(target=self._replace, args=(worker, finish_reason), daemon=True)
-        with self._replacing_lock:
-            self._replacing.add(thread)
-        try:
-            thread.start()
-        except RuntimeError:  # no thread to be had; rebuild it here instead
+        with self._condition:
+            if finish_reason not in RETIRING_FINISH_REASONS or self._closing.is_set():
+                self._idle.release(worker)
+                return
+            thread = threading.Thread(
+                target=self._replace, args=(worker, finish_reason), daemon=True
+            )
             with self._replacing_lock:
-                self._replacing.discard(thread)
-            self._replace(worker, finish_reason)
+                self._replacing.add(thread)
+            try:
+                thread.start()
+                return
+            except RuntimeError:
+                with self._replacing_lock:
+                    self._replacing.discard(thread)
+        # This fallback remains tracked by the active submit.
+        self._replace(worker, finish_reason)
 
     def _replace(self, worker: Worker, reason: str) -> None:
         try:
+            if self._closing.is_set():
+                return
             worker.replace(self._leases, reason)
         except Exception as exc:
+            if self._closing.is_set():
+                return
             # A respawn that failed leaves a dead worker; the next run revives
             # it, so unlogged this shows up only as the pool being slow.
             self._events.emit(
@@ -298,11 +339,46 @@ class WorkerPool:
     def versions(self) -> dict[str, str]:
         return self._workers[0].versions
 
+    @property
+    def closing(self) -> bool:
+        return self._closing.is_set()
+
+    @property
+    def active_requests(self) -> int:
+        with self._condition:
+            return self._active
+
+    async def shutdown_async(self) -> None:
+        # The default executor may be full of submit calls blocked on workers.
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="kcoral-shutdown")
+        try:
+            await asyncio.get_running_loop().run_in_executor(executor, self.shutdown)
+        finally:
+            executor.shutdown(wait=False)
+
+    def begin_shutdown(self) -> None:
+        with self._condition:
+            if self._closing.is_set():
+                return
+            self._closing.set()
+            self._idle.close()
+            for worker in self._workers:
+                worker.begin_shutdown()
+            self._events.emit("shutdown_started", remaining=self._active)
+
     def shutdown(self) -> None:
-        self._closing.set()
-        with self._replacing_lock:
-            replacing = list(self._replacing)
-        for thread in replacing:  # let a half-built replacement finish, not leak
-            thread.join(timeout=60)
-        for w in self._workers:
-            w.close()
+        self.begin_shutdown()
+        with self._shutdown_lock:
+            if self._shutdown_done:
+                return
+            with self._condition:
+                while self._active:
+                    self._condition.wait()
+            with self._replacing_lock:
+                replacing = list(self._replacing)
+            for thread in replacing:
+                thread.join()
+            for worker in self._workers:
+                worker.close()
+            self._shutdown_done = True
+            self._events.emit("shutdown_complete")
