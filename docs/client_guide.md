@@ -268,75 +268,41 @@ torch.from_numpy(value.view(np.uint8)).view(torch.bfloat16)
 
 ## Files used by uploaded scripts
 
-Use a file upload when existing Python code expects a path and changing it to
-accept in-memory bytes would be invasive:
+Use `upload_file` when uploaded Python code expects a relative file path:
 
 ```python
 program = Program()
-program.upload(kind="file", blob=tensor_bytes, path="./inputs/tensor.bin")
+program.upload_file(blob=tensor_bytes, path="./inputs/tensor.bin")
 module = program.upload(id="reader_module", kind="module", source=READER_SOURCE)
 reader = program.get_function(id="reader", module=module, name="main")
 result = program.run(id="result", fn=reader)
 ```
 
-The file instruction returns no register. It copies the bytes to
-`inputs/tensor.bin` in a fresh request-local working directory, so the uploaded
-module can use `open("inputs/tensor.bin", "rb")` unchanged. Put the file
-instruction before a Python module when that module reads the file from its
-top-level code.
+The module can use `open("inputs/tensor.bin", "rb")` unchanged. File uploads
+return no register. Put them before any instruction that reads the files,
+including a module upload whose top-level code opens them.
 
-Paths must be relative and cannot contain `..`; nested parent directories are
-created automatically. The server removes the complete working directory when
-the request finishes, including after a failure, timeout, or worker crash. The
-content-addressed blob remains cached on disk, so another execution with identical bytes
-normally avoids the network upload even though it receives a newly copied file.
-
-To upload a local directory, use:
+To snapshot a local directory at the current program position:
 
 ```python
 program.upload_folder("./assets", path="inputs")
 ```
 
-This call reads and hashes the files immediately, then inserts one ordinary file
-upload per relative path at the current program position. `assets/a` becomes
-`inputs/a`; `assets/sub/b` becomes `inputs/sub/b`. Identical contents share one
-blob. Changing a local file later does not change the program or its retries.
-There is no archive or extra protocol instruction: the first request sends no
-blob parts, the second sends only missing blobs, and a second cache miss triggers
-the existing full resend. A fully cached program executes on the first request.
+`assets/a` becomes `inputs/a`; `assets/sub/b` becomes `inputs/sub/b`. Both helpers
+snapshot content when called, so later changes to the supplied bytes or local
+files do not affect execution or retries. Folder uploads include hidden files
+and reject symbolic links (including the source directory), repeated directories,
+and special files such as FIFOs. Empty directories and original permissions and
+timestamps are omitted; an empty folder adds no instructions.
 
-Traversal includes hidden files and rejects symbolic links (including the source
-directory itself), repeated directory identities, and special files such as FIFOs.
-It uses an explicit stack and keeps only the active ancestry open. There is no
-arbitrary depth or entry-count limit. A traversal, read, or path-conflict
-error leaves the program unchanged. Empty directories are omitted, and file
-permissions and timestamps follow ordinary file-upload semantics rather than
-the source metadata. An entirely empty folder adds no instructions.
+Destinations must be relative POSIX paths without `..` components. Duplicate
+paths and file/directory conflicts are rejected; parent directories are created
+automatically. A traversal, read, or destination-validation failure leaves the
+program unchanged.
 
-File upload contents use only the disk cache; tensor, bytes, and library uploads
-continue using the in-memory cache. The disk cache defaults to
-`$XDG_CACHE_HOME/kcoral/files` (or `~/.cache/kcoral/files`) with a 16384 MiB (16 GiB) capacity,
-configured by `ServerConfig.disk_cache_dir` / `disk_cache_capacity_mbytes` or the
-matching `--disk-cache-dir` / `--disk-cache-capacity-mbytes` flags. Each MiB is
-1024**2 bytes. A `None`/empty
-directory setting or zero capacity disables file caching without falling back
-to the memory cache.
-
-Objects live at `<disk_cache_dir>/v1/<first two hex digits>/<sha256>`. The
-filesystem is the persistent index; there are no separate index or config files.
-Writes are published atomically and disk reads verify the content hash. Explicit
-mtime updates approximate LRU; scans at startup and after a write batch enforce
-the content-byte budget and remove interrupted temporary writes. File contents
-survive service restarts, and sharing a local cache directory uses a directory
-lock to serialize writers and eviction. Cache write failures and oversized
-objects do not prevent execution with supplied bytes. Requests still read file
-contents into owned bytes and pass them to workers, so eviction cannot invalidate
-accepted work. Working files are independent copies, never writable hard links
-to cached objects.
-
-The path restriction contains files created by the upload instruction; it is not
-a sandbox for arbitrary Python code, which can still open any path available to
-the worker process.
+Each execution gets a fresh working directory, removed after completion,
+failure, timeout, or worker crash. Caching is automatic and best-effort.
+The workspace is not a sandbox for uploaded Python code.
 
 ## Calling builtins from uploaded code
 

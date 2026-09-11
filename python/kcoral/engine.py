@@ -55,10 +55,10 @@ def execute(
     lease: Lease,
     cpu_only: frozenset[str] = frozenset(),
     *,
+    workspace_dir: str,
     progress: Callable[[int], None] | None = None,
     cleanup_failed: Callable[[BaseException], None] | None = None,
     capture_dir: str | None = None,
-    workspace_dir: str | None = None,
 ) -> ProgramOutcome:
     """Run a program and serialize only values selected by return instructions.
 
@@ -66,8 +66,12 @@ def execute(
     each call that runs off it: a builtin the caller names in ``cpu_only``, or a
     function the program declared ``cpu_only`` at ``get_function``, which is also
     watched for CUDA calls.
+
+    The caller owns creation and cleanup of ``workspace_dir``. Production
+    workers use a parent-owned directory so it can be removed if the child dies.
     """
-    with _request_workspace(workspace_dir) as active_workspace:
+    workspace_dir = os.path.abspath(workspace_dir)
+    with _working_directory(workspace_dir):
         return _execute_in_workspace(
             program,
             runtime,
@@ -76,7 +80,7 @@ def execute(
             progress=progress,
             cleanup_failed=cleanup_failed,
             capture_dir=capture_dir,
-            workspace_dir=active_workspace,
+            workspace_dir=workspace_dir,
         )
 
 
@@ -248,24 +252,6 @@ def _invoke(
     watched = isinstance(instruction.fn, Ref) and instruction.fn in off_gpu
     with runtime.forbid_gpu() if watched else nullcontext():
         return fn(*args)
-
-
-@contextmanager
-def _request_workspace(workspace_dir: str | None) -> Iterator[str]:
-    """Enter one request's working directory.
-
-    Production workers pass a parent-owned directory so it can still be removed
-    after the child is killed. Direct engine callers get the same semantics from
-    a locally owned temporary directory.
-    """
-    if workspace_dir is None:
-        with tempfile.TemporaryDirectory(prefix="kcoral-program-") as temporary:
-            with _working_directory(temporary):
-                yield temporary
-        return
-    workspace_dir = os.path.abspath(workspace_dir)
-    with _working_directory(workspace_dir):
-        yield workspace_dir
 
 
 @contextmanager

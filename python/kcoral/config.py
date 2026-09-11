@@ -9,7 +9,8 @@ from pathlib import Path
 
 def _default_disk_cache_dir() -> Path:
     base = os.environ.get("XDG_CACHE_HOME")
-    return (Path(base) if base else Path.home() / ".cache") / "kcoral" / "files"
+    cache_home = Path(base) if base and Path(base).is_absolute() else Path.home() / ".cache"
+    return cache_home / "kcoral" / "files"
 
 
 @dataclass(frozen=True)

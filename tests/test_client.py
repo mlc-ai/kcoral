@@ -120,7 +120,7 @@ def test_bytes_cache_retry_and_result(server_url):
 def test_file_cache_retry_is_read_from_a_request_local_workspace(server_url):
     value = b"safetensors contents\x00\xff"
     program = Program()
-    assert program.upload(kind="file", blob=value, path="./assets//tensor") is None
+    assert program.upload_file(blob=value, path="./assets//tensor") is None
     inspect_module = program.upload(
         id="inspect_module",
         kind="module",
@@ -145,8 +145,23 @@ def test_file_cache_retry_is_read_from_a_request_local_workspace(server_url):
     assert first.results["file"]["cwd"] != second.results["file"]["cwd"]
 
 
-@pytest.mark.parametrize("cache_state", ["cold", "warm", "partial", "evicted"])
-def test_folder_upload_reuses_identical_wire_program_for_every_attempt(tmp_path, cache_state):
+@pytest.mark.parametrize(
+    "cached,evict_after_miss,expected_attempts",
+    [
+        pytest.param((), False, [((), "CACHE_MISS"), (("a", "b"), "COMPLETED")], id="cold"),
+        pytest.param(("a", "b"), False, [((), "COMPLETED")], id="warm"),
+        pytest.param(("a",), False, [((), "CACHE_MISS"), (("b",), "COMPLETED")], id="partial"),
+        pytest.param(
+            ("a",),
+            True,
+            [((), "CACHE_MISS"), (("b",), "CACHE_MISS"), (("a", "b"), "COMPLETED")],
+            id="evicted",
+        ),
+    ],
+)
+def test_folder_upload_reuses_identical_wire_program_for_every_attempt(
+    tmp_path, cached, evict_after_miss, expected_attempts
+):
     source = tmp_path / "source"
     (source / "nested").mkdir(parents=True)
     a, b = b"first", b"second"
@@ -182,8 +197,8 @@ def test_folder_upload_reuses_identical_wire_program_for_every_attempt(tmp_path,
         runtime_factory=fake_runtime_factory,
     )
     server, thread, url = _start_server(app)
-    keys = {compute_blob_hash(a), compute_blob_hash(b)}
-    first_key = compute_blob_hash(a)
+    blobs = {"a": a, "b": b}
+    keys = {name: compute_blob_hash(data) for name, data in blobs.items()}
     requests = []
     statuses = []
 
@@ -207,30 +222,29 @@ def test_folder_upload_reuses_identical_wire_program_for_every_attempt(tmp_path,
             statuses.append(response.json()["status"])
         else:
             statuses.append("COMPLETED")
-        if cache_state == "evicted" and len(statuses) == 1:
-            (app.state.file_cache.directory / first_key[:2] / first_key).unlink()
+        if evict_after_miss and len(statuses) == 1:
+            assert statuses == ["CACHE_MISS"]
+            assert response.json()["missing_blobs"] == [keys["b"]]
+            # The server asked only for b. Evict cached a before that retry so
+            # sending b alone misses again and forces the client's full resend.
+            key = keys["a"]
+            (app.state.file_cache.directory / key[:2] / key).unlink()
+            assert app.state.file_cache.get(key) is None
 
     try:
-        if cache_state != "cold":
-            app.state.file_cache.put(first_key, a)
-        if cache_state == "warm":
-            app.state.file_cache.put(compute_blob_hash(b), b)
+        for name in cached:
+            app.state.file_cache.put(keys[name], blobs[name])
         with Client(url) as client:
             client._http.event_hooks = {"request": [record_request], "response": [record_response]}
             result = client.execute(program)
         assert result.completed and result.results == {"value": [a, b, a]}
         assert counter.read_text() == "x"
-        expected_parts = {
-            "cold": [set(), keys],
-            "warm": [set()],
-            "partial": [set(), {compute_blob_hash(b)}],
-            "evicted": [set(), {compute_blob_hash(b)}, keys],
-        }[cache_state]
-        assert [parts for _, parts in requests] == expected_parts
+        assert [(parts, status) for (_, parts), status in zip(requests, statuses, strict=True)] == [
+            ({keys[name] for name in names}, status) for names, status in expected_attempts
+        ]
         assert all(payload == requests[0][0] for payload, _ in requests)
         assert json.loads(requests[0][0])["instructions"] == program.instructions
-        assert statuses == ["CACHE_MISS"] * (len(requests) - 1) + ["COMPLETED"]
-        assert all(app.state.cache.get(key) is None for key in keys)
+        assert all(app.state.cache.get(key) is None for key in keys.values())
     finally:
         server.should_exit = True
         thread.join(timeout=10)
@@ -503,10 +517,10 @@ def test_bytes_builder_hashes_bytes_without_tensor_metadata():
         Program().upload(id="file", kind="bytes", value="text")
 
 
-def test_file_builder_hashes_blob_and_validates_its_side_effect_only_fields():
+def test_file_builder_snapshots_blob_without_creating_a_register():
     value = bytearray(b"file contents")
     program = Program()
-    assert program.upload(kind="file", blob=value, path="./data//tensor") is None
+    assert program.upload_file(blob=value, path="./data//tensor") is None
     assert program.instructions == [
         {
             "op": "upload",
@@ -515,15 +529,18 @@ def test_file_builder_hashes_blob_and_validates_its_side_effect_only_fields():
             "path": "data/tensor",
         }
     ]
+    value[:] = b"changed"
+    assert program._blobs == {compute_blob_hash(b"file contents"): b"file contents"}
+    assert program._ids == set()
 
     with pytest.raises(ValueError, match="must be relative"):
-        Program().upload(kind="file", blob=b"x", path="/tmp/tensor")
+        Program().upload_file(blob=b"x", path="/tmp/tensor")
     with pytest.raises(ValueError, match=r"'\.\.' component"):
-        Program().upload(kind="file", blob=b"x", path="data/../tensor")
-    with pytest.raises(TypeError, match="does not accept 'id'"):
-        Program().upload(id="file", kind="file", blob=b"x", path="tensor")
+        Program().upload_file(blob=b"x", path="data/../tensor")
+    with pytest.raises(TypeError, match="unexpected keyword argument 'id'"):
+        Program().upload_file(id="file", blob=b"x", path="tensor")
     with pytest.raises(TypeError, match="bytes-like"):
-        Program().upload(kind="file", blob="text", path="tensor")
+        Program().upload_file(blob="text", path="tensor")
 
 
 def test_numpy_tensor_builder_uses_raw_byte_hash():

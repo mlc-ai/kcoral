@@ -82,7 +82,7 @@ Program.upload(id=..., kind="module", source=..., language="python") -> Register
 Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
 Program.upload(id=..., kind="bytes", value=...) -> Register
 Program.upload(id=..., kind="library", value=...) -> Register
-Program.upload(kind="file", blob=..., path=...) -> None
+Program.upload_file(blob=..., path=...) -> None
 Program.upload_folder(folder, *, path=...) -> None
 Program.get_function(id=..., module=..., name=..., cpu_only=False) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
@@ -104,9 +104,8 @@ requests. Returned tensors decode to CPU `numpy.ndarray` (`bfloat16` and
 `upload_folder` snapshots a local directory into ordinary file upload
 instructions; retries send the same instructions with different blob parts.
 It includes hidden files, rejects links, special files and repeated directories,
-and traverses iteratively. Empty directories and original
-permissions/timestamps are omitted. File uploads use only the disk cache;
-tensor, bytes, and library uploads retain the memory cache.
+and omits empty directories and original permissions/timestamps. A failed call
+leaves the program unchanged. Caching is automatic and best-effort.
 
 ## Instructions
 
@@ -142,7 +141,8 @@ formats the server should parse.
 A `library` upload is a prebuilt ELF shared object loaded with
 `tvm_ffi.load_module`; use `get_function` to bind one of its exported functions.
 
-A `file` upload returns no register. In the Python client, `blob` is bytes-like;
+A `file` upload returns no register. Use `upload_file(blob=..., path=...)` in the
+Python client, where `blob` is bytes-like;
 the wire field holds its SHA-256. The server copies it into the request's private
 working directory with mode `0600` and removes that directory after execution.
 Its content can remain in the disk cache across requests and server restarts.

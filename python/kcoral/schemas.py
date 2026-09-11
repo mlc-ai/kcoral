@@ -196,7 +196,7 @@ def parse_program(body: Any) -> Program:
             raise ValidationError(f"instruction {index}: unknown op {op!r}")
         instructions.append(instruction)
 
-    _add_file_paths(file_paths, set())
+    validate_and_add_file_paths(file_paths, set())
     return Program(instructions=instructions, options=options)
 
 
@@ -230,8 +230,8 @@ def normalize_file_path(value: Any) -> str:
     return normalized
 
 
-def _add_file_path(path: str, paths: set[str]) -> None:
-    """Reject two file declarations that would need one path to be a directory."""
+def validate_and_add_file_path(path: str, paths: set[str]) -> None:
+    """Reject destination conflicts, then add the normalized path to ``paths``."""
     for existing in paths:
         if path == existing:
             raise ValidationError(f"duplicate file upload path: {path!r}")
@@ -240,7 +240,7 @@ def _add_file_path(path: str, paths: set[str]) -> None:
     paths.add(path)
 
 
-def _add_file_paths(additions: list[str], paths: set[str]) -> None:
+def validate_and_add_file_paths(additions: list[str], paths: set[str]) -> None:
     """Validate a batch in O(n log n), then update the existing declarations."""
     # Component sorting puts a file immediately before its descendants, even
     # with intervening names such as "a-b" alongside "a" and "a/b".

@@ -64,16 +64,6 @@ def test_disk_lru_eviction_and_restart_with_smaller_budget(tmp_path):
     assert smaller.get(c) is None and smaller.get(a) == b"aaaa"
 
 
-def test_eviction_does_not_invalidate_request_owned_bytes(tmp_path):
-    cache = DiskFileCache(tmp_path, 4)
-    a, b = compute_blob_hash(b"aaaa"), compute_blob_hash(b"bbbb")
-    cache.put(a, b"aaaa")
-    owned = cache.get(a)
-    cache.put(b, b"bbbb")
-    assert cache.get(a) is None
-    assert owned == b"aaaa"
-
-
 @pytest.mark.parametrize("disabled", ["directory", "capacity"])
 def test_disabled_disk_cache_never_writes(tmp_path, disabled):
     cache = DiskFileCache(

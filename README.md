@@ -138,6 +138,20 @@ workers instead: reset and poison detection still run, but undefined CUDA
 behaviour is no longer contained, and replacement costs enough on short requests
 that throughput numbers should record the setting.
 
+### File upload cache
+
+File uploads use a persistent disk cache; tensors, bytes, and libraries use the
+memory cache. The default directory is `$XDG_CACHE_HOME/kcoral/files` when
+`XDG_CACHE_HOME` is an absolute path, otherwise `~/.cache/kcoral/files`.
+The default capacity is 16384 MiB (16 GiB), where 1 MiB = 1024**2 bytes.
+
+Set `--disk-cache-dir` and `--disk-cache-capacity-mbytes`, or
+`ServerConfig.disk_cache_dir` and `ServerConfig.disk_cache_capacity_mbytes`, to
+override these defaults. An empty directory option (`None` in `ServerConfig`)
+or zero capacity disables file caching without falling back to the memory
+cache. Cached content survives server restarts. Caching is best-effort: storage
+failures and oversized objects do not prevent execution with supplied bytes.
+
 ## Logs
 
 Each run appends to `<log-dir>/runs/<timestamp>/events.jsonl`, one JSON object
@@ -213,22 +227,13 @@ to accept bytes. The directory is private to this execution and is removed when
 the program ends; identical content still benefits from the blob cache:
 
 ```python
-program.upload(kind="file", blob=tensor_bytes, path="./inputs/tensor.bin")
+program.upload_file(blob=tensor_bytes, path="./inputs/tensor.bin")
 ```
 
 Upload a local directory with `program.upload_folder("./assets", path="inputs")`.
-It snapshots regular files as ordinary file upload instructions, including hidden
-files and nested paths. It rejects symlinks and special files; empty directories
-and source permissions/timestamps are not copied. Traversal is iterative, detects
-repeated directories. Retries keep the same instructions and send only
-missing blobs, with the existing full-resend fallback.
-
-File uploads use a disk cache, separate from the memory cache used by tensors,
-bytes, and libraries. It defaults to `$XDG_CACHE_HOME/kcoral/files` (or
-`~/.cache/kcoral/files`) with a 16384 MiB (16 GiB) content budget. Set `--disk-cache-dir`
-and `--disk-cache-capacity-mbytes` (1 MiB = 1024**2 bytes) to override it; an empty directory option or
-zero capacity disables file caching. The cache survives server restarts and
-stores only hash-named content files, with no index or configuration file.
+Both helpers snapshot content when called and return no register. See the
+[client guide](docs/client_guide.md#files-used-by-uploaded-scripts) for destination
+mapping and traversal restrictions.
 
 A kernel built elsewhere can be uploaded instead of source, which is the path
 when the build is customized beyond what a `compile_*` builtin expresses:

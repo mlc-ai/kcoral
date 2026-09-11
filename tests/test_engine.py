@@ -4,7 +4,7 @@ from kcoral.deferred import DeferredGPUResult
 from kcoral.engine import execute
 from kcoral.keys import compute_blob_hash
 from kcoral.schemas import FileUpload, GetFunction, Program, Ref, Return, Run, Upload
-from kcoral.testing import UNSHARED_GPU, FakeRuntime
+from kcoral.testing import UNSHARED_GPU, FakeRuntime, execute_for_test
 
 
 def ref(handle):
@@ -13,7 +13,7 @@ def ref(handle):
 
 def call_module(source, name):
     """Upload ``source``, select ``name``, call it, and return the outcome."""
-    return execute(
+    return execute_for_test(
         Program(
             [
                 Upload("module", "module", source=source),
@@ -35,7 +35,7 @@ def test_library_module_binds_multiple_functions_and_chains_results():
             assert data == b"fake-library"
             return {"add_one": lambda value: value + 1, "times_two": lambda value: value * 2}
 
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("module", "library", blob=digest),
@@ -62,7 +62,7 @@ def test_missing_library_function_is_attributed_to_get_function():
         def load_library(self, data):
             return {}
 
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("module", "library", blob=digest),
@@ -83,7 +83,7 @@ def test_missing_library_function_is_attributed_to_get_function():
 def test_cleanup_failure_preserves_runtime_error_and_marks_worker_unhealthy():
     runtime = FakeRuntime()
     cleanup_errors = []
-    outcome = execute(
+    outcome = execute_for_test(
         Program([Run("bad", "builtin.poison", [])]),
         runtime,
         UNSHARED_GPU,
@@ -99,7 +99,7 @@ def test_cleanup_failure_preserves_runtime_error_and_marks_worker_unhealthy():
 def test_cuda_last_error_is_attributed_to_the_current_request_without_poisoning_cleanup():
     runtime = FakeRuntime()
     cleanup_errors = []
-    outcome = execute(
+    outcome = execute_for_test(
         Program([Run("bad", "builtin.stale_cuda_error", [])]),
         runtime,
         UNSHARED_GPU,
@@ -116,7 +116,7 @@ def test_cuda_last_error_is_attributed_to_the_current_request_without_poisoning_
 
 
 def test_cuda_last_error_overrides_cupti_unavailable_error():
-    outcome = execute(
+    outcome = execute_for_test(
         Program([Run("bad", "builtin.stale_cuda_error_unavailable", [])]),
         FakeRuntime(),
         UNSHARED_GPU,
@@ -157,7 +157,7 @@ def test_cpu_only_builtin_finalizes_deferred_gpu_result_under_lease():
 
     # Placement is the parent's word now, not the worker's: pass the set that a
     # parent would have read out of this runtime before any program ran.
-    outcome = execute(
+    outcome = execute_for_test(
         Program([Run("compiled", "builtin.deferred", [])]),
         DeferredRuntime(),
         lease,
@@ -201,13 +201,15 @@ def test_missing_python_function_fails_get_function(source, name):
 
 
 def test_unreturned_values_are_not_serialized():
-    outcome = execute(Program([Run("opaque", "builtin.opaque", [])]), FakeRuntime(), UNSHARED_GPU)
+    outcome = execute_for_test(
+        Program([Run("opaque", "builtin.opaque", [])]), FakeRuntime(), UNSHARED_GPU
+    )
     assert outcome.status == "COMPLETED" and outcome.results == {}
 
 
 def test_recursive_values_and_depth_first_binary_parts():
     source = "def main():\n    return [b'a', {'nested': b'b'}]\n"
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("module", "module", source=source),
@@ -236,7 +238,7 @@ def test_tensor_return_has_metadata_hash_and_binary_part():
         ],
         blob_bytes={digest: raw},
     )
-    outcome = execute(program, FakeRuntime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, FakeRuntime(), UNSHARED_GPU)
     assert outcome.results["tensor"] == {
         "type": "tensor",
         "dtype": "float32",
@@ -257,7 +259,7 @@ def test_bytes_upload_is_available_to_later_instructions_and_returns():
         ],
         blob_bytes={digest: raw},
     )
-    outcome = execute(program, FakeRuntime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, FakeRuntime(), UNSHARED_GPU)
     assert outcome.results["file"] == {
         "type": "bytes",
         "part": "return:0",
@@ -267,7 +269,7 @@ def test_bytes_upload_is_available_to_later_instructions_and_returns():
 
 
 def test_instruction_failure_stops_and_describes_the_instruction():
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Run("ok", "builtin.structural", []),
@@ -286,7 +288,7 @@ def test_instruction_failure_stops_and_describes_the_instruction():
 
 
 def test_returns_that_ran_survive_a_later_failure():
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Run("ok", "builtin.structural", []),
@@ -306,7 +308,7 @@ def test_returns_that_ran_survive_a_later_failure():
 def test_failed_return_rolls_back_only_its_own_binary_parts():
     # ``main`` encodes one part before hitting a value the encoder cannot handle.
     source = "def main():\n    return [b'partial', object()]\n"
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Run("blob", "builtin.binary", []),
@@ -330,7 +332,7 @@ def test_failed_return_rolls_back_only_its_own_binary_parts():
 
 
 def test_unsupported_return_is_serialization_failure():
-    outcome = execute(
+    outcome = execute_for_test(
         Program([Run("opaque", "builtin.opaque", []), Return("value", ref("opaque"))]),
         FakeRuntime(),
         UNSHARED_GPU,
@@ -344,7 +346,7 @@ def test_invalid_exported_tensor_is_serialization_failure():
         def export_tensor(self, value):
             return "float32", [2], b"short"
 
-    outcome = execute(
+    outcome = execute_for_test(
         Program([Run("opaque", "builtin.opaque", []), Return("value", ref("opaque"))]),
         InvalidTensorRuntime(),
         UNSHARED_GPU,
@@ -361,7 +363,7 @@ def test_stdout_and_stderr_are_captured_for_the_request():
         "    print('error output', file=sys.stderr)\n"
         "    return 1\n"
     )
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("module", "module", source=source),
@@ -386,7 +388,7 @@ def test_output_limit_is_shared_across_the_request():
         ],
         options={"output_limit_bytes": 7},
     )
-    outcome = execute(program, FakeRuntime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, FakeRuntime(), UNSHARED_GPU)
     assert outcome.stdout == "12345\n6" and outcome.stdout_truncated
 
 
@@ -430,7 +432,7 @@ def test_uploaded_module_reads_file_relative_to_request_workspace():
     raw = b"script input"
     digest = compute_blob_hash(raw)
     source = "DATA = open('input/data.bin', 'rb').read()\ndef main():\n    return DATA\n"
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 FileUpload(blob=digest, path="input/data.bin"),
@@ -457,7 +459,7 @@ def test_file_upload_does_not_follow_workspace_symlink(tmp_path):
     outside.mkdir()
     source = f"import os\nos.symlink({str(outside)!r}, 'escape')\n"
 
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("module", "module", source=source),
@@ -497,7 +499,7 @@ class CudaAwareRuntime(FakeRuntime):
 def test_which_module_uploads_take_the_gpu(language, source, acquires):
     lease = RecordingLease()
     program = Program([Upload("k", "module", source=source, language=language)])
-    outcome = execute(program, CudaAwareRuntime(), lease)
+    outcome = execute_for_test(program, CudaAwareRuntime(), lease)
     assert outcome.status == "COMPLETED"
     assert lease.acquires == acquires
 
@@ -516,7 +518,7 @@ def test_a_cpu_only_function_hands_the_gpu_over_for_its_call():
             Return("on", ref("on")),
         ]
     )
-    outcome = execute(program, FakeRuntime(), lease)
+    outcome = execute_for_test(program, FakeRuntime(), lease)
     assert outcome.status == "COMPLETED"
     assert outcome.results["off"] == outcome.results["on"] == {"type": "integer", "value": 2}
     assert lease.acquires == 2 and lease.releases == 2  # once for the call, once at the end
@@ -533,7 +535,7 @@ CUDA_TOUCHING = (
 
 def test_a_cpu_only_function_that_reaches_cuda_fails_naming_the_call():
     def call(cpu_only):
-        return execute(
+        return execute_for_test(
             Program(
                 [
                     Upload("module", "module", source=CUDA_TOUCHING),
@@ -562,7 +564,7 @@ def test_a_gpu_access_error_keeps_its_kind_over_a_stale_cuda_error():
         def take_last_error(self):
             return "CUDA error cudaErrorInvalidValue (1): invalid argument"
 
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("module", "module", source=CUDA_TOUCHING),
@@ -592,10 +594,12 @@ def test_a_program_cannot_talk_its_worker_out_of_the_gpu_lease():
     program = Program([Run("x", "builtin.structural", [])])
 
     lease = RecordingLease()
-    assert execute(program, ClaimsEverythingIsCpuOnly(), lease).status == "COMPLETED"
+    assert execute_for_test(program, ClaimsEverythingIsCpuOnly(), lease).status == "COMPLETED"
     assert lease.acquires == 1  # the worker's own claim bought it nothing
 
     lease = RecordingLease()
     parent_says = frozenset({"builtin.structural"})
-    assert execute(program, FakeRuntime(), lease, cpu_only=parent_says).status == "COMPLETED"
+    assert (
+        execute_for_test(program, FakeRuntime(), lease, cpu_only=parent_says).status == "COMPLETED"
+    )
     assert lease.acquires == 0  # the parent's word is the one that counts

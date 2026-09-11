@@ -6,10 +6,9 @@ import pathlib
 
 import pytest
 
-from kcoral.engine import execute
 from kcoral.keys import compute_blob_hash
 from kcoral.schemas import GetFunction, Program, Ref, Return, Run, Upload
-from kcoral.testing import UNSHARED_GPU
+from kcoral.testing import UNSHARED_GPU, execute_for_test
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("KCORAL_GPU_TEST") != "1",
@@ -267,7 +266,7 @@ def tirx_benchmark_program():
 
 
 def test_compile_correctness_and_benchmark():
-    outcome = execute(tirx_benchmark_program(), runtime(), UNSHARED_GPU)
+    outcome = execute_for_test(tirx_benchmark_program(), runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     check = decode_structural(outcome.results["check"])
     timing = decode_structural(outcome.results["timing"])
@@ -287,7 +286,7 @@ CUDA_IN_CPU_ONLY = (
 
 
 def cpu_only_call(source, gpu_runtime):
-    return execute(
+    return execute_for_test(
         Program(
             [
                 Upload("module", "module", source=source),
@@ -316,7 +315,7 @@ def test_a_cpu_only_function_is_checked_against_the_cuda_api():
     assert "torch.zeros" in error["traceback"]
 
     # CUPTI is shared with the benchmark builtin: each leaves it usable by the other.
-    timed = execute(tirx_benchmark_program(), gpu_runtime, UNSHARED_GPU)
+    timed = execute_for_test(tirx_benchmark_program(), gpu_runtime, UNSHARED_GPU)
     assert timed.status == "COMPLETED", timed.error
     assert cpu_only_call(CUDA_IN_CPU_ONLY, gpu_runtime).error["kind"] == "gpu_access"
 
@@ -329,7 +328,7 @@ int64_t add_one(int64_t value) { return value + 1; }
 def test_a_cpu_only_library_function_runs_off_the_gpu(tmp_path):
     """Calling into a library must not touch CUDA on the function's behalf."""
     data = build_library(HOST_LIBRARY, "add_one", tmp_path)
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("library", "library", blob=compute_blob_hash(data)),
@@ -348,7 +347,7 @@ def test_a_cpu_only_library_function_runs_off_the_gpu(tmp_path):
 
 def test_a_cpu_reference_compares_against_a_gpu_tensor_as_is():
     source = "import torch\n\ndef main(n):\n    return torch.zeros(n)\n"
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("module", "module", source=source),
@@ -388,7 +387,7 @@ def test_cuda_c_compile_correctness_and_benchmark():
             Return("timing", ref("timing")),
         ]
     )
-    outcome = execute(program, runtime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     check = decode_structural(outcome.results["check"])
     timing = decode_structural(outcome.results["timing"])
@@ -398,7 +397,7 @@ def test_cuda_c_compile_correctness_and_benchmark():
 
 def test_cuda_c_nvcc_error_is_compile_failure_and_names_the_mistake():
     bad = CUDA_KERNEL.replace("x.data_ptr()", "undeclared_symbol")
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("kernel_module", "module", source=bad, language="cuda"),
@@ -421,7 +420,7 @@ def test_cuda_c_runs_on_the_arch_specific_target():
 
     if torch.cuda.get_device_capability()[0] != 10:
         pytest.skip("tcgen05 needs a Blackwell device")
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("kernel_module", "module", source=TMEM_KERNEL, language="cuda"),
@@ -466,7 +465,7 @@ def test_prebuilt_library_runs_and_benchmarks(tmp_path):
         ],
         blob_bytes={digest: data},
     )
-    outcome = execute(program, runtime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
     assert decode_structural(outcome.results["timing"])["latency_ms_median"] > 0
@@ -514,7 +513,7 @@ def test_prebuilt_library_module_binds_and_runs_multiple_functions(tmp_path):
         blob_bytes={digest: data},
     )
 
-    outcome = execute(program, runtime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     assert decode_structural(outcome.results["check_one"])["max_abs_err"] == 0
     assert decode_structural(outcome.results["check_two"])["max_abs_err"] == 0
@@ -541,7 +540,7 @@ def test_prebuilt_tirx_library_runs(tmp_path):
         ],
         blob_bytes={digest: data},
     )
-    outcome = execute(program, runtime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
 
@@ -568,7 +567,7 @@ def test_prebuilt_cutedsl_library_runs(tmp_path):
         ],
         blob_bytes={digest: data},
     )
-    outcome = execute(program, runtime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
 
@@ -598,7 +597,7 @@ def test_cutedsl_source_compiles_on_the_server():
             Return("check", ref("check")),
         ]
     )
-    outcome = execute(program, runtime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
 
@@ -607,7 +606,7 @@ def test_compile_cutedsl_reports_an_undecorated_kernel():
     """CuTeDSL writes colour into its diagnostics; the client gets it stripped."""
     if importlib.util.find_spec("cutlass") is None:
         pytest.skip("CuTeDSL compilation requires cutlass")
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("kernel_module", "module", source="def main(src, dst):\n    pass\n"),
@@ -656,7 +655,7 @@ def test_triton_source_compiles_on_the_server():
             Return("timing", ref("timing")),
         ]
     )
-    outcome = execute(program, runtime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
     assert decode_structural(outcome.results["timing"])["latency_ms_median"] > 0
@@ -665,7 +664,7 @@ def test_triton_source_compiles_on_the_server():
 def test_library_with_a_missing_function_fails_to_compile(tmp_path):
     data = build_library(CUDA_KERNEL, "add_one", tmp_path)
     digest = compute_blob_hash(data)
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("kernel_module", "library", blob=digest),
@@ -700,7 +699,7 @@ def test_library_cache_is_only_a_memoization(tmp_path):
             ],
             blob_bytes={digest: data},
         )
-        return execute(program, runtime(), UNSHARED_GPU)
+        return execute_for_test(program, runtime(), UNSHARED_GPU)
 
     gpu_runtime._LOADED_LIBRARIES.clear()
     cold = run_once()
@@ -746,7 +745,7 @@ def test_benchmark_budget_counts_and_no_flush():
             Return("timing", ref("timing")),
         ]
     )
-    outcome = execute(program, runtime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED"
     timing = decode_structural(outcome.results["timing"])
     assert timing["latency_ms_median"] > 0 and timing["flush_l2"] is False
@@ -827,7 +826,7 @@ def test_direct_cupti_cleans_up_after_the_callable_fails():
 
 
 def test_python_syntax_error_is_parse_failure():
-    outcome = execute(
+    outcome = execute_for_test(
         Program([Upload("kernel", "module", source="def bad(:\n    pass\n")]),
         runtime(),
         UNSHARED_GPU,
@@ -838,7 +837,7 @@ def test_python_syntax_error_is_parse_failure():
 
 def test_tirx_error_is_parse_failure():
     bad_kernel = KERNEL.replace("B[i] = A[i] + 1.0", "B[i] = A[i] + undefined_symbol")
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("kernel_module", "module", source=bad_kernel),
@@ -854,7 +853,7 @@ def test_tirx_error_is_parse_failure():
 
 
 def test_compile_on_non_kernel_is_compile_failure():
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Run("input", "builtin.randn", [{"shape": [4], "dtype": "float32"}]),
@@ -869,7 +868,7 @@ def test_compile_on_non_kernel_is_compile_failure():
 
 
 def test_prim_func_kernel_compiles_directly():
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("kernel_module", "module", source=PRIM_KERNEL),
@@ -887,7 +886,7 @@ def test_prim_func_kernel_compiles_directly():
 
 
 def test_prim_func_with_bindings_is_compile_failure():
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("kernel_module", "module", source=PRIM_KERNEL),
@@ -903,7 +902,7 @@ def test_prim_func_with_bindings_is_compile_failure():
 
 
 def test_bad_binding_name_is_compile_failure():
-    outcome = execute(
+    outcome = execute_for_test(
         Program(
             [
                 Upload("kernel_module", "module", source=KERNEL),
@@ -935,7 +934,7 @@ def test_assert_close_failure_stops_without_results():
             Return("output", ref("output")),
         ]
     )
-    outcome = execute(program, runtime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "FAILED" and outcome.results == {}
     assert outcome.error["kind"] == "correctness" and outcome.error["instruction_index"] == 9
     assert outcome.error["instruction_op"] == "run" and outcome.error["instruction_id"] == "check"
@@ -964,7 +963,7 @@ def test_timing_returned_before_a_correctness_failure_is_kept():
             Return("output", ref("output")),
         ]
     )
-    outcome = execute(program, runtime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "FAILED"
     assert set(outcome.results) == {"timing"}
     assert decode_structural(outcome.results["timing"])["latency_ms_median"] > 0
@@ -984,7 +983,7 @@ def test_uploaded_and_returned_tensor_bytes():
         ],
         blob_bytes={digest: raw},
     )
-    outcome = execute(program, runtime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED"
     np.testing.assert_array_equal(
         np.frombuffer(outcome.binary_parts["return:0"], dtype=np.float32), array
@@ -1012,7 +1011,7 @@ def test_uploaded_code_calls_builtins_directly():
             Return("check", ref("check")),
         ]
     )
-    outcome = execute(program, runtime(), UNSHARED_GPU)
+    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     check = decode_structural(outcome.results["check"])
     assert check["passed"] and check["max_abs_err"] == 0
@@ -1066,7 +1065,7 @@ def test_module_scope_allocations_do_not_survive_the_request():
                 Return("total", ref("total")),
             ]
         )
-        outcome = execute(program, rt, UNSHARED_GPU)
+        outcome = execute_for_test(program, rt, UNSHARED_GPU)
         assert outcome.status == "COMPLETED", outcome.error
     # Generous slack: free memory is shared with co-tenants, and the regression
     # this guards is 1 GiB per request.
@@ -1128,7 +1127,7 @@ def test_popped_candidate_modules_do_not_survive_the_request():
                 Return("evaluated", ref("evaluated")),
             ]
         )
-        outcome = execute(program, rt, UNSHARED_GPU)
+        outcome = execute_for_test(program, rt, UNSHARED_GPU)
         assert outcome.status == "COMPLETED", outcome.error
     leaked = baseline - torch.cuda.mem_get_info()[0]
     assert leaked < 512 * 1024**2, f"{leaked / 1024**2:.0f} MiB not reclaimed across 4 candidates"

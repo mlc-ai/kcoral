@@ -136,8 +136,20 @@ def test_disk_cache_can_be_disabled_and_rejects_negative_budget():
         parse(["--disk-cache-capacity-mbytes", "-1"])
 
 
-def test_disk_cache_default_uses_xdg_cache_home(tmp_path, monkeypatch):
+@pytest.mark.parametrize("xdg_cache_home", ["absolute", "relative", "", None])
+def test_disk_cache_default_uses_only_absolute_xdg_cache_home(
+    tmp_path, monkeypatch, xdg_cache_home
+):
     from kcoral.config import ServerConfig
 
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-    assert ServerConfig().disk_cache_dir == tmp_path / "kcoral" / "files"
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    if xdg_cache_home == "absolute":
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        expected = tmp_path
+    else:
+        if xdg_cache_home is None:
+            monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+        else:
+            monkeypatch.setenv("XDG_CACHE_HOME", xdg_cache_home)
+        expected = tmp_path / "home" / ".cache"
+    assert ServerConfig().disk_cache_dir == expected / "kcoral" / "files"

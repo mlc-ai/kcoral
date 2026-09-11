@@ -182,6 +182,7 @@ def test_file_upload_rejects_unsafe_paths(path):
         (["a", "./a"], "duplicate"),
         (["a", "a/b"], "conflicting"),
         (["a/b", "a"], "conflicting"),
+        (["a", "a-b", "a/b"], "conflicting"),
     ],
 )
 def test_file_upload_rejects_duplicate_and_file_directory_conflicts(paths, match):

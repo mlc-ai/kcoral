@@ -3,14 +3,30 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
+from .engine import Runtime, execute
 from .errors import ExecutionError, GPUAccessViolation
 from .gpu_runtime import LoadedPythonModule  # imports no GPU libraries
+from .lease import Lease
+from .schemas import Program, ProgramOutcome
+
+
+def execute_for_test(
+    program: Program,
+    runtime: Runtime,
+    lease: Lease,
+    cpu_only: frozenset[str] = frozenset(),
+    **kwargs: Any,
+) -> ProgramOutcome:
+    """Own a temporary workspace for an engine test running without a worker."""
+    with tempfile.TemporaryDirectory(prefix="kcoral-test-") as workspace_dir:
+        return execute(program, runtime, lease, cpu_only, workspace_dir=workspace_dir, **kwargs)
 
 
 class _UnsharedGPU:

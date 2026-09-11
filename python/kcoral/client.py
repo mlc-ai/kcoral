@@ -20,11 +20,11 @@ from .keys import compute_blob_hash, is_blob_hash, verify_blob
 from .multipart import parse_multipart
 from .schemas import (
     DTYPE_ITEM_SIZES,
-    _add_file_path,
-    _add_file_paths,
     expected_tensor_nbytes,
     normalize_file_path,
     strict_json_loads,
+    validate_and_add_file_path,
+    validate_and_add_file_paths,
 )
 
 
@@ -71,6 +71,24 @@ class Program:
     def instructions(self) -> list[dict[str, Any]]:
         return list(self._instructions)
 
+    def upload_file(self, *, blob: Any, path: str) -> None:
+        """Snapshot bytes-like data as a file in the request workspace.
+
+        The destination must be a relative POSIX path without ``..`` components
+        and cannot conflict with another file upload. Returns no register.
+        """
+        normalized_path = normalize_file_path(path)
+        try:
+            raw = blob if isinstance(blob, bytes) else bytes(memoryview(blob))
+        except TypeError as exc:
+            raise TypeError("file upload requires a bytes-like 'blob'") from exc
+        validate_and_add_file_path(normalized_path, self._file_paths)
+        blob_hash = compute_blob_hash(raw)
+        self._blobs.setdefault(blob_hash, raw)
+        self._instructions.append(
+            {"op": "upload", "kind": "file", "blob": blob_hash, "path": normalized_path}
+        )
+
     def upload_folder(self, folder: str | os.PathLike[str], *, path: str) -> None:
         """Snapshot a directory as ordinary file uploads at this program position.
 
@@ -87,7 +105,7 @@ class Program:
             instructions.append({"op": "upload", "kind": "file", "blob": digest, "path": remote})
         # One batch validation avoids a quadratic scan for folders with many
         # files and commits no state until traversal and validation both succeed.
-        _add_file_paths([item["path"] for item in instructions], self._file_paths)
+        validate_and_add_file_paths([item["path"] for item in instructions], self._file_paths)
         self._instructions.extend(sorted(instructions, key=lambda item: item["path"]))
         for digest, data in blobs.items():
             self._blobs.setdefault(digest, data)
@@ -95,38 +113,14 @@ class Program:
     def upload(
         self,
         *,
-        id: str | None = None,
+        id: str,
         kind: str,
         source: str | None = None,
         language: str = "python",
         value: Any = None,
         dtype: str | None = None,
         shape: list[int] | None = None,
-        blob: Any = None,
-        path: str | None = None,
-    ) -> Register | None:
-        if kind == "file":
-            if id is not None:
-                raise TypeError("file upload does not accept 'id'")
-            if source is not None or value is not None or dtype is not None or shape is not None:
-                raise TypeError("file upload accepts only 'blob' and 'path'")
-            if language != "python":
-                raise TypeError("file upload does not accept 'language'")
-            normalized_path = normalize_file_path(path)
-            try:
-                raw = blob if isinstance(blob, bytes) else bytes(memoryview(blob))
-            except TypeError as exc:
-                raise TypeError("file upload requires a bytes-like 'blob'") from exc
-            _add_file_path(normalized_path, self._file_paths)
-            blob_hash = compute_blob_hash(raw)
-            self._blobs.setdefault(blob_hash, raw)
-            self._instructions.append(
-                {"op": "upload", "kind": "file", "blob": blob_hash, "path": normalized_path}
-            )
-            return None
-
-        if blob is not None or path is not None:
-            raise TypeError(f"{kind} upload does not accept file fields")
+    ) -> Register:
         if kind == "module":
             if not isinstance(source, str):
                 raise TypeError("module upload requires string 'source'")
@@ -187,9 +181,7 @@ class Program:
                 "blob": blob_hash,
             }
         else:
-            raise ValueError(
-                "upload kind must be 'module', 'tensor', 'bytes', 'library', or 'file'"
-            )
+            raise ValueError("upload kind must be 'module', 'tensor', 'bytes', or 'library'")
         self._add_id(id)
         self._instructions.append(instruction)
         return Register(id)
