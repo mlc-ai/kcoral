@@ -76,7 +76,7 @@ def test_repeated_directory_identity_is_rejected(tmp_path, monkeypatch):
         # Simulate a bind mount revisiting an ancestor without requiring mount privileges.
         return root_info if stat.S_ISDIR(info.st_mode) else info
 
-    monkeypatch.setattr("kcoral._folder.os.fstat", duplicate_directory)
+    monkeypatch.setattr("kcoral.client.os.fstat", duplicate_directory)
     with pytest.raises(ValueError, match="repeated directory"):
         Program().upload_folder(tmp_path, path="data")
 
