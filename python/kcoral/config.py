@@ -20,7 +20,7 @@ class ServerConfig:
     log_programs: bool = True  # keep each request's program JSON beside the log
     cache_capacity_bytes: int = 16 * 1024**3  # 16 GB byte cache
     disk_cache_dir: Path | None = field(default_factory=_default_disk_cache_dir)
-    disk_cache_capacity_bytes: int = 16 * 1024**3  # file uploads only; 0 disables caching
+    disk_cache_capacity_mbytes: int = 16 * 1024  # MiB (1024**2 bytes); 0 disables file caching
     default_timeout_seconds: float = 300.0  # per-request execution timeout
     max_timeout_seconds: float = 3600.0
     worker_wait_timeout_seconds: float = 30.0  # wait for a free worker before 503

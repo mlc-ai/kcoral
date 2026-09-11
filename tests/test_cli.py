@@ -19,6 +19,7 @@ def test_defaults():
     assert config.num_workers == 1
     assert config.log_dir == Path("logs")
     assert config.max_requests_per_worker == 1
+    assert config.disk_cache_capacity_mbytes == 16 * 1024
 
 
 def test_host_default_and_flag():
@@ -55,7 +56,7 @@ def test_all_flags_reach_config():
             "1234",
             "--disk-cache-dir",
             "/tmp/kcoral-files",
-            "--disk-cache-capacity-bytes",
+            "--disk-cache-capacity-mbytes",
             "5678",
             "--log-dir",
             "",
@@ -87,7 +88,7 @@ def test_all_flags_reach_config():
     assert config.log_dir is None  # empty string disables logging
     assert config.cache_capacity_bytes == 1234
     assert config.disk_cache_dir == Path("/tmp/kcoral-files")
-    assert config.disk_cache_capacity_bytes == 5678
+    assert config.disk_cache_capacity_mbytes == 5678
     assert config.default_timeout_seconds == 12
     assert config.max_timeout_seconds == 34
     assert config.worker_wait_timeout_seconds == 5
@@ -130,9 +131,9 @@ def test_negative_max_requests_per_worker_rejected():
 
 def test_disk_cache_can_be_disabled_and_rejects_negative_budget():
     assert parse(["--disk-cache-dir", ""]).disk_cache_dir is None
-    assert parse(["--disk-cache-capacity-bytes", "0"]).disk_cache_capacity_bytes == 0
+    assert parse(["--disk-cache-capacity-mbytes", "0"]).disk_cache_capacity_mbytes == 0
     with pytest.raises(SystemExit):
-        parse(["--disk-cache-capacity-bytes", "-1"])
+        parse(["--disk-cache-capacity-mbytes", "-1"])
 
 
 def test_disk_cache_default_uses_xdg_cache_home(tmp_path, monkeypatch):

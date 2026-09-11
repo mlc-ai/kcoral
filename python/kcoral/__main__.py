@@ -68,10 +68,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="persistent file cache directory; empty disables file caching",
     )
     parser.add_argument(
-        "--disk-cache-capacity-bytes",
+        "--disk-cache-capacity-mbytes",
         type=int,
-        default=_DEFAULTS.disk_cache_capacity_bytes,
-        help="file cache content-byte budget (default: 16 GiB); 0 disables file caching",
+        default=_DEFAULTS.disk_cache_capacity_mbytes,
+        help="file cache budget in MiB (1024**2 bytes; default: 16384); 0 disables file caching",
     )
     parser.add_argument(
         "--log-dir",
@@ -147,15 +147,15 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         raise SystemExit("--port must be between 1 and 65535")
     if args.max_requests_per_worker < 0:
         raise SystemExit("--max-requests-per-worker must be non-negative")
-    if args.disk_cache_capacity_bytes < 0:
-        raise SystemExit("--disk-cache-capacity-bytes must be non-negative")
+    if args.disk_cache_capacity_mbytes < 0:
+        raise SystemExit("--disk-cache-capacity-mbytes must be non-negative")
     return ServerConfig(
         device=args.device,
         gpus=gpus,
         num_workers=args.num_workers,
         cache_capacity_bytes=args.cache_capacity_bytes,
         disk_cache_dir=Path(args.disk_cache_dir) if args.disk_cache_dir else None,
-        disk_cache_capacity_bytes=args.disk_cache_capacity_bytes,
+        disk_cache_capacity_mbytes=args.disk_cache_capacity_mbytes,
         log_dir=Path(args.log_dir) if args.log_dir else None,
         log_console=args.log_console,
         log_programs=args.log_programs,

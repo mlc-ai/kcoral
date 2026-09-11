@@ -115,7 +115,7 @@ Useful options include:
 --output-limit-bytes 1048576      Request-level stdout/stderr capture limit
 --max-request-bytes 268435456     Maximum request body size
 --disk-cache-dir /var/cache/kcoral/files  Persistent file upload cache
---disk-cache-capacity-bytes 17179869184  File cache content-byte budget (16 GiB)
+--disk-cache-capacity-mbytes 16384  File cache budget in MiB (16 GiB)
 --log-dir logs                    Event log directory; empty disables logging
 --no-log-console                  Stop mirroring events to stderr
 --no-log-programs                 Stop keeping each request's program JSON
@@ -225,8 +225,8 @@ missing blobs, with the existing full-resend fallback.
 
 File uploads use a disk cache, separate from the memory cache used by tensors,
 bytes, and libraries. It defaults to `$XDG_CACHE_HOME/kcoral/files` (or
-`~/.cache/kcoral/files`) with a 16 GiB content-byte budget. Set `--disk-cache-dir`
-and `--disk-cache-capacity-bytes` to override it; an empty directory option or
+`~/.cache/kcoral/files`) with a 16384 MiB (16 GiB) content budget. Set `--disk-cache-dir`
+and `--disk-cache-capacity-mbytes` (1 MiB = 1024**2 bytes) to override it; an empty directory option or
 zero capacity disables file caching. The cache survives server restarts and
 stores only hash-named content files, with no index or configuration file.
 

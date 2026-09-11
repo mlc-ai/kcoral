@@ -315,9 +315,10 @@ the source metadata. An entirely empty folder adds no instructions.
 
 File upload contents use only the disk cache; tensor, bytes, and library uploads
 continue using the in-memory cache. The disk cache defaults to
-`$XDG_CACHE_HOME/kcoral/files` (or `~/.cache/kcoral/files`) with a 16 GiB capacity,
-configured by `ServerConfig.disk_cache_dir` / `disk_cache_capacity_bytes` or the
-matching `--disk-cache-dir` / `--disk-cache-capacity-bytes` flags. A `None`/empty
+`$XDG_CACHE_HOME/kcoral/files` (or `~/.cache/kcoral/files`) with a 16384 MiB (16 GiB) capacity,
+configured by `ServerConfig.disk_cache_dir` / `disk_cache_capacity_mbytes` or the
+matching `--disk-cache-dir` / `--disk-cache-capacity-mbytes` flags. Each MiB is
+1024**2 bytes. A `None`/empty
 directory setting or zero capacity disables file caching without falling back
 to the memory cache.
 
