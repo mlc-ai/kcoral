@@ -234,6 +234,70 @@ def test_tensor_cache_miss_upload_and_warm_hit():
         assert binary == {"return:0": raw}
 
 
+def test_file_cache_persists_across_server_restart_without_memory_cache(tmp_path):
+    data = b"file contents"
+    key = compute_blob_hash(data)
+    program = {
+        "instructions": [{"op": "upload", "kind": "file", "blob": key, "path": "data/input"}]
+    }
+    config = ServerConfig(workers_per_gpu=1, max_requests_per_worker=0, disk_cache_dir=tmp_path)
+    with make_client(config) as client:
+        assert post_program(client, program).json()["status"] == "CACHE_MISS"
+        assert post_program(client, program, {key: data}).json()["status"] == "COMPLETED"
+        assert client.app.state.cache.get(key) is None
+        assert client.app.state.file_cache.get(key) == data
+    with make_client(config) as restarted:
+        assert post_program(restarted, program).json()["status"] == "COMPLETED"
+        assert restarted.app.state.cache.get(key) is None
+
+
+@pytest.mark.parametrize("disabled", ["directory", "capacity", "unusable"])
+def test_uncached_file_upload_still_executes(tmp_path, disabled):
+    directory = tmp_path / "cache"
+    if disabled == "unusable":
+        directory.write_bytes(b"occupied")
+    config = ServerConfig(
+        workers_per_gpu=1,
+        max_requests_per_worker=0,
+        disk_cache_dir=None if disabled == "directory" else directory,
+        disk_cache_capacity_bytes=0 if disabled == "capacity" else 100,
+    )
+    data = b"uncached file"
+    key = compute_blob_hash(data)
+    program = {"instructions": [{"op": "upload", "kind": "file", "blob": key, "path": "input"}]}
+    with make_client(config) as client:
+        assert post_program(client, program, {key: data}).json()["status"] == "COMPLETED"
+        assert client.app.state.cache.get(key) is None
+        assert post_program(client, program).json()["status"] == "CACHE_MISS"
+
+
+@pytest.mark.parametrize(
+    "kinds", [("file",), ("bytes",), ("tensor",), ("library",), ("file", "bytes")]
+)
+def test_blobs_are_cached_only_in_backends_requested_by_their_upload_kinds(tmp_path, kinds):
+    data = b"1234"
+    key = compute_blob_hash(data)
+    instructions = []
+    for kind in kinds:
+        item = {"op": "upload", "kind": kind, "blob": key}
+        if kind == "file":
+            item["path"] = "input"
+        else:
+            item["id"] = kind
+        if kind == "tensor":
+            item.update(dtype="float32", shape=[1])
+        instructions.append(item)
+    config = ServerConfig(workers_per_gpu=1, max_requests_per_worker=0, disk_cache_dir=tmp_path)
+    with make_client(config) as client:
+        # The fake runtime cannot load libraries; cache routing still happens before execution.
+        response = post_program(client, {"instructions": instructions}, {key: data})
+        assert response.status_code == 200
+        assert client.app.state.cache.get(key) == (
+            data if any(kind != "file" for kind in kinds) else None
+        )
+        assert client.app.state.file_cache.get(key) == (data if "file" in kinds else None)
+
+
 @pytest.mark.parametrize(
     "files,match",
     [

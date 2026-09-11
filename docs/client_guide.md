@@ -288,8 +288,50 @@ top-level code.
 Paths must be relative and cannot contain `..`; nested parent directories are
 created automatically. The server removes the complete working directory when
 the request finishes, including after a failure, timeout, or worker crash. The
-content-addressed blob remains cached, so another execution with identical bytes
+content-addressed blob remains cached on disk, so another execution with identical bytes
 normally avoids the network upload even though it receives a newly copied file.
+
+To upload a local directory, use:
+
+```python
+program.upload_folder("./assets", path="inputs")
+```
+
+This call reads and hashes the files immediately, then inserts one ordinary file
+upload per relative path at the current program position. `assets/a` becomes
+`inputs/a`; `assets/sub/b` becomes `inputs/sub/b`. Identical contents share one
+blob. Changing a local file later does not change the program or its retries.
+There is no archive or extra protocol instruction: the first request sends no
+blob parts, the second sends only missing blobs, and a second cache miss triggers
+the existing full resend. A fully cached program executes on the first request.
+
+Traversal includes hidden files and rejects symbolic links (including the source
+directory itself), repeated directory identities, and special files such as FIFOs.
+It uses an explicit stack and keeps only the active ancestry open. There is no
+arbitrary depth or entry-count limit. A traversal, read, or path-conflict
+error leaves the program unchanged. Empty directories are omitted, and file
+permissions and timestamps follow ordinary file-upload semantics rather than
+the source metadata. An entirely empty folder adds no instructions.
+
+File upload contents use only the disk cache; tensor, bytes, and library uploads
+continue using the in-memory cache. The disk cache defaults to
+`$XDG_CACHE_HOME/kcoral/files` (or `~/.cache/kcoral/files`) with a 16 GiB capacity,
+configured by `ServerConfig.disk_cache_dir` / `disk_cache_capacity_bytes` or the
+matching `--disk-cache-dir` / `--disk-cache-capacity-bytes` flags. A `None`/empty
+directory setting or zero capacity disables file caching without falling back
+to the memory cache.
+
+Objects live at `<disk_cache_dir>/v1/<first two hex digits>/<sha256>`. The
+filesystem is the persistent index; there are no separate index or config files.
+Writes are published atomically and disk reads verify the content hash. Explicit
+mtime updates approximate LRU; scans at startup and after a write batch enforce
+the content-byte budget and remove interrupted temporary writes. File contents
+survive service restarts, and sharing a local cache directory uses a directory
+lock to serialize writers and eviction. Cache write failures and oversized
+objects do not prevent execution with supplied bytes. Requests still read file
+contents into owned bytes and pass them to workers, so eviction cannot invalidate
+accepted work. Working files are independent copies, never writable hard links
+to cached objects.
 
 The path restriction contains files created by the upload instruction; it is not
 a sandbox for arbitrary Python code, which can still open any path available to

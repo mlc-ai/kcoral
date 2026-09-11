@@ -53,6 +53,10 @@ def test_all_flags_reach_config():
             "5",
             "--cache-capacity-bytes",
             "1234",
+            "--disk-cache-dir",
+            "/tmp/kcoral-files",
+            "--disk-cache-capacity-bytes",
+            "5678",
             "--log-dir",
             "",
             "--default-timeout-seconds",
@@ -82,6 +86,8 @@ def test_all_flags_reach_config():
     assert config.num_workers == 5
     assert config.log_dir is None  # empty string disables logging
     assert config.cache_capacity_bytes == 1234
+    assert config.disk_cache_dir == Path("/tmp/kcoral-files")
+    assert config.disk_cache_capacity_bytes == 5678
     assert config.default_timeout_seconds == 12
     assert config.max_timeout_seconds == 34
     assert config.worker_wait_timeout_seconds == 5
@@ -120,3 +126,17 @@ def test_worker_count_must_be_positive(flag):
 def test_negative_max_requests_per_worker_rejected():
     with pytest.raises(SystemExit):
         parse(["--max-requests-per-worker", "-1"])
+
+
+def test_disk_cache_can_be_disabled_and_rejects_negative_budget():
+    assert parse(["--disk-cache-dir", ""]).disk_cache_dir is None
+    assert parse(["--disk-cache-capacity-bytes", "0"]).disk_cache_capacity_bytes == 0
+    with pytest.raises(SystemExit):
+        parse(["--disk-cache-capacity-bytes", "-1"])
+
+
+def test_disk_cache_default_uses_xdg_cache_home(tmp_path, monkeypatch):
+    from kcoral.config import ServerConfig
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    assert ServerConfig().disk_cache_dir == tmp_path / "kcoral" / "files"

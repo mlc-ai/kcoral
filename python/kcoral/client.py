@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
 from dataclasses import dataclass, field
 from typing import Any
@@ -12,11 +13,13 @@ import httpx
 import ml_dtypes
 import numpy as np
 
+from ._folder import folder_files
 from .keys import compute_blob_hash, is_blob_hash, verify_blob
 from .multipart import parse_multipart
 from .schemas import (
     DTYPE_ITEM_SIZES,
     _add_file_path,
+    _add_file_paths,
     expected_tensor_nbytes,
     normalize_file_path,
     strict_json_loads,
@@ -65,6 +68,27 @@ class Program:
     @property
     def instructions(self) -> list[dict[str, Any]]:
         return list(self._instructions)
+
+    def upload_folder(self, folder: str | os.PathLike[str], *, path: str) -> None:
+        """Snapshot a directory as ordinary file uploads at this program position.
+
+        Includes hidden files; empty directories and original file metadata are
+        not uploaded. Symbolic links, special files, and repeated directories
+        are rejected. Failed calls leave the program unchanged.
+        """
+        destination = normalize_file_path(path)
+        instructions = []
+        blobs = {}
+        for remote, data in folder_files(folder, destination):
+            digest = compute_blob_hash(data)
+            blobs.setdefault(digest, data)
+            instructions.append({"op": "upload", "kind": "file", "blob": digest, "path": remote})
+        # One batch validation avoids a quadratic scan for folders with many
+        # files and commits no state until traversal and validation both succeed.
+        _add_file_paths([item["path"] for item in instructions], self._file_paths)
+        self._instructions.extend(sorted(instructions, key=lambda item: item["path"]))
+        for digest, data in blobs.items():
+            self._blobs.setdefault(digest, data)
 
     def upload(
         self,

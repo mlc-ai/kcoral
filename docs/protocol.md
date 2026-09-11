@@ -452,7 +452,16 @@ run:
 }
 ```
 
-The client resends the program with the missing parts. Malformed names,
+File uploads are cached on disk; tensor, byte string, and library uploads use
+the memory cache. A hash cached for one category need not be present in the
+other. A request referencing the same hash in both categories can share the
+resolved bytes; supplied content is cached in each requested category. Disabling
+the disk cache does not redirect file uploads into the memory cache. Cache
+retention is an optimization, not a guarantee; disk entries can survive server
+restarts but may be evicted or unavailable. Requests retain their own resolved
+bytes, independently of disk eviction.
+
+The client resends the same program with the missing parts. Malformed names,
 duplicates, hash mismatches, and unreferenced parts are invalid requests.
 
 ---
@@ -912,6 +921,7 @@ Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Regi
 Program.upload(id=..., kind="bytes", value=...) -> Register
 Program.upload(id=..., kind="library", value=...) -> Register
 Program.upload(kind="file", blob=..., path=...) -> None
+Program.upload_folder(folder, *, path=...) -> None
 Program.get_function(id=..., module=..., name=..., cpu_only=False) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
@@ -927,6 +937,13 @@ For tensors, the client derives `blob`, `dtype`, and `shape` from `value`; for
 files, the `blob` argument is bytes-like and the client puts its digest on the
 wire. It starts without blob parts, retries a `CACHE_MISS` with the missing
 parts, and falls back to all local blobs if the cache changes between requests.
+
+`upload_folder` is client-only sugar: it snapshots a local directory into
+ordinary file upload instructions. It adds no wire fields, operations, or
+archive format, and all retry requests contain the same instructions. It rejects
+symlinks, special files, and repeated directories;
+empty directories and source file metadata are not uploaded. See the
+[client guide](client_guide.md#files-used-by-uploaded-scripts) for details.
 Returned tensors decode to CPU `numpy.ndarray` (`bfloat16` and `float8_*` via
 `ml_dtypes`). Server errors, transport failures, and malformed responses use
 `KCoralError`, `TransportError`, and `ProtocolError`, which `kcoral` exports

@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
-from .cache import ByteCache
+from .cache import ByteCache, DiskFileCache
 from .config import ServerConfig
 from .errors import ValidationError
 from .events import EventLogger
@@ -62,6 +62,8 @@ def create_app(
     config = config or ServerConfig()
     if config.device not in ("cpu", "gpu"):
         raise ValueError(f"device must be 'cpu' or 'gpu', got {config.device!r}")
+    if config.disk_cache_capacity_bytes < 0:
+        raise ValueError("disk cache capacity must be non-negative")
     worker_gpus = config.gpus if config.device == "gpu" else []
     cpu_workers = config.num_workers if config.device == "cpu" else None
     worker_count = (
@@ -89,6 +91,9 @@ def create_app(
             config=_describe(config),
         )
         app.state.cache = ByteCache(config.cache_capacity_bytes)
+        app.state.file_cache = DiskFileCache(
+            config.disk_cache_dir, config.disk_cache_capacity_bytes
+        )
         try:
             app.state.pool = WorkerPool(
                 worker_gpus,
@@ -197,7 +202,7 @@ def create_app(
         cache: ByteCache = request.app.state.cache
         try:
             program, cache_keys, program_bytes = _parse_execute_request(
-                request.headers.get("content-type"), body_bytes, cache
+                request.headers.get("content-type"), body_bytes, cache, request.app.state.file_cache
             )
         except ValidationError as exc:
             finished(
@@ -390,7 +395,7 @@ def create_app(
 
 
 def _parse_execute_request(
-    content_type: str | None, body: bytes, cache: ByteCache
+    content_type: str | None, body: bytes, cache: ByteCache, file_cache: DiskFileCache
 ) -> tuple[Program, list[str], bytes]:
     parts = parse_multipart(content_type, body)
     program_bytes: bytes | None = None
@@ -425,17 +430,30 @@ def _parse_execute_request(
     if unreferenced:
         raise ValidationError(f"unreferenced blob part(s): {', '.join(sorted(unreferenced))}")
 
+    file_keys = {upload.blob for upload in uploads if isinstance(upload, FileUpload)}
+    memory_keys = {upload.blob for upload in uploads if not isinstance(upload, FileUpload)}
     for blob_hash, data in supplied_blobs.items():
-        cache.put(blob_hash, data)
+        if blob_hash in memory_keys:
+            cache.put(blob_hash, data)
+    file_cache.put_many({key: data for key, data in supplied_blobs.items() if key in file_keys})
 
     missing: list[str] = []
+    for blob_hash in referenced_blobs:
+        data = supplied_blobs.get(blob_hash)
+        if data is None and blob_hash in file_keys:
+            data = file_cache.get(blob_hash)
+        if data is None and blob_hash in memory_keys:
+            data = cache.get(blob_hash)
+        if data is None:
+            missing.append(blob_hash)
+        else:
+            # Owned bytes survive disk eviction while queued or executing. If a
+            # hash has both kinds of upload, the request can share these bytes.
+            program.blob_bytes[blob_hash] = data
     for upload in uploads:
         assert upload.blob is not None
-        data = supplied_blobs.get(upload.blob)
+        data = program.blob_bytes.get(upload.blob)
         if data is None:
-            data = cache.get(upload.blob)
-        if data is None:
-            missing.append(upload.blob)
             continue
         if upload.kind == "tensor":
             assert upload.dtype is not None and upload.shape is not None
@@ -444,10 +462,9 @@ def _parse_execute_request(
                 raise ValidationError(
                     f"tensor upload {upload.id!r} expects {expected_size} bytes, got {len(data)}"
                 )
-        program.blob_bytes[upload.blob] = data
     if missing:
-        raise _CacheMiss(_dedup(missing))
-    return program, referenced_blobs, program_bytes
+        raise _CacheMiss(missing)
+    return program, [key for key in referenced_blobs if key in memory_keys], program_bytes
 
 
 def _describe(config: ServerConfig) -> dict[str, object]:

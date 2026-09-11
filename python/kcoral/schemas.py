@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import Any, Literal
 
 from .errors import ValidationError
@@ -163,7 +164,7 @@ def parse_program(body: Any) -> Program:
 
     handles: set[str] = set()
     return_keys: set[str] = set()
-    file_paths: set[str] = set()
+    file_paths: list[str] = []
     instructions: list[Instruction] = []
 
     # Instructions may appear in any order; ``handles`` grows as they are parsed,
@@ -177,7 +178,7 @@ def parse_program(body: Any) -> Program:
             return_keys.add(instruction.key)
         elif op == "upload" and item.get("kind") == "file":
             instruction = _parse_file_upload(item, index)
-            _add_file_path(instruction.path, file_paths)
+            file_paths.append(instruction.path)
         elif op in ("upload", "get_function", "run"):
             instruction_id = item.get("id")
             if not isinstance(instruction_id, str) or not instruction_id:
@@ -195,6 +196,7 @@ def parse_program(body: Any) -> Program:
             raise ValidationError(f"instruction {index}: unknown op {op!r}")
         instructions.append(instruction)
 
+    _add_file_paths(file_paths, set())
     return Program(instructions=instructions, options=options)
 
 
@@ -236,6 +238,19 @@ def _add_file_path(path: str, paths: set[str]) -> None:
         if path.startswith(existing + "/") or existing.startswith(path + "/"):
             raise ValidationError(f"conflicting file upload paths: {existing!r} and {path!r}")
     paths.add(path)
+
+
+def _add_file_paths(additions: list[str], paths: set[str]) -> None:
+    """Validate a batch in O(n log n), then update the existing declarations."""
+    # Component sorting puts a file immediately before its descendants, even
+    # with intervening names such as "a-b" alongside "a" and "a/b".
+    ordered = sorted([*paths, *additions], key=lambda path: path.split("/"))
+    for previous, current in pairwise(ordered):
+        if current == previous:
+            raise ValidationError(f"duplicate file upload path: {current!r}")
+        if current.startswith(previous + "/"):
+            raise ValidationError(f"conflicting file upload paths: {previous!r} and {current!r}")
+    paths.update(additions)
 
 
 def expected_tensor_nbytes(dtype: str, shape: list[int]) -> int:

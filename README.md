@@ -114,6 +114,8 @@ Useful options include:
 --default-timeout-seconds 300     Default execution timeout
 --output-limit-bytes 1048576      Request-level stdout/stderr capture limit
 --max-request-bytes 268435456     Maximum request body size
+--disk-cache-dir /var/cache/kcoral/files  Persistent file upload cache
+--disk-cache-capacity-bytes 17179869184  File cache content-byte budget (16 GiB)
 --log-dir logs                    Event log directory; empty disables logging
 --no-log-console                  Stop mirroring events to stderr
 --no-log-programs                 Stop keeping each request's program JSON
@@ -213,6 +215,20 @@ the program ends; identical content still benefits from the blob cache:
 ```python
 program.upload(kind="file", blob=tensor_bytes, path="./inputs/tensor.bin")
 ```
+
+Upload a local directory with `program.upload_folder("./assets", path="inputs")`.
+It snapshots regular files as ordinary file upload instructions, including hidden
+files and nested paths. It rejects symlinks and special files; empty directories
+and source permissions/timestamps are not copied. Traversal is iterative, detects
+repeated directories. Retries keep the same instructions and send only
+missing blobs, with the existing full-resend fallback.
+
+File uploads use a disk cache, separate from the memory cache used by tensors,
+bytes, and libraries. It defaults to `$XDG_CACHE_HOME/kcoral/files` (or
+`~/.cache/kcoral/files`) with a 16 GiB content-byte budget. Set `--disk-cache-dir`
+and `--disk-cache-capacity-bytes` to override it; an empty directory option or
+zero capacity disables file caching. The cache survives server restarts and
+stores only hash-named content files, with no index or configuration file.
 
 A kernel built elsewhere can be uploaded instead of source, which is the path
 when the build is customized beyond what a `compile_*` builtin expresses:

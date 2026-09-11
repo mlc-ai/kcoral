@@ -82,6 +82,8 @@ Program.upload(id=..., kind="module", source=..., language="python") -> Register
 Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
 Program.upload(id=..., kind="bytes", value=...) -> Register
 Program.upload(id=..., kind="library", value=...) -> Register
+Program.upload(kind="file", blob=..., path=...) -> None
+Program.upload_folder(folder, *, path=...) -> None
 Program.get_function(id=..., module=..., name=..., cpu_only=False) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
@@ -99,6 +101,13 @@ back to resending every local blob if the cache changes between the two
 requests. Returned tensors decode to CPU `numpy.ndarray` (`bfloat16` and
 `float8_*` via `ml_dtypes`).
 
+`upload_folder` snapshots a local directory into ordinary file upload
+instructions; retries send the same instructions with different blob parts.
+It includes hidden files, rejects links, special files and repeated directories,
+and traverses iteratively. Empty directories and original
+permissions/timestamps are omitted. File uploads use only the disk cache;
+tensor, bytes, and library uploads retain the memory cache.
+
 ## Instructions
 
 ### `upload`
@@ -107,11 +116,12 @@ A field is accepted exactly for the kinds it lists:
 
 | Field | Kinds | Required for | Notes |
 |---|---|---|---|
-| `id` | all | all | Unique handle name |
-| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, or `"library"` |
+| `id` | module, tensor, bytes, library | module, tensor, bytes, library | Unique handle name; rejected for file |
+| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, or `"library"` |
 | `source` | module | module | UTF-8 Python or CUDA source defining a module |
 | `language` | module | — | `"python"` (default) or `"cuda"` |
-| `blob` | tensor, bytes, library | tensor, bytes, library | SHA-256 of the raw bytes |
+| `blob` | tensor, bytes, file, library | tensor, bytes, file, library | SHA-256 of the raw bytes |
+| `path` | file | file | Relative path in the request working directory |
 | `dtype` | tensor | tensor | Tensor data type |
 | `shape` | tensor | tensor | Tensor shape |
 
@@ -131,6 +141,11 @@ formats the server should parse.
 
 A `library` upload is a prebuilt ELF shared object loaded with
 `tvm_ffi.load_module`; use `get_function` to bind one of its exported functions.
+
+A `file` upload returns no register. In the Python client, `blob` is bytes-like;
+the wire field holds its SHA-256. The server copies it into the request's private
+working directory with mode `0600` and removes that directory after execution.
+Its content can remain in the disk cache across requests and server restarts.
 
 ### `run`
 

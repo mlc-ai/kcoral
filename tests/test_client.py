@@ -1,5 +1,6 @@
 """Client tests against a real uvicorn server over TCP."""
 
+import json
 import os
 import threading
 import time
@@ -23,7 +24,7 @@ from kcoral.client import (
 )
 from kcoral.config import ServerConfig
 from kcoral.keys import compute_blob_hash
-from kcoral.multipart import MultipartPart, encode_multipart
+from kcoral.multipart import MultipartPart, encode_multipart, parse_multipart
 from kcoral.schemas import DTYPE_ITEM_SIZES, expected_tensor_nbytes
 from kcoral.testing import fake_runtime_factory
 
@@ -43,9 +44,13 @@ def _start_server(app):
 
 
 @pytest.fixture(scope="module")
-def server_url():
+def server_url(tmp_path_factory):
     app = create_app(
-        ServerConfig(gpus=[0], max_requests_per_worker=0),
+        ServerConfig(
+            gpus=[0],
+            max_requests_per_worker=0,
+            disk_cache_dir=tmp_path_factory.mktemp("file-cache"),
+        ),
         runtime_factory=fake_runtime_factory,
     )
     server, thread, url = _start_server(app)
@@ -138,6 +143,97 @@ def test_file_cache_retry_is_read_from_a_request_local_workspace(server_url):
         assert outcome.results["file"]["data"] == value
         assert not os.path.exists(outcome.results["file"]["cwd"])
     assert first.results["file"]["cwd"] != second.results["file"]["cwd"]
+
+
+@pytest.mark.parametrize("cache_state", ["cold", "warm", "partial", "evicted"])
+def test_folder_upload_reuses_identical_wire_program_for_every_attempt(tmp_path, cache_state):
+    source = tmp_path / "source"
+    (source / "nested").mkdir(parents=True)
+    a, b = b"first", b"second"
+    (source / "a").write_bytes(a)
+    (source / "nested" / "b").write_bytes(b)
+    (source / "duplicate").write_bytes(a)
+    counter = tmp_path / "executions"
+    program = Program()
+    program.upload_folder(source, path="data")
+    # Changing a local file after construction must not change any retry.
+    (source / "a").write_bytes(b"changed")
+    module = program.upload(
+        id="reader_module",
+        kind="module",
+        source=(
+            "from pathlib import Path\n"
+            f"with open({str(counter)!r}, 'a') as counter:\n    counter.write('x')\n"
+            "def main():\n"
+            "    names = ('data/a', 'data/nested/b', 'data/duplicate')\n"
+            "    return [Path(name).read_bytes() for name in names]\n"
+        ),
+    )
+    fn = program.get_function(id="reader", module=module, name="main")
+    value = program.run(id="value", fn=fn)
+    program.return_(key="value", value=value)
+    app = create_app(
+        ServerConfig(
+            gpus=[0],
+            workers_per_gpu=1,
+            max_requests_per_worker=0,
+            disk_cache_dir=tmp_path / "cache",
+        ),
+        runtime_factory=fake_runtime_factory,
+    )
+    server, thread, url = _start_server(app)
+    keys = {compute_blob_hash(a), compute_blob_hash(b)}
+    first_key = compute_blob_hash(a)
+    requests = []
+    statuses = []
+
+    def record_request(request):
+        parts = parse_multipart(request.headers["content-type"], request.read())
+        requests.append(
+            (
+                next(part.data for part in parts if part.name == "program"),
+                {
+                    part.name.removeprefix("blob:")
+                    for part in parts
+                    if part.name.startswith("blob:")
+                },
+            )
+        )
+
+    def record_response(response):
+        response.read()
+        # Completed responses contain binary results; misses are plain JSON.
+        if response.headers["content-type"].startswith("application/json"):
+            statuses.append(response.json()["status"])
+        else:
+            statuses.append("COMPLETED")
+        if cache_state == "evicted" and len(statuses) == 1:
+            (app.state.file_cache.directory / first_key[:2] / first_key).unlink()
+
+    try:
+        if cache_state != "cold":
+            app.state.file_cache.put(first_key, a)
+        if cache_state == "warm":
+            app.state.file_cache.put(compute_blob_hash(b), b)
+        with Client(url) as client:
+            client._http.event_hooks = {"request": [record_request], "response": [record_response]}
+            result = client.execute(program)
+        assert result.completed and result.results == {"value": [a, b, a]}
+        assert counter.read_text() == "x"
+        expected_parts = {
+            "cold": [set(), keys],
+            "warm": [set()],
+            "partial": [set(), {compute_blob_hash(b)}],
+            "evicted": [set(), {compute_blob_hash(b)}, keys],
+        }[cache_state]
+        assert [parts for _, parts in requests] == expected_parts
+        assert all(payload == requests[0][0] for payload, _ in requests)
+        assert json.loads(requests[0][0])["instructions"] == program.instructions
+        assert statuses == ["CACHE_MISS"] * (len(requests) - 1) + ["COMPLETED"]
+        assert all(app.state.cache.get(key) is None for key in keys)
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
 
 
 def test_cache_churn_falls_back_to_all_blobs():
