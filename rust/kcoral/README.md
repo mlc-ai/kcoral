@@ -115,7 +115,6 @@ KCORAL_REQUIRE_GATEWAY_TESTS=1 CUDA_VISIBLE_DEVICES='' \
 The test suite uses simulated execution workers with the real application,
 client, protobuf bindings, and Router. It verifies binary cache negotiation,
 instance replacement during retries, large early responses, cancellation,
-request IDs, graceful tunnel shutdown, and descendant cleanup. The gateway CI
-workflow builds both binaries and requires these tests; missing binaries fail
-instead of silently skipping. GPU resource-release behavior is outside these
-CPU functional tests.
+request IDs, graceful tunnel shutdown, and descendant cleanup. Setting
+`KCORAL_REQUIRE_GATEWAY_TESTS=1` makes missing binaries fail instead of silently
+skipping. GPU resource-release behavior is outside these CPU functional tests.
