@@ -17,6 +17,8 @@ venv/
 # Build artifacts
 build/
 dist/
+docs/_build/
+.docs-venv/
 
 # Misc
 *.log

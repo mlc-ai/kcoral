@@ -1,17 +1,26 @@
-# Instruction protocol
+<a id="instruction-protocol"></a>
 
-The server exposes one synchronous endpoint, `POST /execute` (plus `GET /health`).
-A request body is a **program**: an ordered list of instructions the server runs
-on one worker. There is no session state; every request is self-contained, and
-its handles live only for that request.
+# KCoral Protocol
 
-```text
-POST /execute          Content-Type: multipart/form-data
-GET  /health
+KCoral exposes two HTTP endpoints. HTTP is the request-and-response transport;
+JSON is the text format used for structured fields. A program is an ordered list
+of instructions, executed in one request with no persistent session handles.
+This page describes a direct server. The [Router](server/router.md) preserves
+the execution protocol while adding node selection and routing metadata.
+
+## Endpoints
+
+### GET /health
+
+Read server readiness, worker capacity and the compilation target. This endpoint
+has no request body or query fields.
+
+```http
+GET /health HTTP/1.1
+Host: localhost:8000
 ```
 
-`GET /health` reports readiness, the `target` an uploaded library must be built
-for, and the `versions` a client may want to match:
+Example response:
 
 ```json
 {
@@ -19,242 +28,151 @@ for, and the `versions` a client may want to match:
   "gpu_count": 1,
   "queue_length": 0,
   "target": {"arch": "sm_100a"},
-  "versions": {"torch": "2.14.0+cu132", "cuda": "13.2",
-               "tvm": "0.26.dev0", "tvm_ffi": "0.1.13.post2",
-               "triton": "3.8.0", "cutlass": "4.7.0",
-               "flashinfer": "0.6.17"},
-  "gpus": [{"gpu_id": 0, "lease_depth": 1}],
-  "workers": [{"gpu_id": 0, "status": "busy", "uptime_seconds": 12.4},
-              {"gpu_id": 0, "status": "idle", "uptime_seconds": 12.4}]
+  "versions": {"torch": "2.14.0+cu132", "cuda": "13.2", "tvm_ffi": "0.1.13.post2"},
+  "gpus": [{"gpu_id": 0, "lease_depth": 0}],
+  "workers": [{"worker_id": "gpu0/w0", "gpu_id": 0, "status": "idle", "uptime_seconds": 12.4}]
 }
 ```
 
-Every worker in a pool shares one target — a server whose GPUs disagree refuses
-to start, so run one server per GPU model.
+Version strings above are illustrative; use the values returned by your server.
 
-The same protocol also serves CPU compilation workers started with
-`--device cpu --num-workers N`. Their health response has `gpu_count: 0`, an empty
-`target` and `gpus` list, and `gpu_id: null` on each worker. A client obtains the
-target from a GPU server and supplies it to `builtin.compile_cuda_binary`. CPU
-requests use the same `/execute` envelope and report zero for both lease timings.
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `status` | string | `ok` when the running server responds |
+| `gpu_count` | integer | Number of configured graphics processing units (GPUs); zero for a CPU compilation server |
+| `queue_length` | integer | Requests waiting for a worker |
+| `target` | object | Compilation target, including `arch` on a GPU server; empty on a CPU server |
+| `versions` | object | Installed runtime and toolchain version strings |
+| `gpus` | array | Per-device objects with `gpu_id` and `lease_depth`, the number holding or waiting for exclusive device access |
+| `workers` | array | Per-worker `worker_id`, `gpu_id`, `status` (`idle` or `busy`) and `uptime_seconds` |
 
-Several workers share each GPU (`--workers-per-gpu`), so one can compile while
-another measures on the GPU it is not using. They take turns through a per-GPU
-lease and never run on it at once, so a measurement is unaffected by what else
-the server is doing. `lease_depth` is how many workers hold or are queued for
-that GPU.
+A CPU (central processing unit) compilation worker has `gpu_id: null`, no GPU
+list and no compilation target of its own. Read the target from the GPU server
+and supply it when compiling on a CPU server. Workers on one GPU server must
+agree on the target; the server rejects a mixed-target pool.
 
-By default each worker serves one request (`--max-requests-per-worker 1`) and is
-replaced before its slot returns to the idle pool, so every request starts from a
-fresh CUDA context and allocator state. Setting it to `0` reuses workers, letting
-undefined CUDA behaviour depend on the process's prior history.
+### POST /execute
 
-## Request envelope
+Submit one program. The request body uses `multipart/form-data`, a format that
+combines named parts with individual content types. It carries a JSON `program`
+part and optional binary data parts. The request has no query fields.
 
-`multipart/form-data` is an HTTP body format containing multiple named parts,
-each with its own content type. A boundary string separates the parts. Here it
-combines the JSON program and binary blobs in one request.
-
-The request contains:
-
-| Part | Content type | Required | Notes |
-|---|---|---:|---|
-| `program` | `application/json` | yes | Instructions and options |
-| `blob:<sha256>` | `application/octet-stream` | no | Tensor, byte, file, or library data |
-
-`<sha256>` is the lowercase 64-character SHA-256 of the part bytes.
-
-The `program` part is:
+Example `program` part:
 
 ```json
 {
-  "instructions": [ /* one or more upload / get_function / run / return instructions */ ],
-  "options": { "timeout_seconds": 120 }
+  "instructions": [
+    {"op": "run", "id": "x", "fn": "builtin.zeros", "args": [{"shape": [4], "dtype": "float32"}]},
+    {"op": "return", "key": "output", "value": {"$ref": "x"}}
+  ],
+  "options": {"timeout_seconds": 30}
 }
 ```
 
-| Field | Type | Required | Notes |
-|---|---|---:|---|
-| `instructions` | array | yes | Non-empty, executed top to bottom |
-| `options` | object | no | See [Options](#options) |
+<a id="request-envelope"></a>
 
-A multipart request can be constructed directly in Python:
+#### Request fields
 
-```python
-import hashlib
-import json
+| Part | Content type | Required | Meaning |
+| --- | --- | --- | --- |
+| `program` | `application/json` | yes | The program object below |
+| `blob:<sha256>` | `application/octet-stream` | when not cached | Raw tensor, byte, file or library content referenced by an upload |
 
-import httpx
-import numpy as np
+SHA-256 is the content hash used to identify binary data. `<sha256>` is its
+lowercase 64-character hexadecimal digest over the raw bytes.
 
-input_array = np.arange(256, dtype=np.float32)
-input_bytes = input_array.tobytes()
-input_sha256 = hashlib.sha256(input_bytes).hexdigest()
-program = {
-    "instructions": [
-        {
-            "op": "upload",
-            "id": "input",
-            "kind": "tensor",
-            "blob": input_sha256,
-            "dtype": "float32",
-            "shape": [256],
-        },
-        {"op": "return", "key": "input", "value": {"$ref": "input"}},
-    ]
-}
+| Program field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `instructions` | array | yes | Nonempty list of operations executed in order |
+| `options` | object | no | Execution timeout and captured output limits; see [Options](#options) |
 
-response = httpx.post(
-    "http://server:8000/execute",
-    files={
-        "program": (None, json.dumps(program), "application/json"),
-        f"blob:{input_sha256}": (
-            None,
-            input_bytes,
-            "application/octet-stream",
-        ),
-    },
-)
-response.raise_for_status()
-```
+Each supplied binary part must be referenced by an upload. The server rejects
+duplicate or malformed part names, wrong content types and hashes that do not
+match the supplied bytes. JSON objects reject duplicate keys, unknown fields,
+and non-finite numbers such as NaN and Infinity.
 
-`httpx` generates the boundary and encodes each `files` entry as one named
-multipart part. The higher-level client described below also handles caching
-and response decoding.
+#### Response fields
 
-Each handle-producing `upload` and `run` has a unique string `id`. A reference
-has the exact form `{"$ref": "<id>"}` and must point to an earlier instruction.
-File uploads are side effects and have no `id`.
+The response includes `status` and `request_id`. Execution outcomes also carry
+`results`, request timings and captured output; `FAILED` adds an `error` object.
+`CACHE_MISS` instead carries `missing_blobs` and means no instructions ran.
+The full [response fields and encodings](#response) are defined below.
 
----
+| Outcome | HTTP status | Body |
+| --- | --- | --- |
+| Program completed | 200 | `status: COMPLETED` |
+| An instruction failed | 200 | `status: FAILED` |
+| Referenced bytes are missing | 200 | `status: CACHE_MISS` |
+| Request, capacity, timeout or server failure | 400, 413, 503, 504 or 500 | `status: ERROR`; see [Errors](#errors) |
 
-## `upload`
+`X-Request-ID` also carries the request identifier. Returned bytes or tensors
+make the response multipart; otherwise it is `application/json`.
 
-Uploads a module, tensor, byte string, file, or library. All except files bind a
-handle; a file is copied into the request's working directory instead.
+## Operations
 
-### Module
+Every instruction is a JSON object with an `op` field. The four values are
+`upload`, `get_function`, `run` and `return`.
+
+| Common field | Meaning |
+| --- | --- |
+| `op` | Required operation name; determines the accepted fields |
+| `id` | Required, nonempty, unique identifier when the operation produces a handle; absent for file uploads and `return` |
+| `{"$ref": "id"}` | A reference value naming an earlier handle; it is not a top-level instruction field |
+
+A handle names a value inside this request. `upload` except file upload,
+`get_function` and `run` produce handles. References are resolved recursively
+inside arrays and objects, must have exactly the `$ref` key, and cannot refer
+forward or cross request boundaries. Return keys are unique in a separate
+namespace from instruction identifiers. The operation's field table is exhaustive:
+unlisted fields are rejected.
+
+### upload
+
+Upload source or binary data. A file upload materializes a file; other kinds
+produce a handle.
 
 ```json
 {
   "op": "upload",
-  "id": "kernel",
+  "id": "module",
   "kind": "module",
-  "source": "def main(x):\n    return x * 2\n"
+  "source": "def add_one(x): return x + 1"
 }
 ```
 
-`source` is UTF-8 Python source embedded in the `program` part. The upload
-executes it and binds its complete namespace to the handle. A separate
-`get_function` instruction selects each object that later instructions use:
+#### Fields
 
-```json
-{
-  "op": "get_function",
-  "id": "kernel",
-  "module": {"$ref": "kernels"},
-  "name": "matmul"
-}
-```
+| Field | Kinds | Required for | Notes |
+|---|---|---|---|
+| `op` | all | all | `"upload"` |
+| `id` | module, tensor, bytes, library | module, tensor, bytes, library | Unique handle name; rejected for file |
+| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, or `"library"` |
+| `source` | module | module | UTF-8 Python or CUDA source defining a module |
+| `language` | module | — | `"python"` (default) or `"cuda"` |
+| `blob` | tensor, bytes, file, library | tensor, bytes, file, library | SHA-256 of the raw bytes |
+| `path` | file | file | Relative destination in the request working directory |
+| `dtype` | tensor | tensor | Tensor data type |
+| `shape` | tensor | tensor | Tensor shape |
 
-The selected object need not be callable: a decorator may bind a handle that a
-builtin consumes rather than one `run` calls directly. Using a non-callable
-handle as a `run` `fn` fails at run time.
+#### Details
 
-#### CUDA C modules
+##### Module
 
-`language` selects how `source` is read. It defaults to `"python"`; `"cuda"`
-makes `source` CUDA C that `builtin.compile_cuda` builds into a callable:
+`source` is text carried directly in the program. `language` selects its loader:
+`python` by default or `cuda`. Python source executes to form a namespace;
+CUDA source is retained for compilation. Upload binds the whole module, and
+`get_function` selects an object from it. A selected object need not be directly
+callable: a compiler tool may consume it first.
 
-```json
-{
-  "op": "upload",
-  "id": "kernel_source",
-  "kind": "module",
-  "language": "cuda",
-  "source": "void add_one(tvm::ffi::TensorView x, tvm::ffi::TensorView y) { ... }"
-},
-{
-  "op": "get_function",
-  "id": "kernel",
-  "module": {"$ref": "kernel_source"},
-  "name": "add_one"
-}
-```
+All Python-based kernel languages use the same module upload shape; their
+compilation choices belong in [Builtin Tools](reference/builtins.md) and the
+[benchmark tutorial](tutorials/benchmark-kernel.md#languages-supported-by-remote-compilation).
 
-A CUDA upload executes nothing and binds the source text as a module.
-`get_function` selects the function that a compile builtin will export through
-TVM FFI, so it takes `tvm::ffi::TensorView` parameters and returns `void`; the
-includes and export macro are supplied by the server. `main` is rejected,
-because C++ reserves it as the program entry point.
+<a id="cuda-c-modules"></a>
+<a id="cutedsl-modules"></a>
+<a id="triton-modules"></a>
 
-On a GPU worker, `compile_cuda` builds for that worker's arch-specific target
-(`sm_100a` on Blackwell, `sm_90a` on Hopper). On a CPU worker,
-`compile_cuda_binary` instead requires `{"arch": "sm_100a"}` and returns the
-finished shared-object bytes. The client gets that value from the GPU server's
-health response. Builds are cached on disk by source, target, and flags.
-
-#### CuTeDSL modules
-
-CuTeDSL needs no `language` of its own: a `@cute.jit` kernel is ordinary Python,
-so it uploads as one, `get_function` selects its launcher, and
-`builtin.compile_cutedsl` compiles it.
-
-```json
-{
-  "op": "upload",
-  "id": "kernel_module",
-  "kind": "module",
-  "source": "import cutlass.cute as cute\n\n@cute.kernel\ndef add_kernel(...):\n    ...\n\n@cute.jit\ndef add(...):\n    ...\n"
-},
-{"op": "get_function", "id": "kernel",
- "module": {"$ref": "kernel_module"}, "name": "add"}
-```
-
-CuTeDSL specializes on the tensors it is compiled against, so `compile_cutedsl`
-takes them alongside the handle and they must be the ones the kernel will run
-on. What comes back is callable with plain tensors:
-
-```json
-{"op": "run", "id": "compiled", "fn": "builtin.compile_cutedsl",
- "args": [{"$ref": "kernel"}, {"$ref": "x"}, {"$ref": "y"}]}
-{"op": "run", "id": "invoke", "fn": {"$ref": "compiled"},
- "args": [{"$ref": "x"}, {"$ref": "y"}]}
-```
-
-Nothing is cached, so resubmitting a kernel recompiles it. Uploading a prebuilt
-library instead skips the server-side compile entirely — see
-[Library](#library).
-
-#### Triton modules
-
-A `@triton.jit` kernel is ordinary Python too, and `builtin.compile_triton`
-compiles the handle selected by `get_function`. What Triton needs beyond the
-other languages is a launch grid: it is
-normally computed by the caller at `kernel[grid](...)`, and the server will not
-evaluate a client expression to get one, so it travels as `cfg.grid` — one to
-three positive ints.
-
-```json
-{"op": "run", "id": "compiled", "fn": "builtin.compile_triton",
- "args": [{"$ref": "kernel"}, {"$ref": "x"}, {"$ref": "y"}, 4096, 256,
-          {"grid": [16], "num_warps": 4}]}
-{"op": "run", "id": "invoke", "fn": {"$ref": "compiled"},
- "args": [{"$ref": "x"}, {"$ref": "y"}, 4096, 256]}
-```
-
-Triton specializes on the arguments — dtypes, `tl.constexpr` values, pointer
-alignment — so compiling takes the ones the kernel will be launched on, with
-scalars and constexprs positional alongside the tensors. Every other `cfg` key is
-a launch keyword: `num_warps`, `num_stages`, or a constexpr by name. The compiled
-callable replays them, because Triton keys its cache on them and a launch that
-differs recompiles — back on the GPU's time. The grid is not part of that key;
-the callable carries it because a launch has nowhere else to get one.
-
-The server caches nothing, but Triton's own on-disk cache makes a resubmitted
-kernel much cheaper.
-
-### Tensor
+##### Tensor
 
 ```json
 {
@@ -270,7 +188,7 @@ kernel much cheaper.
 `blob` names raw contiguous row-major bytes. Their length must equal
 `product(shape) * dtype.itemsize`. The tensor is copied to the assigned GPU.
 
-### Bytes
+##### Bytes
 
 ```json
 {
@@ -285,7 +203,7 @@ The handle binds the blob's bytes unchanged. They stay in CPU memory and can be
 passed to uploaded Python code, which makes this kind suitable for files and
 other binary formats that the server should parse.
 
-### File
+##### File
 
 ```json
 {
@@ -313,7 +231,7 @@ Normalized paths must be unique and cannot conflict as a file and directory;
 for example, one program cannot upload both `data` and `data/tensor.bin`. The
 server creates and opens every component without following symbolic links.
 
-### Library
+##### Library
 
 A library is an already-built shared object, whether its bytes came from the
 client's toolchain or a preceding CPU-server request. The GPU server compiles
@@ -411,38 +329,31 @@ upload = {"op": "upload", "id": "kernels", "kind": "library",
 Select the exported function, then call it; no compile instruction appears.
 
 ```json
-{"op": "get_function", "id": "kernel",
- "module": {"$ref": "kernels"}, "name": "add_one"}
-{"op": "run", "id": "invoke", "fn": {"$ref": "kernel"},
- "args": [{"$ref": "x"}, {"$ref": "y"}]}
+[
+  {"op": "get_function", "id": "kernel",
+   "module": {"$ref": "kernels"}, "name": "add_one"},
+  {"op": "run", "id": "invoke", "fn": {"$ref": "kernel"},
+   "args": [{"$ref": "x"}, {"$ref": "y"}]}
+]
 ```
 
-### Fields
+<a id="blob-cache"></a>
 
-A field is accepted exactly for the kinds it lists, and is rejected for the
-others: a `module` upload carries `source` and optional `language`, a `tensor`
-upload carries `blob`, `dtype`, and `shape`, a `bytes` or `library` upload
-carries `blob`, and a `file` upload carries `blob` and `path`.
+#### Memory cache
 
-| Field | Kinds | Required for | Notes |
-|---|---|---|---|
-| `op` | all | all | `"upload"` |
-| `id` | module, tensor, bytes, library | module, tensor, bytes, library | Unique handle name; rejected for file |
-| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, or `"library"` |
-| `source` | module | module | UTF-8 Python or CUDA source defining a module |
-| `language` | module | — | `"python"` (default) or `"cuda"` |
-| `blob` | tensor, bytes, file, library | tensor, bytes, file, library | SHA-256 of the raw bytes |
-| `path` | file | file | Relative destination in the request working directory |
-| `dtype` | tensor | tensor | Tensor data type |
-| `shape` | tensor | tensor | Tensor shape |
+Tensor, byte-string and library uploads share a server-process memory cache
+keyed by the raw content's SHA-256. Module source is carried in the program and
+does not use this blob cache. Reusing bytes does not reuse a previous tensor,
+compiled module or execution: instructions still create request-local values.
 
-### Blob cache
+The memory budget is `cache_capacity_bytes` (`--cache-capacity-bytes`, default
+16 GiB). GiB means 1024 cubed bytes. Less recently used, unpinned entries may
+be evicted. Referenced cached bytes are pinned while requests execute. An object
+larger than one quarter of the budget is not retained by default, but supplied
+bytes still work for that request. Restarting the Python server loses this cache.
 
-The server verifies supplied blobs against their part names and caches them by
-hash. A tensor, byte string, file, or library may reference a cached blob
-without supplying its multipart part, so unchanged data is uploaded once and
-later requests cost only its hash. If any blob is missing, the program does not
-run:
+To use a cached upload, send its hash but omit its binary part. If required
+bytes are absent, the server returns before executing any instruction:
 
 ```json
 {
@@ -452,33 +363,49 @@ run:
 }
 ```
 
-File uploads are cached on disk; tensor, byte string, and library uploads use
-the memory cache. A hash cached for one category need not be present in the
-other. A request referencing the same hash in both categories can share the
-resolved bytes; supplied content is cached in each requested category. Disabling
-the disk cache does not redirect file uploads into the memory cache. Cache
-retention is an optimization, not a guarantee; disk entries can survive server
-restarts but may be evicted or unavailable. Requests retain their own resolved
-bytes, independently of disk eviction.
+Resend the same program with the listed parts. The Python client does this
+automatically, then makes one final attempt with every local blob if another
+cache miss occurs. Cache retention is an optimization rather than a guarantee.
 
-The client resends the same program with the missing parts. Malformed names,
-duplicates, hash mismatches, and unreferenced parts are invalid requests.
+#### File cache
 
----
+File uploads use a separate persistent disk cache. Its default directory is
+`$XDG_CACHE_HOME/kcoral/files` when `XDG_CACHE_HOME` is absolute, otherwise
+`~/.cache/kcoral/files`. The default budget is 16384 MiB (16 GiB); MiB means
+1024 squared bytes. Configure `disk_cache_dir` and
+`disk_cache_capacity_mbytes`, or the corresponding server flags.
 
-## `get_function`
+An empty directory option (`None` in Python) or zero capacity disables file
+caching. It does not move files into the memory cache. Entries can survive a
+server restart but may be evicted, unavailable or too large to retain. Storage
+failure does not prevent execution when the request supplies the bytes.
 
-Binds one named object from an earlier Python or CUDA source module, or one
-exported function from a TVM-FFI library, to a new handle:
+Cached content and materialized files have different lifetimes. Each request
+gets its own working directory; it is removed on completion, failure, timeout
+or worker crash. The content cache may remain. Requests retain their own resolved
+bytes, so disk eviction does not invalidate an admitted request.
+
+The same digest may exist in either or both cache categories. A request using
+that digest for both a file and a tensor, byte string or library can share the
+resolved bytes; newly supplied content is offered to each referenced category.
+A hit in one category does not generally guarantee a hit in the other.
+
+<a id="get_function"></a>
+
+### get_function
+
+Select a named object from an earlier module or library upload.
 
 ```json
 {
   "op": "get_function",
-  "id": "step",
-  "module": {"$ref": "kernels"},
-  "name": "step"
+  "id": "add_one",
+  "module": {"$ref": "module"},
+  "name": "add_one"
 }
 ```
+
+#### Fields
 
 | Field | Type | Required | Notes |
 |---|---|---:|---|
@@ -486,7 +413,9 @@ exported function from a TVM-FFI library, to a new handle:
 | `id` | string | yes | Handle for the callable |
 | `module` | `{"$ref": id}` | yes | Earlier `module` or `library` upload |
 | `name` | string | yes | Non-empty function or object name |
-| `cpu_only` | boolean | no | Defaults to `false`: the function touches no GPU |
+| `cpu_only` | boolean | no | Defaults to `false`; `true` declares that the function does not access the GPU |
+
+#### Details
 
 For Python source, the name indexes the executed namespace. For CUDA source it
 produces the named source function consumed by `compile_cuda` or
@@ -513,81 +442,55 @@ seen by CUPTI, fails the instruction with error kind `gpu_access`. The check is
 best effort: it sees a call only after it has begun, and none from a child
 process. The declaration applies to the handle as a `run` target only.
 
----
+### run
 
-## `run`
-
-Calls a function over earlier values and binds its result to a handle.
+Call a function and bind the value it returns. Here `add_one` and `x` refer to
+earlier instructions.
 
 ```json
 {
   "op": "run",
-  "id": "compiled",
-  "fn": "builtin.compile_tirx",
-  "args": [{"$ref": "kernel"}, {"N": 256}]
+  "id": "y",
+  "fn": {"$ref": "add_one"},
+  "args": [{"$ref": "x"}]
 }
 ```
 
-| Field | Type | Required | Notes |
-|---|---|---:|---|
-| `op` | string | yes | `"run"` |
-| `id` | string | yes | Handle for the result |
-| `fn` | string \| `{"$ref": id}` | yes | Builtin name or callable handle |
-| `args` | array | no | Defaults to `[]` |
+#### Fields
 
-Each argument equal to `{"$ref": "<id>"}` resolves to that handle. Other JSON
-values are passed as literals.
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `op` | string | yes | `run` |
+| `id` | string | yes | Unique handle for the result |
+| `fn` | string or reference | yes | A `builtin.*` name or an earlier callable handle |
+| `args` | array | no | Positional arguments, default `[]` |
 
-### Builtins
+#### Details
 
-| `fn` | Arguments | Returns |
-|---|---|---|
-| `builtin.randn` | `spec = {shape, dtype, seed?}` | a random tensor |
-| `builtin.empty` | `spec = {shape, dtype}` | an uninitialized tensor |
-| `builtin.zeros` | `spec = {shape, dtype}` | a zero tensor |
-| `builtin.compile_tirx` | `(kernel, bindings?)` — `bindings` binds `T.constexpr` dimensions | a compiled module |
-| `builtin.compile_cuda` | `(source, cfg?)` — `cfg = {extra_cuda_cflags?}` | the module's exported function |
-| `builtin.compile_cuda_binary` | `(source, cfg)` — `cfg = {arch, extra_cuda_cflags?}` | shared-object bytes compiled for `arch`, such as `sm_100a` |
-| `builtin.compile_cutedsl` | `(kernel, *tensors, cfg?)` — the tensors it specializes on; `cfg = {options?}` | a compiled kernel |
-| `builtin.compile_triton` | `(kernel, *args, cfg)` — the args it specializes on; `cfg = {grid, **launch keywords}` | a callable bound to that grid |
-| `builtin.benchmark` | `(mod, *tensors, cfg?)` — `cfg = {warmup_ms?, repeat_ms?, warmup?, repeat?, flush_l2?}` | timing statistics |
-| `builtin.check_close` | `(actual, expected, cfg?)` — `cfg = {atol?, rtol?}` | comparison statistics |
-| `builtin.assert_close` | same as `check_close` | comparison statistics; fails on mismatch |
+Reference values in `args` resolve recursively. Other JSON values pass as
+literals. Selecting an object with `get_function` does not prove it is callable;
+using a non-callable object here fails at execution. `run` binds the computed
+value but does not include it in the response; add a `return` to expose it.
 
-`benchmark` returns `latency_ms_median`, `latency_ms_mean`, `latency_ms_min`,
-`latency_ms_max`, `activities_stable`, `flush_l2`, `warmup`, and `repeat`.
-Each latency is the CUPTI span from the earliest to the latest GPU activity of
-one call — kernels, copies, and memsets, plus host time between them; the flush
-and host work outside those endpoints are excluded. `activities_stable` is
-`false` when the iterations did not all launch the same activities.
+<a id="builtins"></a>
 
-`check_close` and `assert_close` compare on `actual`'s device, so `expected` may
-be a CPU tensor, and return `passed`, `max_abs_err`, `max_rel_err`,
-`rtol`, and `atol`.
+The server supplies named functions for allocation, compilation, correctness
+checks and measurement. [Builtin Tools](reference/builtins.md) defines their
+arguments, defaults, returned fields and device requirements.
 
-The four `compile_*` builtins are registered `cpu_only`, so a worker drops its GPU
-lease while their host compilation runs and another worker measures meanwhile.
-CUDA C compilation is split at that boundary: nvcc and linking run without the
-lease, then the worker reacquires it before loading the shared object and
-registering its CUDA module. A new builtin should declare `cpu_only` only when its
-off-lease phase touches no GPU at all. Any driver/module-loading finalization must
-be deferred until the engine reacquires the lease; otherwise it can perturb a
-neighbouring worker's kernel or timing. A `get_function` handle declared
-`cpu_only` runs off the lease the same way, and is checked.
+### return
 
----
-
-## `return`
-
-Selects a handle for the response:
+Select an earlier value for the response.
 
 ```json
 {
   "op": "return",
-  "key": "timing",
-  "value": {"$ref": "benchmark"}
+  "key": "output",
+  "value": {"$ref": "y"}
 }
 ```
+
+#### Fields
 
 | Field | Type | Required | Notes |
 |---|---|---:|---|
@@ -595,13 +498,13 @@ Selects a handle for the response:
 | `key` | string | yes | Unique key in the response `results` object |
 | `value` | `{"$ref": id}` | yes | Earlier handle to return |
 
+#### Details
+
 `return` has no `id` and creates no handle. Instructions run in the order given
 and a `return` may appear anywhere after the instruction it references, so a
 program can interleave returns with the uploads and runs that follow them. A
 `return` that has already run contributes its entry to `results` even if a later
 instruction fails.
-
----
 
 ## Options
 
@@ -650,6 +553,8 @@ and `lease_held_ms` holding it. What is left,
 `elapsed_ms - lease_wait_ms - lease_held_ms`, is work done off the GPU. Only
 `lease_held_ms` is GPU time, so it, not `elapsed_ms`, is what a caller should
 divide by to cost a benchmark in GPU-seconds.
+
+<a id="fields-1"></a>
 
 ### Fields
 
@@ -717,6 +622,8 @@ before the instructions that might fail:
   "request_id": "7f61b94e-034a-4e80-b67d-eca52bb952cc",
   "queue_ms": 0.4,
   "elapsed_ms": 12.7,
+  "lease_wait_ms": 0.0,
+  "lease_held_ms": 10.0,
   "results": {
     "timing": {
       "type": "object",
@@ -734,7 +641,9 @@ before the instructions that might fail:
     "traceback": "Traceback (most recent call last):\n  ..."
   },
   "stdout": "",
-  "stderr": ""
+  "stderr": "",
+  "stdout_truncated": false,
+  "stderr_truncated": false
 }
 ```
 
@@ -861,88 +770,11 @@ The multipart request includes `blob:<input_sha256>` with the raw input tensor.
 
 ## Python client
 
-The Python client constructs the multipart body, tensor hash, and boundary
-automatically:
-
-```python
-import numpy as np
-
-from kcoral import Client, Program
-
-kernel_source = """
-from __future__ import annotations
-from tvm.script import tirx as T
-
-@T.jit
-def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):
-    T.device_entry()
-    i = T.cta_id([N])
-    t = T.thread_id([1])
-    B[i] = A[i] + 1.0
-"""
-input_array = np.arange(256, dtype=np.float32)
-
-program = Program()
-kernel_module = program.upload(
-    id="kernel_module",
-    kind="module",
-    source=kernel_source,
-)
-kernel = program.get_function(id="kernel", module=kernel_module, name="main")
-input_tensor = program.upload(id="input", kind="tensor", value=input_array)
-output = program.run(
-    id="output",
-    fn="builtin.empty",
-    args=[{"shape": [256], "dtype": "float32"}],
-)
-compiled = program.run(
-    id="compiled",
-    fn="builtin.compile_tirx",
-    args=[kernel, {"N": 256}],
-)
-program.run(id="invoke", fn=compiled, args=[input_tensor, output])
-timing = program.run(
-    id="timing",
-    fn="builtin.benchmark",
-    args=[compiled, input_tensor, output, {"warmup": 10, "repeat": 50}],
-)
-program.return_(key="timing", value=timing)
-
-with Client("http://server:8000") as client:
-    result = client.execute(program, timeout_seconds=120)
-
-print(result.results["timing"])
-print(result.stdout, result.stderr)
-```
-
-```python
-Program.upload(id=..., kind="module", source=..., language="python") -> Register
-Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
-Program.upload(id=..., kind="bytes", value=...) -> Register
-Program.upload(id=..., kind="library", value=...) -> Register
-Program.upload_file(blob=..., path=...) -> None
-Program.upload_folder(folder, *, path=...) -> None
-Program.get_function(id=..., module=..., name=..., cpu_only=False) -> Register
-Program.run(id=..., fn=..., args=[]) -> Register
-Program.return_(key=..., value=...) -> None
-
-Client(base_url, *, headers=None, connect_timeout_seconds=10)
-Client.execute(program, *, timeout_seconds=None, output_limit_bytes=None) -> ProgramResult
-Client.health() -> dict
-Client.target() -> dict          # the health response's `target`, e.g. {"arch": "sm_100a"}
-Client.close() -> None
-```
-
-For tensors, the client derives `blob`, `dtype`, and `shape` from `value`; for
-files, the `blob` argument is bytes-like and the client puts its digest on the
-wire. It starts without blob parts, retries a `CACHE_MISS` with the missing
-parts, and falls back to all local blobs if the cache changes between requests.
+The Python package constructs request parts, hashes and response values for you.
+Follow the [quickstart](getting-started/quickstart.md) for a first request, the
+[program guide](client_guide.md) for client construction and lifecycle, and the
+[Python interface reference](reference/python-api.rst) for signatures and errors.
 
 `upload_folder` expands into ordinary file-upload instructions and introduces
-no new protocol operation. See the
-[client guide](client_guide.md#files-used-by-uploaded-scripts) for its Python API.
-
-Returned tensors decode to CPU `numpy.ndarray` (`bfloat16` and `float8_*` via
-`ml_dtypes`). Server errors, transport failures, and malformed responses use
-`KCoralError`, `TransportError`, and `ProtocolError`, which `kcoral` exports
-alongside `Client` and `Program`.
+no new protocol operation. File uploads return no register; see
+[files used by uploaded scripts](client_guide.md#files-used-by-uploaded-scripts).

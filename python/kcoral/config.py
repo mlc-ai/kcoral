@@ -15,6 +15,21 @@ def _default_disk_cache_dir() -> Path:
 
 @dataclass(frozen=True)
 class ServerConfig:
+    """Immutable worker, cache, logging and request-limit configuration.
+
+    Construct with keyword arguments to override the defaults shown in the
+    signature. GPU device identifiers are physical device numbers. CPU mode
+    uses ``num_workers`` instead of ``workers_per_gpu`` and ignores ``gpus``.
+
+    ``log_dir=None`` disables logging for applications created directly in
+    Python. The command-line interface instead defaults its log directory to
+    ``logs``. The file-cache path defaults to an absolute ``XDG_CACHE_HOME``
+    followed by ``kcoral/files``, or ``~/.cache/kcoral/files`` otherwise.
+    Set ``disk_cache_dir=None`` or ``disk_cache_capacity_mbytes=0`` to disable it.
+
+    See the configuration guide for the meaning and unit of every field.
+    """
+
     gpus: list[int] = field(default_factory=lambda: [0])
     log_dir: Path | None = None  # structured event logs; None disables logging
     log_console: bool = True  # mirror events to stderr as well as the log file

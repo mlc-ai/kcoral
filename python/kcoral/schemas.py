@@ -153,6 +153,17 @@ def strict_json_loads(data: bytes | str) -> Any:
 
 
 def parse_program(body: Any) -> Program:
+    """Validate decoded protocol data and build a server-side program.
+
+    :param body: A decoded JSON object with ``instructions`` and optional ``options``.
+    :returns: A :class:`kcoral.schemas.Program` containing validated instructions
+        and parsed options, not the client-side :class:`kcoral.Program` builder.
+    :raises ValidationError: If fields, instruction order, references or paths
+        violate the protocol. References must name earlier instructions.
+
+    This function does not execute instructions, resolve cached blobs or
+    initialize a worker. It is intended for server integration.
+    """
     if not isinstance(body, dict):
         raise ValidationError("program must be a JSON object")
     _check_fields(body, {"instructions", "options"}, {"instructions"}, "program")

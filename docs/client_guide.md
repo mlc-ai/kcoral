@@ -1,233 +1,139 @@
-# Writing a benchmark program
+<a id="writing-a-benchmark-program"></a>
 
-This guide shows how to get a kernel timed on the server, and which choices
-matter along the way. [`protocol.md`](protocol.md) is the field-level
-specification — every instruction, every error code — but you should not need it
-to write a first program.
+# Writing a Program
 
-## The shape of a program
+`Client` connects to a KCoral server. `Program` describes work to run there.
+Building a program does not execute it: `Client.execute()` submits the ordered
+instructions and decodes the selected results. The
+[first GPU program](getting-started/quickstart.md) shows a complete runnable example.
 
-Every benchmark follows the same six steps: upload the kernel, make the tensors,
-compile, check correctness, time it, return the results.
+## Create and close a client
+
+Use a context manager so the client's HTTP connections are closed when you finish.
+HTTP is the request-and-response protocol used between the client and server.
+One client can submit many programs to the same server.
 
 ```python
-import numpy as np
-from kcoral import Client, Program
+from kcoral import Client
 
-KERNEL = r"""
-from __future__ import annotations
-from tvm.script import tirx as T
+with Client("http://localhost:8000", connect_timeout_seconds=10) as client:
+    health = client.health()
+    target = client.target()
+    print(health["versions"])
+    print(target["arch"])
+```
 
-@T.jit
-def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):
-    T.device_entry()
-    i = T.cta_id([N])
-    t = T.thread_id([1])
-    B[i] = A[i] + 1.0
-"""
-REFERENCE = "def main(a):\n    return a + 1.0\n"
+`health()` returns the server's readiness and worker metadata. `target()` reads
+the GPU architecture an uploaded compiled library must match; ask the GPU
+server for it, not a CPU compilation server. Optional `headers` are sent with
+every request. If you do not use `with`, call `client.close()` explicitly.
+
+`connect_timeout_seconds` limits connection establishment. It does not limit
+execution. Pass `timeout_seconds` to `execute()` for a server-side execution
+deadline, and `output_limit_bytes` to limit captured output per stream.
+
+## Build instructions with Program
+
+The builder returns a `Register` when an instruction produces a value. A register
+is a local Python reference to a server-side value identified by its instruction
+name; it is not the value itself.
+
+| Method | Purpose | Returns |
+| --- | --- | --- |
+| `upload(id=..., kind=..., ...)` | Upload module source, a tensor, bytes or a compiled library | `Register` |
+| `upload_file(blob=..., path=...)` | Snapshot bytes as a file in the request workspace | `None` |
+| `upload_folder(folder, path=...)` | Snapshot a local directory as file uploads | `None` |
+| `get_function(id=..., module=..., name=..., cpu_only=False)` | Select a function or object from an earlier module or library | `Register` |
+| `run(id=..., fn=..., args=None)` | Call a selected function or a built-in tool | `Register` |
+| `return_(key=..., value=...)` | Select an earlier value for the response | `None` |
+| `instructions` | Inspect a shallow copy of the wire instruction list | `list[dict]` |
+
+Instruction identifiers must be nonempty and unique. The name `return_` has a
+trailing underscore because `return` is a Python keyword. Use the
+[Python API](reference/python-api.rst) for complete signatures and parameter types.
+
+### Upload and select a function
+
+```python
+from kcoral import Program
 
 program = Program()
-kernel_module = program.upload(id="kernel_module", kind="module", source=KERNEL)
-kernel = program.get_function(id="kernel", module=kernel_module, name="main")
-reference_module = program.upload(id="reference_module", kind="module", source=REFERENCE)
-reference = program.get_function(id="reference", module=reference_module, name="main")
-
-src = program.upload(id="src", kind="tensor", value=np.arange(256, dtype=np.float32))
-dst = program.run(id="dst", fn="builtin.empty", args=[{"shape": [256], "dtype": "float32"}])
-
-compiled = program.run(id="compiled", fn="builtin.compile_tirx", args=[kernel, {"N": 256}])
-program.run(id="invoke", fn=compiled, args=[src, dst])
-
-expected = program.run(id="expected", fn=reference, args=[src])
-check = program.run(id="check", fn="builtin.assert_close", args=[dst, expected])
-timing = program.run(id="timing", fn="builtin.benchmark", args=[compiled, src, dst])
-
-program.return_(key="check", value=check)
-program.return_(key="timing", value=timing)
-
-with Client("http://localhost:8000") as client:
-    result = client.execute(program, timeout_seconds=120)
-print(result.results["timing"]["latency_ms_median"])
-```
-
-Four rules the example relies on:
-
-- **Handles live for one request.** `kernel`, `compiled` and the rest are names
-  inside this one program. A second `client.execute()` call shares nothing with
-  the first, so every program has to upload everything it needs.
-- **`run` computes a value but does not send it back.** It binds the result to a
-  handle that later instructions can use; the response carries only what
-  `return_` selects. Above, `invoke` runs the kernel and the client never sees
-  its result, while `timing` comes back because a `return_` names it.
-- **Functions are selected explicitly.** A module upload binds its Python or
-  CUDA source namespace. `get_function` selects a named object from it; the same
-  instruction selects an exported function from a prebuilt TVM-FFI library.
-- **An uploaded module need not be a kernel.** `REFERENCE` above is ordinary
-  Python executed on the worker, torch included, so `def main(a, b): return a @ b`
-  is a perfectly good baseline to measure against.
-
-Runnable versions of all this live in [`../examples`](../examples):
-`remote_compile_client.py` (four languages, compiled on the server) and
-`library_upload_client.py` (built on the client, uploaded prebuilt).
-`cpu_compile_gpu_execute.py` compiles on a CPU server and uploads the returned
-library to a separate GPU server.
-
-## Where to compile
-
-A kernel can be built by the GPU server, by a separate CPU instance of the same
-server, or by the client and uploaded as a finished shared object.
-
-**Use a CPU server when the compiler and GPU should scale independently.** The
-client reads `arch` from the GPU server, sends source and
-`builtin.compile_cuda_binary` to the CPU server with a normal `/execute`
-request, then uploads the returned bytes as a `library` in a second normal
-request:
-
-```python
-arch = gpu_client.target()["arch"]
-compiled = cpu_client.execute(build_compile_program(source, arch))
-library = compiled.results["library"]
-result = gpu_client.execute(build_benchmark_program(library))
-```
-
-The CPU server starts with `--device cpu --num-workers N`. It has no target of its
-own, reports `gpu_count: 0`, and never initializes PyTorch or a CUDA context.
-Only CUDA C compilation is supported in CPU mode; tensor creation, library
-loading, correctness checks, and timing belong in the GPU request. See
-[`../examples/cpu_compile_gpu_execute.py`](../examples/cpu_compile_gpu_execute.py)
-for the complete programs.
-
-**Compiling on the server is the recommended starting point.** Upload the kernel
-as source text and let one of the `builtin.compile_*` builtins build it. The
-server compiles for its own GPU architecture, and all four compile builtins are
-registered `cpu_only`, meaning the worker gives up the GPU while compiling — so
-your compile does not consume benchmark time, and another worker measures
-meanwhile.
-
-**Upload a prebuilt library** when your kernel needs custom compilation that the
-server's `compile_*` builtins cannot support. You compile the kernel and upload
-the library; the server only loads the compiled object and calls its exported
-functions.
-
-For CUDA C, nvcc and linking run with the GPU lease released; the server
-reacquires it for the short module-loading phase before `compile_cuda` completes.
-Compilation overlaps a neighbouring benchmark, its driver activity does not.
-
-| | Server-side compile | Prebuilt library |
-|---|---|---|
-| Use when | The build is a standard one | Custom compilation the `compile_*` builtins cannot support |
-| Client needs | Nothing | A CUDA toolchain and the right arch |
-| Build surface | `extra_cuda_cflags` (CUDA C), `options` (CuTeDSL) — nothing else | Anything you can run |
-| Repeat cost | Recompiled, except CUDA C (disk-cached) and Triton (its own cache) | Cached by hash — a resubmission re-sends nothing |
-| Fails as | A `compile` error naming the diagnostic | `cudaErrorNoKernelImageForDevice` at launch, if built for the wrong arch |
-
-In practice, reach for a library when the build spans several translation units,
-comes out of a code generator, needs flags the builtins do not expose, or is a
-CUTLASS-heavy recipe you already have working. Anything else is cheaper to
-compile on the server.
-
-A TVM-FFI library may export several launchers. Upload it, bind the functions
-once, then use the returned registers anywhere a compiled kernel is accepted:
-
-```python
-module = program.upload(id="kernels", kind="library", value=library_bytes)
-initialize = program.get_function(id="initialize", module=module, name="initialize")
-step = program.get_function(id="step", module=module, name="step")
-
-program.run(id="initialize_input", fn=initialize, args=[x])
-program.run(id="invoke", fn=step, args=[x, y])
-timing = program.run(
-    id="timing",
-    fn="builtin.benchmark",
-    args=[step, x, y, {"warmup": 10, "repeat": 50}],
+module = program.upload(
+    id="module", kind="module", source="def scale(x, factor): return x * factor"
 )
-program.return_(key="timing", value=timing)
+scale = program.get_function(id="scale", module=module, name="scale")
+x = program.run(id="x", fn="builtin.zeros", args=[{"shape": [4], "dtype": "float32"}])
+y = program.run(id="y", fn=scale, args=[x, 2])
+program.return_(key="output", value=y)
 ```
 
-The module and its derived functions remain request-local handles. They can be
-passed to later `run` instructions but cannot be returned to the client.
+`upload` accepts `module`, `tensor`, `bytes` and `library`. Its file counterpart
+is `upload_file`; `upload(kind="file")` is not a supported Python call. A module
+binds a namespace; `get_function` explicitly selects an object from it. A
+precompiled library follows the same selection step.
 
-A library must be built for the GPU the server runs, not the one sitting in your
-client machine:
+### Pass values and references
+
+`run` accepts a built-in name such as `"builtin.zeros"` or a function register.
+Top-level `Register` arguments are encoded automatically. Inside nested lists
+or dictionaries, write an explicit `{"$ref": register.id}` reference:
 
 ```python
-arch = client.target()["arch"]   # e.g. "sm_100a"
+nested_arguments = [{"input": {"$ref": x.id}, "scale": 2}]
 ```
 
-`protocol.md` covers the three producers a library may come from
-(`TVM_FFI_DLL_EXPORT_TYPED_FUNC`, `tvm.Executable.export_library`, and CuTeDSL's
-`--enable-tvm-ffi`) and the link flags each one needs.
+All references must point to earlier instructions. Ordinary numbers, strings,
+lists and dictionaries pass as literal values, except dictionaries with the exact
+`{"$ref": "id"}` form. The protocol recursively resolves that reference form.
 
-## Languages supported by remote compilation
+## Submit and read results
 
-All four follow the same upload-then-compile shape; what differs is what the
-compile call has to be told.
+```python
+with Client("http://localhost:8000") as client:
+    result = client.execute(program, timeout_seconds=120, output_limit_bytes=65536)
 
-| Language | Upload | Compile call | Watch for |
-|---|---|---|---|
-| TIRx | `source`, then `get_function(name)` | `compile_tirx(kernel, bindings?)` | `bindings` supplies a `@T.jit` kernel's `T.constexpr` values; a `@T.prim_func` is already concrete and rejects them. The source must open with `from __future__ import annotations`, or a shape annotation like `T.Buffer((N,), dtype)` evaluates at `def` time and raises `NameError: N` |
-| CUDA C | `source`, `language="cuda"`, then `get_function(name)` | `compile_cuda(kernel, cfg?)` | `void f(tvm::ffi::TensorView, ...)`; `main` is rejected; builds are cached on disk, so recompiling the same source is much cheaper than the first build |
-| CUDA C on a CPU server | `source`, `language="cuda"`, then `get_function(name)` | `compile_cuda_binary(kernel, {"arch": arch, ...})` | `arch` must come from the GPU server; returns shared-object bytes rather than loading them |
-| CuTeDSL | `source`, then `get_function(name)` | `compile_cutedsl(kernel, *tensors, cfg?)` | Specializes on the tensors, so pass the ones it will run on; nothing is cached |
-| Triton | `source`, then `get_function(name)` | `compile_triton(kernel, *args, cfg)` | `cfg["grid"]` is required; pass scalars and constexprs positionally; other `cfg` keys are launch keywords |
+if result.completed:
+    output = result.results["output"]
+    # result["output"] is the same lookup.
+else:
+    print(result.error)
+print(result.stdout, result.stderr)
+```
 
-If a server lacks the toolchain a builtin needs, that builtin fails with
-`unavailable` and the rest of the server keeps working. `GET /health` lists the
-`versions` actually installed, so check there before assuming a language is
-available.
+The returned `ProgramResult` includes `status`, `request_id`, `results`, `error`,
+captured `stdout` and `stderr`, and flags showing whether either stream was
+truncated. Tensor results are NumPy arrays in client CPU memory; byte results
+are Python `bytes`. Modules and callable handles cannot be returned.
 
-## Measuring
+`queue_ms` measures waiting for a worker. `elapsed_ms` is worker execution time,
+including `lease_wait_ms` waiting for exclusive GPU access and `lease_held_ms`
+holding that access. These request-level durations are different from a kernel's
+measurement returned by `builtin.benchmark`.
 
-`builtin.benchmark(mod, *tensors, cfg?)` reports the **per-iteration GPU activity
-span measured by CUPTI**: from the start of the first kernel, copy, or memset a
-call launches to the end of the last. The L2 flush and host work outside those
-endpoints stay out, but host time *between* two activities does not — several
-kernels with Python in between measures that too. Iterations are drained like
-flashinfer's `bench_gpu_time_with_cupti`, timing a kernel in isolation.
+## Request lifecycle
 
-| `cfg` key | Default | Meaning |
-|---|---|---|
-| `warmup_ms` | `25` | How long to warm up. The server times 5 calls, then runs as many iterations as fit the budget |
-| `repeat_ms` | `100` | How long to spend on timed iterations, converted to a count the same way |
-| `warmup` | — | An explicit warmup iteration count, used instead of the budget |
-| `repeat` | — | An explicit timed iteration count, used instead of the budget |
-| `flush_l2` | `true` | Zero a buffer twice the size of L2 before every call, outside the timed span, so each call starts with a cold cache |
+1. **Construct locally.** Builder calls append instructions; binary uploads
+   snapshot input at the time of the call.
+2. **Resolve uploads.** `execute()` first sends a cache-only request. Missing
+   cached blobs cause a retry with the missing bytes; a further miss causes
+   one last request containing every local blob.
+3. **Execute in order.** One worker runs the instructions. There is no retained
+   program session between submissions.
+4. **Return selected values.** Only `return_` instructions contribute result
+   entries. Returning early preserves that entry if a later instruction fails.
+5. **Clean up.** The request's registers, GPU values and temporary files expire.
+   Closing the client closes connections; it does not erase server caches.
 
-It returns `latency_ms_median`, `latency_ms_mean`, `latency_ms_min` and
-`latency_ms_max`, along with `activities_stable` and the `flush_l2`, `warmup`
-and `repeat` it actually used.
+You may submit the same `Program` again. Its binary snapshots are reused, but
+its instructions execute again and get fresh remote values. You cannot pass a
+register from an earlier request to a new program. The default server replaces
+a worker after each request; opting into worker reuse does not extend the
+protocol lifetime of a register.
 
-- **Check `activities_stable`.** It is `false` when the timed iterations did not
-  all launch the same activities — a data-dependent kernel, say — so the stats
-  describe a mixture rather than one kernel.
-- **Prefer the millisecond budgets to explicit counts.** `warmup_ms` and
-  `repeat_ms` adapt to the kernel, so a microsecond kernel and a millisecond
-  kernel both get a sensible number of iterations. Set `warmup`/`repeat` when
-  two runs have to use identical counts to be comparable; setting both of them
-  also skips the 5-call estimate.
-- **Leave `flush_l2` on** unless you specifically mean to measure a cache-hot
-  kernel. With it off, a small kernel reads its input straight out of L2 and
-  reports a latency it would never reach in a real pipeline.
-- **Account for GPU time with `lease_held_ms`, not `elapsed_ms`.** Workers take
-  turns on a GPU through a lease, and `lease_held_ms` is the part of the request
-  that actually occupied the card. The remainder,
-  `elapsed_ms - lease_wait_ms - lease_held_ms`, happened off the GPU — compiling,
-  mostly.
-
-## Checking correctness
-
-`builtin.check_close(actual, expected, cfg?)` compares two tensors and returns
-`passed`, `max_abs_err`, `max_rel_err`, `rtol` and `atol`. A mismatch is data
-rather than a failure, so the program carries on. `builtin.assert_close` runs
-the same comparison but raises a `correctness` failure when it does not pass,
-which stops the program — use it when there is no point timing a kernel that
-computes the wrong answer. Both default to `rtol=1e-2` and `atol=1e-3`.
-
-Compare on the server against a Python reference module, the way the first
-example does, rather than returning the output and comparing on the client. That
-avoids shipping the output tensor back, and it keeps working for tensors too
-large to return at all.
+File and memory caches retain uploaded bytes as an optimization. A cache hit
+does not preserve a previous tensor's mutations, a compiled callable, or an
+execution's output. Learn the separate rules in the protocol's
+[memory cache](protocol.md#memory-cache) and [file cache](protocol.md#file-cache) sections.
 
 ## Tensors
 
@@ -304,66 +210,6 @@ Each execution gets a fresh working directory, removed after completion,
 failure, timeout, or worker crash. Caching is automatic and best-effort.
 The workspace is not a sandbox for uploaded Python code.
 
-## Calling builtins from uploaded code
-
-An uploaded module executes in the worker process, where the server package
-itself is importable, so builtins can also be called directly rather than
-through `run` instructions:
-
-```python
-SOURCE = r"""
-from kcoral import builtin
-
-def main(x):
-    y = builtin.randn({"shape": [256], "dtype": "float32", "seed": 0})
-    return builtin.check_close(x, y)
-"""
-```
-
-`kcoral.builtin` resolves attributes through the same registry a
-`run` instruction uses, so `builtin.check_close` above is exactly the function
-`"builtin.check_close"` names on the wire — same behaviour, same error kinds.
-`dir()` on the module lists every registered name.
-
-One caveat: the `compile_*` builtins give the GPU up only when they run as
-their own instruction. Called from inside uploaded code, a compile runs while
-the worker holds the GPU, so its time counts against `lease_held_ms` and
-blocks other workers' measurements. Create tensors, compare, and time freely
-from code; keep compiles at the instruction level.
-
-## Running your own code off the GPU
-
-The compile builtins give the GPU up while they run. Uploaded code can do the
-same when it needs no GPU — a reference computed on the CPU, a custom build
-step, parsing an uploaded file — by declaring the function `cpu_only` when
-selecting it:
-
-```python
-CPU_REFERENCE = r"""
-import torch
-
-def main(n):
-    x = torch.arange(n, dtype=torch.float32)  # CPU tensors throughout
-    return x + 1.0
-"""
-
-module = program.upload(id="reference_module", kind="module", source=CPU_REFERENCE)
-reference = program.get_function(id="reference", module=module, name="main", cpu_only=True)
-expected = program.run(id="expected", fn=reference, args=[256])
-check = program.run(id="check", fn="builtin.assert_close", args=[dst, expected])
-```
-
-A `run` of a `cpu_only` handle releases the GPU lease first, so its time lands
-outside `lease_held_ms`. Anything that touches CUDA — creating a tensor on the
-device, reading a GPU tensor back with `.cpu()` — fails the instruction with a
-`gpu_access` error naming the call and the source line, so give such a function
-CPU data. `check_close` and `assert_close` accept its CPU result as `expected`.
-The check is best effort: it cannot see a child process, and it catches a call
-only after it reached the GPU. The flag applies to the handle as a `run` target
-only; passed to `benchmark`, the function runs on the GPU's time.
-[`../examples/remote_compile_client.py`](../examples/remote_compile_client.py)
-checks every kernel against such a reference.
-
 ## Handling failures
 
 A submission ends in one of three ways, and the difference between them matters:
@@ -381,9 +227,29 @@ if result.status == "FAILED":
   `error["kind"]` is one of `parse`, `compile`, `runtime`, `gpu_access`,
   `correctness`, `serialization`, `unavailable` or `engine`, and
   `error["instruction_id"]` names the instruction that failed.
-- **An exception** — the request never produced a program outcome at all.
+- **An exception** — the client could not obtain a valid program outcome.
   `KCoralError` carries `status_code` and `kind`: `503` with a
   `Retry-After` header means no worker was free, and `504` means the program hit
-  `timeout_seconds` (default 300 s, maximum 3600). `TransportError` means the
-  request never reached the server, and `ProtocolError` means the response did
-  not follow the protocol.
+  `timeout_seconds` (default 300 s, maximum 3600). `TransportError` means no HTTP
+  response could be obtained; the server may already have executed the program,
+  so check whether repeating its effects is acceptable before retrying.
+  `ProtocolError` means the response did not follow the protocol.
+
+
+## Next steps
+
+<a id="the-shape-of-a-program"></a>
+<a id="where-to-compile"></a>
+<a id="languages-supported-by-remote-compilation"></a>
+<a id="measuring"></a>
+<a id="checking-correctness"></a>
+<a id="calling-builtins-from-uploaded-code"></a>
+<a id="running-your-own-code-off-the-gpu"></a>
+
+- [Benchmark a Kernel with KCoral](tutorials/benchmark-kernel.md) explains
+  compilation choices, supported languages, correctness checks, measurement,
+  calling built-ins from uploaded code and functions that release the GPU.
+- [KCoral Protocol](protocol.md) defines endpoints and instruction fields.
+- [Builtin Tools](reference/builtins.md) lists server functions and their options.
+- [Agent Integration Guide](tutorials/agent-integration.md) shows how to give a
+  coding agent the repository skill and a concrete execution task.

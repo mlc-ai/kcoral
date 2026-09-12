@@ -58,7 +58,19 @@ def create_app(
     *,
     runtime_factory: Callable | None = None,
 ) -> FastAPI:
-    """Build an application, optionally overriding its mode-specific runtime."""
+    """Build a FastAPI application serving execution and health requests.
+
+    :param config: Worker and request settings; ``None`` uses ``ServerConfig()``.
+    :param runtime_factory: Optional callable that builds a worker runtime,
+        primarily for custom integration and testing. By default the selected
+        CPU or GPU mode determines the runtime.
+    :returns: An application to run with an HTTP server such as uvicorn.
+    :raises ValueError: If the device mode or disk cache capacity is invalid.
+
+    FastAPI is the web application framework used by the server. Worker
+    processes start during the application's serving lifecycle, not when
+    this function is imported. Install the ``server`` extra to use it.
+    """
     config = config or ServerConfig()
     if config.device not in ("cpu", "gpu"):
         raise ValueError(f"device must be 'cpu' or 'gpu', got {config.device!r}")

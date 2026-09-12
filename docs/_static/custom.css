@@ -1,0 +1,13 @@
+/* Keep wide protocol tables and signatures within the reading column. */
+.table-wrapper {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.content .highlight {
+  border-radius: 0.4rem;
+}
+
+.content .sig {
+  overflow-wrap: anywhere;
+}
