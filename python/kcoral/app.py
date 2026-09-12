@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import traceback
 import uuid
 from collections import Counter
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -97,6 +99,9 @@ def create_app(
         # fails first, and a log opened afterwards would never record it.
         events = EventLogger(config.log_dir, console=config.log_console)
         app.state.events = events
+        app.state.instance_id = str(uuid.uuid4())
+        app.state.started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        app.state.started_monotonic = time.monotonic()
         events.emit(
             "server_started",
             run_dir=str(events.run_dir) if events.run_dir else None,
@@ -132,10 +137,41 @@ def create_app(
             versions=app.state.pool.versions(),
             workers=worker_count,
         )
+        tunnel = None
+        app.state.tunnel = None
+
+        async def close_resources():
+            try:
+                if tunnel is not None:
+                    await tunnel.close()
+            finally:
+                await app.state.pool.shutdown_async()
+
         try:
+            if config.router_endpoint is not None:
+                from .tunnel import TunnelManager
+
+                assert config.node_id is not None
+                tunnel = TunnelManager(
+                    app,
+                    endpoint=config.router_endpoint,
+                    node_id=config.node_id,
+                    node_token=config.node_token,
+                    server_instance_id=app.state.instance_id,
+                    slots=worker_count,
+                    events=events,
+                )
+                await tunnel.start()
+                events.emit(
+                    "tunnel_started",
+                    router_endpoint=config.router_endpoint,
+                    node_id=config.node_id,
+                    slots=worker_count,
+                )
+            app.state.tunnel = tunnel
             yield
         finally:
-            cleanup = asyncio.create_task(app.state.pool.shutdown_async())
+            cleanup = asyncio.create_task(close_resources())
             cancelled = False
             try:
                 while not cleanup.done():
@@ -155,7 +191,15 @@ def create_app(
     @app.get("/health")
     async def health(request: Request) -> dict[str, object]:
         pool_health = request.app.state.pool.health()
-        return {"status": "ok", "gpu_count": len(pool_health["gpus"]), **pool_health}
+        return {
+            "status": "ok",
+            "instance_id": request.app.state.instance_id,
+            "started_at": request.app.state.started_at,
+            "uptime_seconds": max(0.0, time.monotonic() - request.app.state.started_monotonic),
+            "active_requests": request.app.state.pool.active_requests,
+            "gpu_count": len(pool_health["gpus"]),
+            **pool_health,
+        }
 
     @app.exception_handler(Exception)
     async def unhandled_error(request: Request, exc: Exception):
@@ -176,7 +220,7 @@ def create_app(
 
     @app.post("/execute")
     async def execute_request(request: Request):
-        request_id = str(uuid.uuid4())
+        request_id = _request_id(request)
         request.state.request_id = request_id  # so unhandled_error can name it
         headers = {"X-Request-ID": request_id}
         events: EventLogger = request.app.state.events
@@ -482,7 +526,13 @@ def _parse_execute_request(
 def _describe(config: ServerConfig) -> dict[str, object]:
     """The settings a run was started with, so a log explains its own behaviour."""
     return {
-        key: str(value) if isinstance(value, Path) else value
+        key: (
+            "<redacted>"
+            if key == "node_token" and value is not None
+            else str(value)
+            if isinstance(value, Path)
+            else value
+        )
         for key, value in asdict(config).items()
     }
 
@@ -567,3 +617,16 @@ def _error_response(status: int, kind: str, message: str, request_id: str) -> JS
         status_code=status,
         headers={"X-Request-ID": request_id},
     )
+
+
+def _request_id(request: Request) -> str:
+    """Accept one canonical UUID, never arbitrary filename or header content."""
+    values = request.headers.getlist("x-request-id")
+    if len(values) == 1:
+        value = values[0]
+        try:
+            if str(uuid.UUID(value)) == value:
+                return value
+        except ValueError:
+            pass
+    return str(uuid.uuid4())

@@ -40,6 +40,16 @@ for CPU compilation, GPU selection, worker settings and limits.
 [File cache configuration](docs/server/deployment.md#file-upload-cache) covers
 the persistent cache directory, capacity and disabling caching.
 
+## Route across nodes
+
+A Router accepts client requests and chooses an available compute node. Each
+node runs `kcoral-node` to supervise its Python server; both node processes
+connect outward to the Router. Clients use the same execution API.
+
+See [Router deployment](docs/server/router.md) for setup, scheduling and failure
+handling, and the [Rust package guide](rust/kcoral/README.md) for implementation
+and integration test commands.
+
 ## Logs
 
 Follow requests and worker events using the [logging guide](docs/server/logging.md).

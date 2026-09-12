@@ -250,6 +250,46 @@ def test_folder_upload_reuses_identical_wire_program_for_every_attempt(
         thread.join(timeout=10)
 
 
+def test_cache_miss_retry_returns_the_router_affinity_header():
+    program = Program()
+    program.upload(id="file", kind="bytes", value=b"contents")
+    blob_hash = program.instructions[0]["blob"]
+    seen_routes = []
+
+    def handler(request):
+        seen_routes.append(request.headers.get("x-kcoral-node"))
+        if len(seen_routes) == 1:
+            return httpx.Response(
+                200,
+                json={"status": "CACHE_MISS", "missing_blobs": [blob_hash]},
+                headers={"X-KCoral-Node": "node-affinity"},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "status": "COMPLETED",
+                "request_id": "request",
+                "queue_ms": 0,
+                "elapsed_ms": 1,
+                "lease_wait_ms": 0,
+                "lease_held_ms": 1,
+                "stdout": "",
+                "stderr": "",
+                "results": {},
+            },
+        )
+
+    with Client("http://router") as client:
+        client._http.close()
+        client._http = httpx.Client(
+            base_url="http://router", transport=httpx.MockTransport(handler)
+        )
+        outcome = client.execute(program)
+
+    assert outcome.completed
+    assert seen_routes == [None, "node-affinity"]
+
+
 def test_cache_churn_falls_back_to_all_blobs():
     app = create_app(
         ServerConfig(gpus=[0], workers_per_gpu=1, cache_capacity_bytes=16),

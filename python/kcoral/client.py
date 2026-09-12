@@ -472,7 +472,9 @@ class Client:
         if output_limit_bytes is not None:
             options["output_limit_bytes"] = output_limit_bytes
 
-        body, binary_parts = self._post_program(program, options, include_blobs=set())
+        body, binary_parts, route = self._post_program(
+            program, options, include_blobs=set(), route=None
+        )
         if body.get("status") == "CACHE_MISS":
             if binary_parts:
                 raise ProtocolError("CACHE_MISS response must not contain binary parts")
@@ -482,10 +484,15 @@ class Client:
                 raise ProtocolError(
                     f"server misses blobs with no local bytes to send: {sorted(unavailable)}"
                 )
-            body, binary_parts = self._post_program(program, options, include_blobs=missing)
+            body, binary_parts, route = self._post_program(
+                program, options, include_blobs=missing, route=route
+            )
             if body.get("status") == "CACHE_MISS":
-                body, binary_parts = self._post_program(
-                    program, options, include_blobs=set(program._blobs)
+                body, binary_parts, route = self._post_program(
+                    program,
+                    options,
+                    include_blobs=set(program._blobs),
+                    route=route,
                 )
             if body.get("status") == "CACHE_MISS":
                 raise ProtocolError("server still reports CACHE_MISS after a complete blob resend")
@@ -522,8 +529,12 @@ class Client:
         return target
 
     def _post_program(
-        self, program: Program, options: dict[str, Any], include_blobs: set[str]
-    ) -> tuple[dict[str, Any], dict[str, bytes]]:
+        self,
+        program: Program,
+        options: dict[str, Any],
+        include_blobs: set[str],
+        route: str | None,
+    ) -> tuple[dict[str, Any], dict[str, bytes], str | None]:
         payload: dict[str, Any] = {"instructions": program.instructions}
         if options:
             payload["options"] = options
@@ -547,10 +558,15 @@ class Client:
             for blob_hash, data in program._blobs.items()
             if blob_hash in include_blobs
         )
-        response = self._request("POST", "/execute", files=files)
+        headers = {"X-KCoral-Node": route} if route else None
+        response = self._request("POST", "/execute", files=files, headers=headers)
         if response.status_code != 200:
             raise _server_error(response)
-        return _response_body(response)
+        next_route = response.headers.get("X-KCoral-Node")
+        if next_route is not None and not (0 < len(next_route) <= 512):
+            next_route = None
+        body, binary_parts = _response_body(response)
+        return body, binary_parts, next_route
 
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         try:

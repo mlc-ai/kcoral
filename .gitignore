@@ -19,6 +19,7 @@ build/
 dist/
 docs/_build/
 .docs-venv/
+target/
 
 # Misc
 *.log

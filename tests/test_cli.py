@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from kcoral.__main__ import build_parser, config_from_args
+from kcoral.app import _describe
 
 
 def parse(argv):
@@ -41,6 +42,22 @@ def test_host_env():
         check=True,
     )
     assert out.stdout.strip() == "192.0.2.1"
+
+
+def test_outbound_tunnel_environment_is_used_and_token_is_redacted(monkeypatch):
+    monkeypatch.setenv("KCORAL_ROUTER_ENDPOINT", "https://router.example.com/")
+    monkeypatch.setenv("KCORAL_NODE_ID", "gpu-a")
+    monkeypatch.setenv("KCORAL_NODE_TOKEN", "sensitive-node-token")
+    config = parse([])
+    assert config.router_endpoint == "https://router.example.com/"
+    assert config.node_id == "gpu-a"
+    assert config.node_token == "sensitive-node-token"
+    assert _describe(config)["node_token"] == "<redacted>"
+
+
+def test_outbound_tunnel_endpoint_and_node_id_are_configured_together():
+    with pytest.raises(SystemExit, match="configured together"):
+        parse(["--router-endpoint", "http://router:9000/"])
 
 
 def test_all_flags_reach_config():

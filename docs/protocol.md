@@ -25,6 +25,10 @@ Example response:
 ```json
 {
   "status": "ok",
+  "instance_id": "09dc4eaa-a8b1-46cf-b5fb-a3448dcd7ca6",
+  "started_at": "2026-08-29T18:42:11.019012Z",
+  "uptime_seconds": 12.4,
+  "active_requests": 0,
   "gpu_count": 1,
   "queue_length": 0,
   "target": {"arch": "sm_100a"},
@@ -35,6 +39,29 @@ Example response:
 ```
 
 Version strings above are illustrative; use the values returned by your server.
+
+`instance_id` changes whenever the server process starts, including when a new
+process reuses the same address. `active_requests` is the count of requests
+registered with the worker pool, including requests waiting for a worker.
+SIGTERM or Ctrl+C starts graceful shutdown; there is no administrative HTTP
+endpoint.
+
+Through the Rust router, `/execute` uses the same program and response format.
+`X-KCoral-Node` identifies the selected node and serves as a cache-retry
+preference. A missing or unavailable preference falls back to another eligible
+node. Router `/health` describes nodes in its `workers` array and carries
+router-local `active_requests` and `queue_length`; it does not aggregate
+`gpu_count`. The standalone Python health schema above remains unchanged.
+
+Each HTTP attempt has an `X-Request-ID` header matching the result/error
+`request_id` and the server events. The router generates a UUID before admission
+and forwards it to Python. A direct Python request may supply exactly one
+canonical lowercase UUID; absent, duplicate, or invalid IDs are replaced.
+Retries after `CACHE_MISS` are separate HTTP attempts with separate IDs.
+
+Every worker in a pool shares one target — a server whose GPUs disagree refuses
+to start, so run one server per GPU model.
+
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -285,15 +312,14 @@ of its own:
 ```python
 from tvm.script import tirx as T
 
+
 @T.prim_func
-def add_one(A: T.Buffer((256,), "float32"), B: T.Buffer((256,), "float32")):
-    ...  # kernel body
+def add_one(A: T.Buffer((256,), "float32"), B: T.Buffer((256,), "float32")): ...  # kernel body
+
 
 target = tvm.target.Target({"kind": "cuda", "arch": "sm_100a"})
 with target:  # the tirx pipeline reads the arch from Target.current()
-    executable = tvm.compile(
-        tvm.IRModule({"add_one": add_one}), target=target, tir_pipeline="tirx"
-    )
+    executable = tvm.compile(tvm.IRModule({"add_one": add_one}), target=target, tir_pipeline="tirx")
 executable.export_library("add_one.so")
 ```
 
@@ -322,8 +348,12 @@ part, exactly as a tensor's do.
 
 ```python
 data = pathlib.Path("add_one.so").read_bytes()
-upload = {"op": "upload", "id": "kernels", "kind": "library",
-          "blob": hashlib.sha256(data).hexdigest()}
+upload = {
+    "op": "upload",
+    "id": "kernels",
+    "kind": "library",
+    "blob": hashlib.sha256(data).hexdigest(),
+}
 ```
 
 Select the exported function, then call it; no compile instruction appears.

@@ -19,6 +19,8 @@ dependencies = [
 [project.optional-dependencies]
 server = [
   "fastapi>=0.110",
+  "grpcio>=1.66.2",
+  "protobuf>=5.27.2",
   "uvicorn>=0.29",
 ]
 
@@ -69,6 +71,7 @@ pythonpath = ["python"]
 testpaths = ["tests"]
 
 [tool.ruff]
+extend-exclude = ["python/kcoral/kcoral_gateway_pb2.py", "python/kcoral/kcoral_gateway_pb2_grpc.py"]
 line-length = 100
 target-version = "py310"
 # First-party detection for import sorting; ruff's default is [".", "src"].

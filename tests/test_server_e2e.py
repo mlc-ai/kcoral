@@ -85,6 +85,18 @@ def test_health():
         data = client.get("/health").json()
     assert data["status"] == "ok" and data["gpu_count"] == 1 and data["queue_length"] == 0
     assert data["workers"][0]["status"] == "idle"
+    assert data["instance_id"] and data["started_at"].endswith("Z")
+    assert data["uptime_seconds"] >= 0
+    assert data["active_requests"] == 0
+
+
+def test_instance_id_changes_with_server_lifecycle():
+    app = create_app(ServerConfig(max_requests_per_worker=0), runtime_factory=fake_runtime_factory)
+    with TestClient(app) as client:
+        first = client.get("/health").json()["instance_id"]
+    with TestClient(app) as client:
+        second = client.get("/health").json()["instance_id"]
+    assert first != second
 
 
 def test_cpu_health_and_execution_have_no_gpu_lease():
@@ -1167,3 +1179,26 @@ def test_compiling_does_not_hold_the_gpu():
     # return - after the compile, which is all this measures.
     assert result["elapsed_ms"] > 100
     assert result["lease_held_ms"] < 50
+
+
+def test_request_ids_accept_one_canonical_uuid_and_replace_unsafe_values():
+    import uuid
+
+    valid = "c1a92a02-34e1-4c28-a84e-a9c35c7e672b"
+    cases = [
+        ([], False),
+        ([("x-request-id", valid)], True),
+        ([("x-request-id", "../unsafe-path")], False),
+        ([("x-request-id", valid.upper())], False),
+        ([("x-request-id", valid), ("x-request-id", valid)], False),
+    ]
+    config = ServerConfig(device="cpu", num_workers=1, max_requests_per_worker=0)
+    with make_client(config) as client:
+        for headers, accepted in cases:
+            # Early rejection also uses the shared, validated request ID.
+            response = client.post("/execute", content=b"invalid", headers=headers)
+            request_id = response.headers["x-request-id"]
+            assert str(uuid.UUID(request_id)) == request_id
+            assert response.json()["request_id"] == request_id
+            assert (request_id == valid) is accepted
+        assert client.post("/admin/drain").status_code == 404
