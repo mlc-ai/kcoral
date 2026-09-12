@@ -13,6 +13,7 @@ use nix::{
 };
 use rand::Rng;
 use reqwest::Url;
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::{
     process::Child,
@@ -23,6 +24,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::proto::{router_gateway_client::RouterGatewayClient, SupervisorStatus};
+use crate::validate_node_id;
 
 #[derive(Clone, Debug)]
 pub struct ServerLifecycleConfig {
@@ -95,13 +97,7 @@ impl RouterLinkConfig {
 
 #[derive(Clone, Debug, Default)]
 struct HealthSnapshot {
-    server_healthy: bool,
-    server_instance_id: String,
-    worker_count: u64,
-    busy_workers: u64,
-    target: HashMap<String, String>,
-    versions: HashMap<String, String>,
-    last_error: String,
+    status: SupervisorStatus,
     observed_at: Option<Instant>,
 }
 
@@ -162,7 +158,7 @@ impl SupervisorState {
         })
         .await;
 
-        let mut parsed = match result {
+        let parsed = match result {
             Ok(Ok(parsed)) => parsed,
             Ok(Err(error)) => return self.record_health_error(error.to_string()).await,
             Err(_) => {
@@ -171,18 +167,20 @@ impl SupervisorState {
                     .await
             }
         };
-        parsed.observed_at = Some(Instant::now());
-
+        let observed_at = Some(Instant::now());
         let mut health = self.health.write().await;
-        let old_instance = health.server_instance_id.clone();
-        *health = parsed;
-        if !old_instance.is_empty() && old_instance != health.server_instance_id {
+        let old_instance = &health.status.server_instance_id;
+        if !old_instance.is_empty() && *old_instance != parsed.server_instance_id {
             info!(
                 old_instance,
-                new_instance = health.server_instance_id,
+                new_instance = parsed.server_instance_id,
                 "local KCoral Server instance changed"
             );
         }
+        *health = HealthSnapshot {
+            status: parsed,
+            observed_at,
+        };
         drop(health);
         self.notify_status();
         Ok(())
@@ -195,8 +193,8 @@ impl SupervisorState {
 
     async fn mark_server_unavailable(&self, error: &str) {
         let mut health = self.health.write().await;
-        health.server_healthy = false;
-        health.last_error = error.to_string();
+        health.status.server_healthy = false;
+        health.status.last_error = error.to_string();
         drop(health);
         self.notify_status();
     }
@@ -211,14 +209,7 @@ impl SupervisorState {
         let health = self.health.read().await;
         SupervisorStatus {
             node_id: self.node_id.to_string(),
-            server_healthy: health.server_healthy,
             supervisor_instance_id: self.supervisor_instance_id.to_string(),
-            server_instance_id: health.server_instance_id.clone(),
-            worker_count: health.worker_count,
-            busy_workers: health.busy_workers,
-            target: health.target.clone(),
-            versions: health.versions.clone(),
-            last_error: health.last_error.clone(),
             health_age_millis: health
                 .observed_at
                 .map(|observed| {
@@ -229,6 +220,7 @@ impl SupervisorState {
                         .unwrap_or(u64::MAX)
                 })
                 .unwrap_or(u64::MAX),
+            ..health.status.clone()
         }
     }
 
@@ -422,7 +414,7 @@ pub async fn run_server_lifecycle(
     }
 }
 
-fn parse_health(body: Value) -> anyhow::Result<HealthSnapshot> {
+fn parse_health(body: Value) -> anyhow::Result<SupervisorStatus> {
     let object = body
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("health response is not an object"))?;
@@ -447,31 +439,15 @@ fn parse_health(body: Value) -> anyhow::Result<HealthSnapshot> {
     }) {
         anyhow::bail!("health response has invalid worker status");
     }
-    Ok(HealthSnapshot {
+    Ok(SupervisorStatus {
         server_healthy: true,
         server_instance_id,
         worker_count: workers.len() as u64,
         busy_workers,
         target: required_string_map(object.get("target"), "target")?,
         versions: required_string_map(object.get("versions"), "versions")?,
-        last_error: String::new(),
-        observed_at: None,
+        ..SupervisorStatus::default()
     })
-}
-
-fn validate_node_id(value: &str) -> anyhow::Result<()> {
-    let valid = (1..=64).contains(&value.len())
-        && value
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte));
-    if !valid {
-        anyhow::bail!("invalid node identifier {value:?}");
-    }
-    Ok(())
 }
 
 fn required_string(value: Option<&Value>, name: &str) -> anyhow::Result<String> {
@@ -486,21 +462,8 @@ fn required_string_map(
     value: Option<&Value>,
     name: &str,
 ) -> anyhow::Result<HashMap<String, String>> {
-    value
-        .and_then(Value::as_object)
-        .filter(|object| object.values().all(Value::is_string))
-        .map(|object| {
-            object
-                .iter()
-                .map(|(key, value)| {
-                    (
-                        key.clone(),
-                        value.as_str().expect("validated above").to_string(),
-                    )
-                })
-                .collect()
-        })
-        .ok_or_else(|| anyhow::anyhow!("health response has invalid {name}"))
+    HashMap::deserialize(value.unwrap_or(&Value::Null))
+        .map_err(|_| anyhow::anyhow!("health response has invalid {name}"))
 }
 
 fn spawn_server(

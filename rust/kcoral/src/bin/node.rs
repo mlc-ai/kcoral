@@ -1,8 +1,8 @@
-use std::{ffi::OsString, str::FromStr, time::Duration};
+use std::{ffi::OsString, str::FromStr};
 
 use clap::Parser;
 use kcoral::{
-    init_tracing,
+    init_tracing, nonnegative_duration, positive_duration, shutdown_signal,
     supervisor::{run_server_lifecycle, RouterLinkConfig, ServerLifecycleConfig, SupervisorState},
 };
 use tokio::sync::watch;
@@ -55,35 +55,44 @@ async fn main() -> anyhow::Result<()> {
     init_tracing();
     let args = Args::parse();
     kcoral::process::adopt_server_descendants()?;
-    let health_timeout = positive(args.health_timeout_seconds, "health timeout")?;
+    let health_timeout = positive_duration(args.health_timeout_seconds, "health timeout")?;
     let service = SupervisorState::new(
         args.node_id.clone(),
         reqwest::Url::from_str(&args.server_url)?,
         health_timeout,
     )?;
     let supervisor_config = ServerLifecycleConfig {
-        health_interval: positive(args.health_interval_seconds, "health interval")?,
+        health_interval: positive_duration(args.health_interval_seconds, "health interval")?,
         failure_threshold: args.failure_threshold,
-        startup_grace: nonnegative(args.startup_grace_seconds, "startup grace")?,
-        stable_reset: nonnegative(args.stable_reset_seconds, "stable reset")?,
-        termination_grace: nonnegative(args.termination_grace_seconds, "termination grace")?,
-        restart_min_delay: positive(args.restart_min_delay_seconds, "minimum restart delay")?,
-        restart_max_delay: positive(args.restart_max_delay_seconds, "maximum restart delay")?,
+        startup_grace: nonnegative_duration(args.startup_grace_seconds, "startup grace")?,
+        stable_reset: nonnegative_duration(args.stable_reset_seconds, "stable reset")?,
+        termination_grace: nonnegative_duration(
+            args.termination_grace_seconds,
+            "termination grace",
+        )?,
+        restart_min_delay: positive_duration(
+            args.restart_min_delay_seconds,
+            "minimum restart delay",
+        )?,
+        restart_max_delay: positive_duration(
+            args.restart_max_delay_seconds,
+            "maximum restart delay",
+        )?,
         restart_jitter: args.restart_jitter,
     };
     let control_config = RouterLinkConfig {
         router_endpoint: args.router_endpoint.clone(),
         node_token: args.node_token.clone(),
-        heartbeat_interval: positive(args.health_interval_seconds, "control heartbeat")?,
-        connect_timeout: positive(
+        heartbeat_interval: positive_duration(args.health_interval_seconds, "control heartbeat")?,
+        connect_timeout: positive_duration(
             args.control_connect_timeout_seconds,
             "control connect timeout",
         )?,
-        reconnect_min_delay: positive(
+        reconnect_min_delay: positive_duration(
             args.control_reconnect_min_delay_seconds,
             "minimum control reconnect delay",
         )?,
-        reconnect_max_delay: positive(
+        reconnect_max_delay: positive_duration(
             args.control_reconnect_max_delay_seconds,
             "maximum control reconnect delay",
         )?,
@@ -134,35 +143,4 @@ async fn main() -> anyhow::Result<()> {
     };
     signal_task.abort();
     result
-}
-
-fn positive(value: f64, name: &str) -> anyhow::Result<Duration> {
-    if !value.is_finite() || value <= 0.0 {
-        anyhow::bail!("{name} must be positive");
-    }
-    Ok(Duration::from_secs_f64(value))
-}
-
-fn nonnegative(value: f64, name: &str) -> anyhow::Result<Duration> {
-    if !value.is_finite() || value < 0.0 {
-        anyhow::bail!("{name} must be non-negative");
-    }
-    Ok(Duration::from_secs_f64(value))
-}
-
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("install SIGTERM handler");
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = terminate.recv() => {}
-        }
-    }
-    #[cfg(not(unix))]
-    tokio::signal::ctrl_c()
-        .await
-        .expect("install Ctrl-C handler");
 }

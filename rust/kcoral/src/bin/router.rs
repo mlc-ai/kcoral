@@ -1,10 +1,10 @@
-use std::{net::SocketAddr, time::Duration};
+use std::net::SocketAddr;
 
 use clap::Parser;
 use kcoral::{
-    init_tracing,
+    init_tracing, nonnegative_duration, positive_duration,
     router::{serve, NodePool, RouterConfig},
-    DEFAULT_MAX_REQUEST_BYTES,
+    shutdown_signal, DEFAULT_MAX_REQUEST_BYTES,
 };
 use tokio::sync::watch;
 
@@ -64,35 +64,4 @@ async fn main() -> anyhow::Result<()> {
     let _ = shutdown_tx.send(true);
     health_task.await?;
     Ok(())
-}
-
-fn positive_duration(value: f64, name: &str) -> anyhow::Result<Duration> {
-    if !value.is_finite() || value <= 0.0 {
-        anyhow::bail!("{name} must be positive");
-    }
-    Ok(Duration::from_secs_f64(value))
-}
-
-fn nonnegative_duration(value: f64, name: &str) -> anyhow::Result<Duration> {
-    if !value.is_finite() || value < 0.0 {
-        anyhow::bail!("{name} must be non-negative");
-    }
-    Ok(Duration::from_secs_f64(value))
-}
-
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("install SIGTERM handler");
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = terminate.recv() => {}
-        }
-    }
-    #[cfg(not(unix))]
-    tokio::signal::ctrl_c()
-        .await
-        .expect("install Ctrl-C handler");
 }

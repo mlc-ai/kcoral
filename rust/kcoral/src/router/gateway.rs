@@ -156,7 +156,7 @@ impl RouterGateway for RouterGatewayService {
 
         let outgoing = try_stream! {
             loop {
-                if *closed.borrow() { Err(closing_slot.close_status())?; }
+                if closed.borrow().is_some() { Err(closing_slot.close_status())?; }
                 let item = tokio::select! {
                     item = outgoing_rx.recv() => item,
                     _ = closed.changed() => Some(Err(closing_slot.close_status())),

@@ -1,14 +1,12 @@
 use super::DATA_CHUNK_BYTES;
 use crate::proto::{slot_frame::Payload, Cancel, SlotFrame, SupervisorStatus};
+use crate::validate_node_id;
 use rand::Rng;
 use serde_json::{json, Value};
 use std::{
     cmp::Ordering,
     collections::{HashMap, VecDeque},
-    sync::{
-        atomic::{AtomicBool, Ordering as AtomicOrdering},
-        Arc,
-    },
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, Mutex, Notify, Semaphore};
@@ -49,8 +47,9 @@ impl RouterConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum NodeStatus {
+    #[default]
     Starting,
     Ready,
     Recovering,
@@ -76,28 +75,15 @@ struct Cohort {
     versions: HashMap<String, String>,
 }
 
-#[derive(Clone, Debug)]
-struct NodeReport {
-    supervisor_instance_id: String,
-    server_instance_id: String,
-
-    worker_count: u64,
-    busy_workers: u64,
-
-    cohort: Cohort,
-}
-
 pub(super) struct Slot {
     node_id: String,
     server_instance_id: String,
     slot_id: String,
     // Identifies this connection, so a late old cleanup cannot remove a replacement.
     connection_id: String,
-    closed: tokio::sync::watch::Sender<bool>,
-    close_reason: std::sync::Mutex<String>,
+    closed: tokio::sync::watch::Sender<Option<String>>,
     outgoing: mpsc::Sender<Result<SlotFrame, Status>>,
     incoming: Mutex<mpsc::Receiver<SlotFrame>>,
-    connected: AtomicBool,
 }
 
 impl Slot {
@@ -116,28 +102,24 @@ impl Slot {
             connection_id,
             outgoing,
             incoming: Mutex::new(incoming),
-            connected: AtomicBool::new(true),
-            closed: tokio::sync::watch::channel(false).0,
-            close_reason: std::sync::Mutex::new(String::new()),
+            closed: tokio::sync::watch::channel(None).0,
         }
     }
-    pub(super) fn subscribe_closed(&self) -> tokio::sync::watch::Receiver<bool> {
+    pub(super) fn subscribe_closed(&self) -> tokio::sync::watch::Receiver<Option<String>> {
         self.closed.subscribe()
     }
 
     fn disconnect(&self, reason: &str) {
-        *self.close_reason.lock().unwrap() = reason.to_string();
-        self.connected.store(false, AtomicOrdering::Release);
-        self.closed.send_replace(true);
+        self.closed.send_replace(Some(reason.to_string()));
     }
 
     pub(super) fn close_status(&self) -> Status {
-        Status::cancelled(self.close_reason.lock().unwrap().clone())
+        Status::cancelled(self.closed.borrow().as_deref().unwrap_or_default())
     }
 
     pub(super) async fn send(&self, frame: SlotFrame) -> Result<(), Status> {
         let mut closed = self.closed.subscribe();
-        if *closed.borrow() {
+        if closed.borrow().is_some() {
             return Err(Status::unavailable("slot disconnected"));
         }
         tokio::select! {
@@ -149,7 +131,7 @@ impl Slot {
     pub(super) async fn receive(&self) -> Option<SlotFrame> {
         let mut incoming = self.incoming.lock().await;
         let mut closed = self.closed.subscribe();
-        if *closed.borrow() {
+        if closed.borrow().is_some() {
             return incoming.try_recv().ok();
         }
         tokio::select! {
@@ -160,6 +142,7 @@ impl Slot {
     }
 }
 
+#[derive(Default)]
 struct Node {
     name: String,
     status: NodeStatus,
@@ -188,26 +171,8 @@ impl Node {
     fn new(name: String) -> Self {
         Self {
             name,
-            status: NodeStatus::Starting,
-            control_connection_id: None,
-            supervisor_instance_id: String::new(),
-            server_instance_id: String::new(),
-            restarts: 0,
-            consecutive_failures: 0,
-            recovery_successes: 0,
-            last_control: None,
             disconnected_since: Some(Instant::now()),
-            last_success: None,
-            last_error: String::new(),
-
-            worker_count: 0,
-            busy_workers: 0,
-
-            in_flight: 0,
-            last_selected: 0,
-            saturated_until: None,
-            slots: HashMap::new(),
-            idle_slots: VecDeque::new(),
+            ..Self::default()
         }
     }
 
@@ -224,12 +189,9 @@ impl Node {
         }
         self.idle_slots.len().try_into().unwrap_or(u64::MAX)
     }
-
-    fn connected_slots(&self) -> usize {
-        self.slots.len()
-    }
 }
 
+#[derive(Default)]
 struct PoolState {
     nodes: Vec<Node>,
     node_indices: HashMap<String, usize>,
@@ -262,12 +224,7 @@ impl NodePool {
                 queue_slots: Arc::new(Semaphore::new(config.max_queued_requests)),
                 config,
                 instance_id: Uuid::new_v4().to_string(),
-                state: Mutex::new(PoolState {
-                    nodes: Vec::new(),
-                    node_indices: HashMap::new(),
-                    cohort: None,
-                    selection_sequence: 0,
-                }),
+                state: Mutex::new(PoolState::default()),
                 notify: Notify::new(),
             }),
         })
@@ -309,14 +266,10 @@ impl NodePool {
                 ));
             }
         }
-        let observation = if status.server_healthy {
-            Some(
-                parse_report(status.clone(), self.inner.config.max_status_age)
-                    .map_err(|error| Status::invalid_argument(error.to_string()))?,
-            )
-        } else {
-            None
-        };
+        if status.server_healthy {
+            validate_report(&status, self.inner.config.max_status_age)
+                .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        }
         let index = ensure_node(&mut state, &node_id);
         let replacing_connection = state.nodes[index]
             .control_connection_id
@@ -326,8 +279,8 @@ impl NodePool {
         state.nodes[index].last_control = Some(Instant::now());
         state.nodes[index].disconnected_since = None;
 
-        if let Some(report) = observation {
-            apply_success(&self.inner.config, &mut state, index, report);
+        if status.server_healthy {
+            apply_success(&self.inner.config, &mut state, index, status);
         } else {
             let node = &mut state.nodes[index];
             if node.supervisor_instance_id != status.supervisor_instance_id
@@ -512,13 +465,12 @@ impl NodePool {
         if let Some(route) = self.try_acquire(preferred, request_id).await {
             return Ok(route);
         }
-        let permit = self
+        let _permit = self
             .inner
             .queue_slots
             .clone()
             .try_acquire_owned()
             .map_err(|_| AcquireError::QueueFull)?;
-        let _permit = permit;
         let deadline = tokio::time::Instant::now() + self.inner.config.queue_wait_timeout;
         loop {
             let notified = self.inner.notify.notified();
@@ -545,7 +497,7 @@ impl NodePool {
             .get(&slot.slot_id)
             .is_some_and(|registered| registered.connection_id == slot.connection_id);
         if still_registered
-            && slot.connected.load(AtomicOrdering::Acquire)
+            && slot.closed.borrow().is_none()
             && node.server_instance_id == slot.server_instance_id
         {
             node.idle_slots.push_back(slot.slot_id.clone());
@@ -626,15 +578,14 @@ impl NodePool {
         let ready = state
             .nodes
             .iter()
-            .filter(|node| node.status == NodeStatus::Ready && node.connected_slots() > 0)
-            .collect::<Vec<_>>();
+            .any(|node| node.status == NodeStatus::Ready && !node.slots.is_empty());
         let (target, versions) = state
             .cohort
             .as_ref()
             .map(|cohort| (cohort.target.clone(), cohort.versions.clone()))
             .unwrap_or_default();
         json!({
-            "status": if ready.is_empty() { "unavailable" } else { "ok" },
+            "status": if ready { "ok" } else { "unavailable" },
             "instance_id": self.inner.instance_id,
             "active_requests": state.nodes.iter().map(|node| node.in_flight).sum::<u64>(),
             "queue_length": self.inner.config.max_queued_requests - self.inner.queue_slots.available_permits(),
@@ -648,13 +599,13 @@ impl NodePool {
                 "restarts": node.restarts,
                 "in_flight": node.in_flight,
                 "capacity": node.worker_count,
-                "connected_data_slots": node.connected_slots(),
+                "connected_data_slots": node.slots.len(),
                 "available_capacity": node.available_capacity(now),
                 "consecutive_failures": node.consecutive_failures,
                 "recovery_successes": node.recovery_successes,
                 "last_probe_ok": node.last_success.is_some_and(|last| now.duration_since(last) <= self.inner.config.max_status_age),
                 "last_success_age_seconds": node.last_success.map(|last| now.duration_since(last).as_secs_f64()),
-                "last_error": if node.last_error.is_empty() { Value::Null } else { Value::String(node.last_error.clone()) },
+                "last_error": nullable_string(&node.last_error),
             })).collect::<Vec<_>>(),
         })
     }
@@ -670,21 +621,6 @@ fn ensure_node(state: &mut PoolState, node_id: &str) -> usize {
     index
 }
 
-pub(super) fn validate_node_id(value: &str) -> anyhow::Result<()> {
-    let valid = (1..=64).contains(&value.len())
-        && value
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte));
-    if !valid {
-        anyhow::bail!("invalid node identifier {value:?}");
-    }
-    Ok(())
-}
-
 fn disconnect_all_slots(node: &mut Node, reason: &str) {
     for slot in node.slots.values() {
         slot.disconnect(reason);
@@ -696,12 +632,8 @@ fn disconnect_all_slots(node: &mut Node, reason: &str) {
     node.idle_slots.clear();
 }
 
-fn nullable_string(value: &str) -> Value {
-    if value.is_empty() {
-        Value::Null
-    } else {
-        Value::String(value.to_string())
-    }
+fn nullable_string(value: &str) -> Option<&str> {
+    (!value.is_empty()).then_some(value)
 }
 
 fn choose_power_of_two(state: &PoolState, candidates: &[usize]) -> usize {
@@ -714,16 +646,14 @@ fn choose_power_of_two(state: &PoolState, candidates: &[usize]) -> usize {
         (first_position + 1 + rng.random_range(0..candidates.len() - 1)) % candidates.len();
     let first = candidates[first_position];
     let second = candidates[second_position];
-    match compare_load(&state.nodes[first], &state.nodes[second]) {
-        Ordering::Less => first,
-        Ordering::Greater => second,
-        Ordering::Equal => {
-            if state.nodes[first].last_selected <= state.nodes[second].last_selected {
-                first
-            } else {
-                second
-            }
-        }
+    let first_node = &state.nodes[first];
+    let second_node = &state.nodes[second];
+    let order = compare_load(first_node, second_node)
+        .then_with(|| first_node.last_selected.cmp(&second_node.last_selected));
+    if order.is_gt() {
+        second
+    } else {
+        first
     }
 }
 
@@ -734,10 +664,7 @@ fn compare_load(first: &Node, second: &Node) -> Ordering {
         .cmp(&((second.estimated_used() as u128) * first_capacity))
 }
 
-fn parse_report(
-    response: SupervisorStatus,
-    max_health_age: Duration,
-) -> anyhow::Result<NodeReport> {
+fn validate_report(response: &SupervisorStatus, max_health_age: Duration) -> anyhow::Result<()> {
     if response.server_instance_id.is_empty() {
         anyhow::bail!("status is missing the server instance identifier");
     }
@@ -748,25 +675,20 @@ fn parse_report(
     if response.health_age_millis > max_health_age_millis {
         anyhow::bail!("node reports a stale local health snapshot");
     }
-    Ok(NodeReport {
-        supervisor_instance_id: response.supervisor_instance_id,
-        server_instance_id: response.server_instance_id,
-
-        worker_count: response.worker_count,
-        busy_workers: response.busy_workers,
-
-        cohort: Cohort {
-            target: response.target,
-            versions: response.versions,
-        },
-    })
+    Ok(())
 }
 
-fn apply_success(config: &RouterConfig, state: &mut PoolState, index: usize, value: NodeReport) {
-    if state.cohort.is_none() {
-        state.cohort = Some(value.cohort.clone());
-    }
-    let compatible = state.cohort.as_ref() == Some(&value.cohort);
+fn apply_success(
+    config: &RouterConfig,
+    state: &mut PoolState,
+    index: usize,
+    value: SupervisorStatus,
+) {
+    let cohort = Cohort {
+        target: value.target,
+        versions: value.versions,
+    };
+    let compatible = state.cohort.get_or_insert_with(|| cohort.clone()) == &cohort;
     let node = &mut state.nodes[index];
     let instance_changed = (!node.server_instance_id.is_empty()
         && node.server_instance_id != value.server_instance_id)
@@ -973,7 +895,7 @@ mod tests {
     fn rejects_stale_status_snapshots() {
         let mut response = status("one", true, "sm_100a");
         response.health_age_millis = 6_000;
-        let error = parse_report(response, Duration::from_secs(5)).unwrap_err();
+        let error = validate_report(&response, Duration::from_secs(5)).unwrap_err();
         assert!(error.to_string().contains("stale"));
     }
 
@@ -985,11 +907,9 @@ mod tests {
             server_instance_id: format!("server-{instance}"),
             slot_id: "same-slot".into(),
             connection_id: connection.into(),
-            closed: tokio::sync::watch::channel(false).0,
-            close_reason: std::sync::Mutex::new(String::new()),
+            closed: tokio::sync::watch::channel(None).0,
             outgoing,
             incoming: Mutex::new(incoming),
-            connected: AtomicBool::new(true),
         })
     }
 
@@ -1023,7 +943,7 @@ mod tests {
         assert_eq!(node.slots["same-slot"].connection_id, "new");
         assert_eq!(node.idle_slots.len(), 1);
         assert_eq!(node.in_flight, 0);
-        assert!(new.connected.load(AtomicOrdering::Acquire));
+        assert!(new.closed.borrow().is_none());
     }
 
     #[tokio::test]
@@ -1045,7 +965,7 @@ mod tests {
             pool.record_status(Some("node"), "control", replacement)
                 .await
                 .unwrap();
-            assert!(!old.connected.load(AtomicOrdering::Acquire));
+            assert!(old.closed.borrow().is_some());
             let instance = if supervisor_changed { "one" } else { "two" };
             if !supervisor_changed {
                 assert!(pool.register_slot(slot("one", "stale")).await.is_err());
@@ -1148,7 +1068,7 @@ mod tests {
         })
         .await
         .unwrap();
-        assert!(!busy.connected.load(AtomicOrdering::Acquire));
+        assert!(busy.closed.borrow().is_some());
         assert_eq!(busy.close_status().message(), "client_disconnected");
     }
 }
