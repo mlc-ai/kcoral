@@ -1,5 +1,10 @@
 # KCoral
 
+<p align="center">
+  <img src="docs/assets/kcoral-icon.png" alt="KCoral icon" width="96" align="middle" />
+  <img src="docs/assets/kcoral-logo.png" alt="KCoral logo" width="480" align="middle" />
+</p>
+
 KCoral executes GPU benchmark programs over HTTP. The same server
 can also run without a GPU as a CUDA compilation service. A program uploads
 modules and tensors, runs registered functions, and explicitly returns selected

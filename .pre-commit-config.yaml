@@ -18,6 +18,8 @@ repos:
     rev: v6.0.0
     hooks:
       - id: check-added-large-files
+        # Preserve the original branding images.
+        exclude: ^docs/assets/kcoral-(icon|logo)\.png$
       - id: check-case-conflict
       - id: check-merge-conflict
       - id: check-symlinks
