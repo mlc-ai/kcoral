@@ -5,7 +5,7 @@ Compile, check and measure a kernel in each supported language: TIRx (TVM's
 kernel language), CuTeDSL (NVIDIA's Python language for CuTe kernels), CUDA C
 (NVIDIA's GPU extension to C++), and Triton (a GPU kernel language and compiler).
 The client needs KCoral and NumPy; the server needs the full
-[GPU worker environment](../getting-started/installation.md#running-gpu-programs),
+[GPU worker environment](../../getting-started/installation.md#running-gpu-programs),
 including the CUDA toolkit and a host C++ compiler.
 
 Start the server on the GPU machine, then run the client from your checkout:
@@ -23,9 +23,9 @@ Timing values vary by machine and should not be compared to fixed example number
 
 ## Source
 
-{download}`Download remote_compile_client.py <../../examples/remote_compile_client.py>`.
+{download}`Download remote_compile_client.py <../../../examples/remote_compile_client.py>`.
 
-```{literalinclude} ../../examples/remote_compile_client.py
+```{literalinclude} ../../../examples/remote_compile_client.py
 :language: python
 :linenos:
 ```

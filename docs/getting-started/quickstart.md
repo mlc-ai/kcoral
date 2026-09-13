@@ -10,7 +10,7 @@ array library; the computation happens on the server.
 Install the [client](installation.md#the-client) and use a running server with
 the [GPU worker environment](installation.md#running-gpu-programs). A CPU
 (central processing unit) compilation server cannot run this example. See
-[Launch the server](../server/deployment.md) if you need to start one.
+[Launch the server](../server-guide/launch-the-server.md) if you need to start one.
 
 ## Submit the program
 
@@ -46,6 +46,6 @@ The example also checks `result.completed` before reading the output. Instructio
 failures are returned as data in `result.error`; connection failures and request
 errors raise the exceptions documented in the {ref}`Python API <python-errors>`.
 
-Continue to [Writing a Program](../client_guide.md) for the builder methods and
+Continue to [Writing a Program](../client-guide/writing-a-program.md) for the builder methods and
 request lifecycle, or [Benchmark a Kernel with KCoral](../tutorials/benchmark-kernel.md)
 to compile a custom kernel, check correctness and measure its execution.

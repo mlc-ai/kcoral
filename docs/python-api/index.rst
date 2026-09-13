@@ -43,7 +43,7 @@ Errors
 
 An instruction failure produces a :class:`ProgramResult` whose status is
 ``FAILED``. The exceptions below describe failures to obtain a valid program
-outcome. See :doc:`../protocol` for server error codes.
+outcome. See :doc:`../client-guide/protocol` for server error codes.
 
 .. autoclass:: KCoralError
 
@@ -58,7 +58,7 @@ Server integration
 
 .. autoclass:: ServerConfig
 
-The :doc:`../server/deployment` page explains each field, the corresponding
+The :doc:`../server-guide/launch-the-server` page explains each field, the corresponding
 command-line option and differences between command-line and Python defaults.
 
 .. autofunction:: create_app

@@ -8,7 +8,7 @@ owns compilation, device data and measurement.
 ## Prerequisites
 
 Install the [GPU worker environment](../getting-started/installation.md#running-gpu-programs)
-and [launch the server](../server/deployment.md). The first example uses TIRx,
+and [launch the server](../server-guide/launch-the-server.md). The first example uses TIRx,
 TVM's Python-embedded kernel language. TVM is a tensor compiler. Later sections
 explain CUDA C, NVIDIA's GPU extension to C++, CuTeDSL, NVIDIA's Python language
 for CuTe kernels, and Triton, a GPU kernel language and compiler.
@@ -36,7 +36,7 @@ program and is printed as an error rather than presented as a timing result.
 The output `dst` is explicitly populated by the kernel before comparison.
 `assert_close` stops the request on a mismatch, so timing only follows a
 successful correctness check. Registers last for this request; read
-[Writing a Program](../client_guide.md) for their lifecycle.
+[Writing a Program](../client-guide/writing-a-program.md) for their lifecycle.
 
 ## Where to compile
 
@@ -60,7 +60,7 @@ The CPU server starts with `--device cpu --num-workers N`. It has no target of i
 own, reports `gpu_count: 0`, and never initializes PyTorch or a CUDA context.
 Only CUDA C compilation is supported in CPU mode; tensor creation, library
 loading, correctness checks, and timing belong in the GPU request. See
-[`../examples/cpu_compile_gpu_execute.py`](../examples/split-compilation.md)
+[`../examples/cpu_compile_gpu_execute.py`](examples/split-compilation.md)
 for the complete programs.
 
 **Compiling on the server is the recommended starting point.** Upload the kernel
@@ -120,7 +120,7 @@ client machine:
 arch = client.target()["arch"]   # e.g. "sm_100a"
 ```
 
-[KCoral Protocol](../protocol.md#library) covers the three producers a library may come from
+[KCoral Protocol](../client-guide/protocol.md#library) covers the three producers a library may come from
 (`TVM_FFI_DLL_EXPORT_TYPED_FUNC`, `tvm.Executable.export_library`, and CuTeDSL's
 `--enable-tvm-ffi`) and the link flags each one needs.
 
@@ -151,7 +151,7 @@ endpoints stay out, but host time *between* two activities does not — several
 kernels with Python in between measures that too. Iterations are drained like
 flashinfer's `bench_gpu_time_with_cupti`, timing a kernel in isolation.
 
-See [measurement configuration](../reference/builtins.md#measurement-configuration)
+See [measurement configuration](../client-guide/builtin-tools.md#measurement-configuration)
 for all options and defaults.
 
 It returns `latency_ms_median`, `latency_ms_mean`, `latency_ms_min` and
@@ -246,7 +246,7 @@ CPU data. `check_close` and `assert_close` accept its CPU result as `expected`.
 The check is best effort: it cannot see a child process, and it catches a call
 only after it reached the GPU. The flag applies to the handle as a `run` target
 only; passed to `benchmark`, the function runs on the GPU's time.
-[`../examples/remote_compile_client.py`](../examples/remote-compilation.md)
+[`../examples/remote_compile_client.py`](examples/remote-compilation.md)
 checks every kernel against such a reference.
 
 
@@ -255,7 +255,7 @@ checks every kernel against such a reference.
 ```{toctree}
 :maxdepth: 1
 
-../examples/remote-compilation
-../examples/library-upload
-../examples/split-compilation
+examples/remote-compilation
+examples/library-upload
+examples/split-compilation
 ```

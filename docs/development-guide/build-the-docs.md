@@ -37,8 +37,25 @@ fonts or execute remote kernel examples.
 
 ## Maintain the documentation
 
-- Keep the client guide and protocol at their existing paths. Preserve headings
-  when other pages link to them; add an explicit anchor before renaming one.
+Place each page in the directory for its navigation section:
+
+```text
+docs/
+├── getting-started/
+├── client-guide/
+├── server-guide/
+├── tutorials/
+│   └── examples/
+├── development-guide/
+└── python-api/
+```
+
+The root `index.md` defines the section navigation. Sphinx configuration,
+dependency files and shared static assets stay at the documentation root.
+
+- Update navigation, relative links, source includes and skill references when
+  moving a page. Preserve headings when other pages link to them; add an explicit
+  anchor before renaming one.
 - Explain public parameters, results and errors in the Python documentation
   strings. The reference page lists public objects explicitly.
 - Keep complete runnable scripts in `examples/`. Their documentation pages use
@@ -55,7 +72,7 @@ fonts or execute remote kernel examples.
 
 ## Run project checks
 
-`--group test` adds pytest to either environment from [installation](getting-started/installation.md):
+`--group test` adds pytest to either environment from [installation](../getting-started/installation.md):
 
 ```bash
 uv sync --no-editable --group test             # or --group test --group gpu

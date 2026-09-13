@@ -2,7 +2,7 @@
 
 A built-in is a function supplied by the server. Call it by its `builtin.*` name
 in a `Program.run` instruction, or import `kcoral.builtin` inside uploaded Python.
-The [client guide](../client_guide.md) explains how to choose and combine them.
+The [client guide](writing-a-program.md) explains how to choose and combine them.
 GPU means graphics processing unit; CPU means central processing unit.
 
 ## Function overview
@@ -49,7 +49,7 @@ neighbouring worker's kernel or timing. A `get_function` handle declared
 and requires a floating-point type. `zeros` initializes every element to zero;
 `empty` leaves values uninitialized. The returned tensor lives on the worker's
 GPU until explicitly returned or the request ends. Supported element types and
-upload choices are listed under [tensors](../client_guide.md#tensors).
+upload choices are listed under [tensors](writing-a-program.md#tensors).
 
 ## Compilation
 
@@ -69,7 +69,7 @@ compilation functions return request-local callable objects.
 Missing dependencies produce an `unavailable` failure. Invalid configuration
 produces `parse`; compiler failures produce `compile`. See the
 [language guidance](../tutorials/benchmark-kernel.md#languages-supported-by-remote-compilation)
-and [library protocol](../protocol.md#library) for source conventions and exports.
+and [library protocol](protocol.md#library) for source conventions and exports.
 
 ## Measurement configuration
 
@@ -105,4 +105,4 @@ stops subsequent instructions.
 `run` instruction, it releases the worker's exclusive GPU lease while it runs.
 Compiling from inside uploaded Python does not release that lease. Keep compile
 operations at instruction level when they should overlap another request's
-measurement. The [protocol error table](../protocol.md#errors) defines failures.
+measurement. The [protocol error table](protocol.md#errors) defines failures.

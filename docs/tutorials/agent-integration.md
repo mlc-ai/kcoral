@@ -21,8 +21,8 @@ cat .agents/skills/kcoral-client/SKILL.md
 {download}`Download the skill <../../.claude/skills/kcoral-client/SKILL.md>`.
 
 Give the agent access to the same revision of the skill, the
-[KCoral Protocol](../protocol.md), [Builtin Tools](../reference/builtins.md) and
-[Writing a Program](../client_guide.md). The protocol is the authority for field
+[KCoral Protocol](../client-guide/protocol.md), [Builtin Tools](../client-guide/builtin-tools.md) and
+[Writing a Program](../client-guide/writing-a-program.md). The protocol is the authority for field
 validation when a summary and the protocol disagree. The Python API supplies
 the actual method signatures.
 
@@ -37,7 +37,7 @@ For example, give the agent this prompt from the repository checkout:
 
 ```text
 Read .agents/skills/kcoral-client/SKILL.md before writing the client.
-Use docs/protocol.md for field validation and docs/reference/builtins.md
+Use docs/client-guide/protocol.md for field validation and docs/client-guide/builtin-tools.md
 for built-in function parameters.
 
 Write a runnable Python client for the KCoral server at http://localhost:8000.

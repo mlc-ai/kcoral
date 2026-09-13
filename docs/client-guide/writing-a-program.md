@@ -5,7 +5,7 @@
 `Client` connects to a KCoral server. `Program` describes work to run there.
 Building a program does not execute it: `Client.execute()` submits the ordered
 instructions and decodes the selected results. The
-[first GPU program](getting-started/quickstart.md) shows a complete runnable example.
+[first GPU program](../getting-started/quickstart.md) shows a complete runnable example.
 
 ## Create and close a client
 
@@ -52,7 +52,7 @@ name; it is not the value itself.
 
 Instruction identifiers must be nonempty and unique. The name `return_` has a
 trailing underscore because `return` is a Python keyword. Use the
-[Python API](reference/python-api.rst) for complete signatures and parameter types.
+[Python API](../python-api/index.rst) for complete signatures and parameter types.
 
 ### Upload and select a function
 
@@ -281,10 +281,10 @@ if result.status == "FAILED":
 <a id="calling-builtins-from-uploaded-code"></a>
 <a id="running-your-own-code-off-the-gpu"></a>
 
-- [Benchmark a Kernel with KCoral](tutorials/benchmark-kernel.md) explains
+- [Benchmark a Kernel with KCoral](../tutorials/benchmark-kernel.md) explains
   compilation choices, supported languages, correctness checks, measurement,
   calling built-ins from uploaded code and functions that release the GPU.
 - [KCoral Protocol](protocol.md) defines endpoints and instruction fields.
-- [Builtin Tools](reference/builtins.md) lists server functions and their options.
-- [Agent Integration Guide](tutorials/agent-integration.md) shows how to give a
+- [Builtin Tools](builtin-tools.md) lists server functions and their options.
+- [Agent Integration Guide](../tutorials/agent-integration.md) shows how to give a
   coding agent the repository skill and a concrete execution task.

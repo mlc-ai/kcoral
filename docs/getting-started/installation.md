@@ -86,4 +86,4 @@ uv sync --no-editable --group compiler
 ## Next steps
 
 If you have a server address, follow the [quickstart](quickstart.md).
-To run your own server, continue to [deployment](../server/deployment.md).
+To run your own server, continue to [deployment](../server-guide/launch-the-server.md).

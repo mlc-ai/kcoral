@@ -5,7 +5,7 @@ compilation service: upload code and data, call functions, and explicitly return
 the results you need.
 
 **[Documentation](docs/index.md)** · [Quickstart](docs/getting-started/quickstart.md) ·
-[Writing a Program](docs/client_guide.md) · [KCoral Protocol](docs/protocol.md)
+[Writing a Program](docs/client-guide/writing-a-program.md) · [KCoral Protocol](docs/client-guide/protocol.md)
 
 ## Install
 
@@ -32,12 +32,12 @@ After installing the worker environment:
 kcoral --host 127.0.0.1 --port 8000
 ```
 
-See [deployment](docs/server/deployment.md) and [configuration](docs/server/deployment.md#configuration)
+See [deployment](docs/server-guide/launch-the-server.md) and [configuration](docs/server-guide/launch-the-server.md#configuration)
 for CPU compilation, GPU selection, worker settings and limits.
 
 ### File upload cache
 
-[File cache configuration](docs/server/deployment.md#file-upload-cache) covers
+[File cache configuration](docs/server-guide/launch-the-server.md#file-upload-cache) covers
 the persistent cache directory, capacity and disabling caching.
 
 ## Route across nodes
@@ -52,7 +52,7 @@ and integration test commands.
 
 ## Logs
 
-Follow requests and worker events using the [logging guide](docs/server/logging.md).
+Follow requests and worker events using the [logging guide](docs/server-guide/logging.md).
 
 ## Python client
 
@@ -64,8 +64,8 @@ KCORAL_URL=http://localhost:8000 python examples/first_program.py
 ```
 
 See [Your First Program](docs/getting-started/quickstart.md),
-[Writing a Program](docs/client_guide.md) and the
-[Python API](docs/reference/python-api.rst) for the complete example and interfaces.
+[Writing a Program](docs/client-guide/writing-a-program.md) and the
+[Python API](docs/python-api/index.rst) for the complete example and interfaces.
 
 Use `Program.return_file()` or `return_folder()` to receive workspace outputs,
 then call `.save(destination)` on the result. See
@@ -74,12 +74,12 @@ then call `.save(destination)` on the result. See
 ## Protocol summary
 
 Programs contain `upload`, `get_function`, `run` and `return` instructions.
-The [protocol](docs/protocol.md) defines requests, results, caching and errors.
+The [protocol](docs/client-guide/protocol.md) defines requests, results, caching and errors.
 [Tutorials](docs/tutorials/benchmark-kernel.md) cover remote compilation, library
 uploads and separate compilation/execution servers.
 
 ## Development
 
-See [development](docs/development.md) for tests and formatting checks.
-[Build the documentation locally](docs/development.md#build-and-preview-the-documentation)
+See [development](docs/development-guide/build-the-docs.md) for tests and formatting checks.
+[Build the documentation locally](docs/development-guide/build-the-docs.md#build-and-preview-the-documentation)
 to browse the full site with navigation and search at `http://127.0.0.1:8008`.

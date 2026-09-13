@@ -10,10 +10,10 @@ can build kernels for a separate GPU server.
 | Your task | Read |
 | --- | --- |
 | Run your first GPU program | [Installation](getting-started/installation.md) and [Your First Program](getting-started/quickstart.md) |
-| Write a client program | [Writing a Program](client_guide.md), [KCoral Protocol](protocol.md) and [Builtin Tools](reference/builtins.md) |
-| Operate a service | [Launch the server](server/deployment.md), [Logging](server/logging.md) and [Router](server/router.md) |
+| Write a client program | [Writing a Program](client-guide/writing-a-program.md), [KCoral Protocol](client-guide/protocol.md) and [Builtin Tools](client-guide/builtin-tools.md) |
+| Operate a service | [Launch the server](server-guide/launch-the-server.md), [Logging](server-guide/logging.md) and [Router](server-guide/router.md) |
 | Measure or automate a workload | [Benchmark a Kernel with KCoral](tutorials/benchmark-kernel.md) and [Agent Integration Guide](tutorials/agent-integration.md) |
-| Extend the project | [Build the Docs](development.md) and [Python API](reference/python-api.rst) |
+| Extend the project | [Build the Docs](development-guide/build-the-docs.md) and [Python API](python-api/index.rst) |
 
 ```{toctree}
 :caption: Getting Started
@@ -29,9 +29,9 @@ getting-started/quickstart
 :maxdepth: 1
 :hidden:
 
-client_guide
-protocol
-reference/builtins
+client-guide/writing-a-program
+client-guide/protocol
+client-guide/builtin-tools
 ```
 
 ```{toctree}
@@ -39,9 +39,9 @@ reference/builtins
 :maxdepth: 1
 :hidden:
 
-server/deployment
-server/logging
-server/router
+server-guide/launch-the-server
+server-guide/logging
+server-guide/router
 ```
 
 ```{toctree}
@@ -58,7 +58,7 @@ tutorials/agent-integration
 :maxdepth: 1
 :hidden:
 
-development
+development-guide/build-the-docs
 ```
 
 ```{toctree}
@@ -66,5 +66,5 @@ development
 :maxdepth: 1
 :hidden:
 
-reference/python-api
+python-api/index
 ```

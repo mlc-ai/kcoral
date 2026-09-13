@@ -3,8 +3,8 @@
 
 Use a CPU (central processing unit) server for compilation and a GPU (graphics
 processing unit) server for execution. The client installs only KCoral. Install
-the [compiler environment](../getting-started/installation.md#running-cpu-compilation-workers)
-on the CPU server and the [GPU environment](../getting-started/installation.md#running-gpu-programs)
+the [compiler environment](../../getting-started/installation.md#running-cpu-compilation-workers)
+on the CPU server and the [GPU environment](../../getting-started/installation.md#running-gpu-programs)
 on the execution server.
 
 Start each server in a separate terminal or on its own machine:
@@ -29,9 +29,9 @@ the CPU request reports zero time holding a GPU lease.
 
 ## Source
 
-{download}`Download cpu_compile_gpu_execute.py <../../examples/cpu_compile_gpu_execute.py>`.
+{download}`Download cpu_compile_gpu_execute.py <../../../examples/cpu_compile_gpu_execute.py>`.
 
-```{literalinclude} ../../examples/cpu_compile_gpu_execute.py
+```{literalinclude} ../../../examples/cpu_compile_gpu_execute.py
 :language: python
 :linenos:
 ```

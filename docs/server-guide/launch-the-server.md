@@ -45,7 +45,7 @@ that throughput numbers should record the setting.
 
 Start with one GPU instance for remote compilation and measurement. Use separate
 CPU and GPU instances when compilation capacity should scale independently;
-the [two-server example](../examples/split-compilation.md) shows the requests.
+the [two-server example](../tutorials/examples/split-compilation.md) shows the requests.
 The CPU compilation service does not provide general GPU execution.
 
 `0.0.0.0` listens on every network interface. The default `127.0.0.1` listens
@@ -106,8 +106,8 @@ MiB means 1024 squared bytes; GiB means 1024 cubed bytes. All options ending in
 | `--cache-capacity-bytes` | `17179869184` (16 GiB) | `cache_capacity_bytes` | Memory cache capacity for tensors, bytes and libraries |
 
 Request `timeout_seconds` and `output_limit_bytes` override their respective
-defaults, up to these server maximums. See [protocol options](../protocol.md#options)
-for clamping and [errors](../protocol.md#errors) for request failures.
+defaults, up to these server maximums. See [protocol options](../client-guide/protocol.md#options)
+for clamping and [errors](../client-guide/protocol.md#errors) for request failures.
 
 ### File upload cache
 
@@ -126,7 +126,7 @@ server restarts. Caching is best-effort: storage failures and oversized objects
 do not prevent execution when the request supplies the bytes.
 
 File destinations are private to each request and removed when the request
-ends. See [file uploads](../client_guide.md#files-used-by-uploaded-scripts) for
+ends. See [file uploads](../client-guide/writing-a-program.md#files-used-by-uploaded-scripts) for
 path restrictions, snapshot behavior and directory uploads.
 
 ### Logs
