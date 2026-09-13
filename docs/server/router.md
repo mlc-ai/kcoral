@@ -5,10 +5,8 @@ node for each request. A node supervisor starts, checks and restarts its local
 Python server. The supervisor and Python server initiate their connections to
 the Router, so compute nodes do not need to accept inbound network connections.
 
-This page describes [PR #61](https://github.com/mlc-ai/kcoral/pull/61), at revision
-`a87b657789d77685928c49f9fc78f743094f8b3d`. That change is not yet in the main
-branch. The commands below require a checkout containing the Router change;
-install the client and Python server from the same revision as the Rust binaries.
+Install the client and Python server from the same revision as the Rust
+binaries so their internal protocols match.
 
 ## Components and connections
 
@@ -36,7 +34,7 @@ request before parsing it.
 ## Build and launch
 
 Use Rust 1.87 or newer and Cargo, Rust's build tool. The build supplies its own
-Protocol Buffers compiler. On a checkout containing PR #61:
+Protocol Buffers compiler. Build from the repository root:
 
 ```bash
 cargo build --release --locked
@@ -57,9 +55,7 @@ export KCORAL_NODE_TOKEN='<shared-node-token>'
 target/release/kcoral-node \
   --router-endpoint http://router.example.com:9000 \
   --node-id gpu-a \
-  --server-url http://127.0.0.1:8000/ \
-  --termination-grace-seconds 3610 \
-  -- kcoral --host 127.0.0.1 --port 8000 --gpus 0
+  --server-url http://127.0.0.1:8000/
 ```
 
 Replace the Router hostname and token for your deployment. The example uses
@@ -67,12 +63,28 @@ plain HTTP for a controlled network; an HTTPS endpoint requires TLS (transport
 encryption) terminated by a compatible proxy. The optional token authenticates
 node streams; it does not provide public client authorization or encryption.
 
-The node manager passes `KCORAL_ROUTER_ENDPOINT`, `KCORAL_NODE_ID` and the token
-to its child. `--server-url` is the local address for health checks, not an
-address that the Router must reach. Everything after `--` is the Python server
-command. The manager requires Linux 5.3 or newer, access to `/proc`, and permission
-to signal its child processes. Run the Router and node managers under your
-service manager so those processes are also restarted if they fail.
+The node manager runs `kcoral` by default. It passes `KCORAL_ROUTER_ENDPOINT`,
+`KCORAL_NODE_ID` and the token to its child, and derives `KCORAL_SERVER_HOST` and
+`KCORAL_SERVER_PORT` from `--server-url`. That URL is the address used for local
+health checks; the Router does not connect to it.
+
+Everything after `--` replaces the child command. Explicit Python flags override
+the environment defaults, including when the listen address differs from the
+health-check address:
+
+```bash
+target/release/kcoral-node \
+  --router-endpoint http://router.example.com:9000 \
+  --node-id gpu-a \
+  --server-url http://127.0.0.1:8000/ \
+  -- kcoral --host 0.0.0.0 --gpus 0 --log-dir /var/log/kcoral
+```
+
+An HTTPS health-check URL requires a local TLS endpoint; setting that URL does
+not enable TLS in the Python server. The manager requires Linux 5.3 or newer,
+access to `/proc`, and permission to signal its child processes. Run the Router
+and node managers under your service manager so those processes are also
+restarted if they fail.
 
 Clients continue using `Client`, `Program`, `POST /execute` and `GET /health`:
 
@@ -131,7 +143,7 @@ health without the corresponding execution connections.
 
 ## Cache negotiation and failures
 
-`X-KCoral-Node` identifies the selected node. The client in PR #61 sends it back
+`X-KCoral-Node` identifies the selected node. The client sends it back
 as a preference during cache-miss retries. If the node or Python instance
 changes, the client may need to resend bytes. Memory caches are instance-local;
 persistent file caches follow their configured storage lifetime.
@@ -139,6 +151,9 @@ persistent file caches follow their configured storage lifetime.
 The Router creates a fresh `X-Request-ID` for every HTTP attempt, including
 rejections, and propagates it through Router and Python logs. Cache negotiation
 may therefore produce several request identifiers for one `Client.execute()`.
+Router and node-manager logs are plain text without terminal color codes; the
+Router's `request_finished` record can be correlated with Python's JSON events
+using `request_id`.
 
 | Failure | Client-visible behavior |
 | --- | --- |
@@ -153,10 +168,16 @@ grow from 1 to 30 seconds with jitter, and reset after 60 seconds of stable runn
 
 To stop a node, send SIGTERM, the normal termination signal, to `kcoral-node`.
 It withdraws healthy status and signals the Python child. Idle slots close and
-active requests may finish during `--termination-grace-seconds` before forced
-cleanup. The default is 5 seconds; the launch example allows 3610 seconds for
-a server permitting 3600-second requests. External shutdown deadlines can still
-interrupt work. The node manager cleans up descendant processes before restarting
-Python; its enclosing service manager must handle cleanup if the node manager dies.
+active requests finish before the child exits. Normal shutdown waits for that
+exit without imposing an additional timeout.
 
-Implementation reference: [the Router source and gateway guide at this revision](https://github.com/mlc-ai/kcoral/tree/a87b657789d77685928c49f9fc78f743094f8b3d/rust/kcoral).
+When restarting an unhealthy server, `--termination-grace-seconds` (default 5)
+limits the wait after SIGTERM before forced cleanup. The node manager removes
+descendant processes before starting the replacement Python server.
+
+External shutdown deadlines can still interrupt work. Configure the service
+manager's stop timeout, such as systemd's `TimeoutStopSec`, to allow the desired
+request completion. The service manager must also clean up the entire process
+tree if the node manager itself dies.
+
+Implementation reference: [Router source and package guide](https://github.com/mlc-ai/kcoral/tree/main/rust/kcoral).

@@ -308,7 +308,6 @@ async fn outbound_only_node_preserves_large_bodies_and_repeated_headers() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["x-kcoral-node"], "gpu-a");
-    assert!(!response.headers()["x-kcoral-node"].is_empty());
     assert_eq!(response.headers().get_all("set-cookie").iter().count(), 2);
     assert_eq!(response.bytes().await.unwrap(), body);
     assert_eq!(node.state.requests.load(Ordering::Acquire), 1);

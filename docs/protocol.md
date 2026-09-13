@@ -59,13 +59,13 @@ and forwards it to Python. A direct Python request may supply exactly one
 canonical lowercase UUID; absent, duplicate, or invalid IDs are replaced.
 Retries after `CACHE_MISS` are separate HTTP attempts with separate IDs.
 
-Every worker in a pool shares one target — a server whose GPUs disagree refuses
-to start, so run one server per GPU model.
-
-
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `status` | string | `ok` when the running server responds |
+| `instance_id` | string | Unique identifier for this server lifecycle |
+| `started_at` | string | Server start time in UTC |
+| `uptime_seconds` | number | Elapsed time since startup |
+| `active_requests` | integer | Requests registered with the worker pool, including worker waiters |
 | `gpu_count` | integer | Number of configured graphics processing units (GPUs); zero for a CPU compilation server |
 | `queue_length` | integer | Requests waiting for a worker |
 | `target` | object | Compilation target, including `arch` on a GPU server; empty on a CPU server |

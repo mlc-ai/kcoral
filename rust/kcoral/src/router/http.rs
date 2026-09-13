@@ -242,7 +242,10 @@ impl Transfer {
                         }
                         self.trace.state.lock().unwrap().reason = "completed";
                         if self.uploaded { self.guard.finish().await; }
-                        else { self.guard.cancel_reason = "request_rejected"; }
+                        else {
+                            self.guard.cancel_reason = "request_rejected";
+                            drop(self);
+                        }
                         break;
                     },
                     _ => {

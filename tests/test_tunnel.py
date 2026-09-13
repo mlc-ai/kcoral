@@ -1,5 +1,6 @@
 import asyncio
 import json
+import socket
 
 import grpc
 import pytest
@@ -13,7 +14,7 @@ from kcoral.keys import compute_blob_hash
 from kcoral.multipart import MultipartPart, encode_multipart, parse_multipart
 from kcoral.schemas import strict_json_loads
 from kcoral.testing import fake_runtime_factory
-from kcoral.tunnel import DATA_CHUNK_BYTES, TunnelManager, _create_channel
+from kcoral.tunnel import DATA_CHUNK_BYTES, TunnelManager
 
 
 class FakeCall:
@@ -86,15 +87,23 @@ async def _test_asgi_bridge_preserves_large_binary_body_and_repeated_headers():
     assert all(frame.request_id == request_id for frame in call.frames)
 
 
-def test_channel_rejects_paths_and_supports_insecure_origins():
-    asyncio.run(_test_channel_rejects_paths_and_supports_insecure_origins())
+def test_shutdown_cancels_registration_when_router_is_unreachable():
+    async def run():
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            manager = TunnelManager(
+                echo_app,
+                endpoint=f"http://127.0.0.1:{reservation.getsockname()[1]}",
+                node_id="offline",
+                node_token=None,
+                server_instance_id="instance",
+                slots=1,
+            )
+            await manager.start()
+            await asyncio.sleep(0)
+            await asyncio.wait_for(manager.close(), timeout=1)
 
-
-async def _test_channel_rejects_paths_and_supports_insecure_origins():
-    with pytest.raises(ValueError, match="must not contain"):
-        _create_channel("https://router.example.com/path")
-    channel = _create_channel("http://127.0.0.1:1/")
-    await channel.close()
+    asyncio.run(run())
 
 
 class FakeRouter(gateway_grpc.RouterGatewayServicer):

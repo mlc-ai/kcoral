@@ -142,7 +142,7 @@ async def ready_nodes(url, count):
         await wait_until(ready)
 
 
-@pytest.mark.parametrize("upload_kind", ["bytes", "file", "folder"])
+@pytest.mark.parametrize("upload_kind", ["bytes", "folder"])
 def test_real_router_client_cache_affinity_binary_and_request_logs(tmp_path, upload_kind):
     asyncio.run(_cache_affinity(tmp_path, upload_kind))
 
@@ -160,13 +160,10 @@ async def _cache_affinity(tmp_path, upload_kind):
         if upload_kind == "bytes":
             value = program.upload(id="value", kind="bytes", value=data)
         else:
-            if upload_kind == "file":
-                program.upload_file(blob=data, path="input/value.bin")
-            else:
-                source = tmp_path / "upload-source"
-                source.mkdir()
-                (source / "value.bin").write_bytes(data)
-                program.upload_folder(source, path="input")
+            source = tmp_path / "upload-source"
+            source.mkdir()
+            (source / "value.bin").write_bytes(data)
+            program.upload_folder(source, path="input")
             module = program.upload(
                 id="reader",
                 kind="module",

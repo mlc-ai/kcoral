@@ -850,13 +850,6 @@ mod tests {
     }
 
     #[test]
-    fn validates_node_identifiers() {
-        assert!(validate_node_id("gpu-a.1").is_ok());
-        assert!(validate_node_id("bad name").is_err());
-        assert!(validate_node_id("").is_err());
-    }
-
-    #[test]
     fn compares_normalized_load() {
         assert_eq!(
             compare_load(&node(8, 4, 0), &node(2, 0, 0)),

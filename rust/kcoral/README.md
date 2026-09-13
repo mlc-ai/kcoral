@@ -1,4 +1,4 @@
-# KCoral Gateway
+# KCoral Router and Node
 
 This Cargo package builds two independent Rust processes:
 
@@ -37,7 +37,10 @@ container processes. The supervisor launches the Python server child, probes
 its loopback `/health` endpoint, and restarts it independently of the router.
 It passes `KCORAL_ROUTER_ENDPOINT`, `KCORAL_NODE_ID`, and the optional
 `KCORAL_NODE_TOKEN` to the child so the child's data slots use the same identity
-as its control stream.
+as its control stream. The host and port from `--server-url` become the child's
+`KCORAL_SERVER_HOST` and `KCORAL_SERVER_PORT` defaults. Without a command after
+`--`, the manager runs `kcoral`; explicit child flags override the defaults.
+See the [Router deployment guide](../../docs/server/router.md) for examples.
 
 The router and supervisor themselves rely on systemd, Kubernetes, or an
 equivalent service manager for process restart. A supervisor restart also
@@ -87,9 +90,11 @@ scans and stable process handles clean up a generation before the next server
 starts. This requires Linux 5.3+, `/proc`, and permission to signal owned
 processes using `pidfd_open` and `pidfd_send_signal`. Run one server tree per
 dedicated node-manager process. Service-level cleanup remains the responsibility
-of the external process manager if `kcoral-node` itself dies. Normal stop allows
-`--termination-grace-seconds` (default 5) before escalation; configure enough
-time for the request deadline when active work must finish.
+of the external process manager if `kcoral-node` itself dies. Normal stop sends
+SIGTERM and waits for the Python server to finish active requests and exit.
+`--termination-grace-seconds` (default 5) only limits cleanup of an unhealthy
+server during restart. An external service manager can still impose a shutdown
+deadline; configure its stop timeout to allow the desired request completion.
 
 Regenerate Python bindings from the repository root with a fixed compiler:
 

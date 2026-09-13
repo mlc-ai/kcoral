@@ -19,7 +19,7 @@ struct Args {
     #[arg(
         long,
         default_value = "http://127.0.0.1:8000/",
-        help = "local KCoral Server origin used only for health checks"
+        help = "local health-check origin and default Python server host/port"
     )]
     server_url: String,
     #[arg(long, default_value_t = 2.0)]
@@ -32,7 +32,11 @@ struct Args {
     startup_grace_seconds: f64,
     #[arg(long, default_value_t = 60.0)]
     stable_reset_seconds: f64,
-    #[arg(long, default_value_t = 5.0)]
+    #[arg(
+        long,
+        default_value_t = 5.0,
+        help = "seconds before killing an unhealthy server during restart; normal shutdown waits for completion"
+    )]
     termination_grace_seconds: f64,
     #[arg(long, default_value_t = 1.0)]
     restart_min_delay_seconds: f64,
@@ -46,7 +50,7 @@ struct Args {
     control_reconnect_min_delay_seconds: f64,
     #[arg(long, default_value_t = 30.0)]
     control_reconnect_max_delay_seconds: f64,
-    #[arg(last = true, required = true)]
+    #[arg(last = true, default_value = "kcoral")]
     command: Vec<OsString>,
 }
 
@@ -56,11 +60,8 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     kcoral::process::adopt_server_descendants()?;
     let health_timeout = positive_duration(args.health_timeout_seconds, "health timeout")?;
-    let service = SupervisorState::new(
-        args.node_id.clone(),
-        reqwest::Url::from_str(&args.server_url)?,
-        health_timeout,
-    )?;
+    let server_url = reqwest::Url::from_str(&args.server_url)?;
+    let service = SupervisorState::new(args.node_id.clone(), server_url.clone(), health_timeout)?;
     let supervisor_config = ServerLifecycleConfig {
         health_interval: positive_duration(args.health_interval_seconds, "health interval")?,
         failure_threshold: args.failure_threshold,
@@ -98,6 +99,14 @@ async fn main() -> anyhow::Result<()> {
         )?,
     };
     let mut child_environment = vec![
+        (
+            OsString::from("KCORAL_SERVER_HOST"),
+            OsString::from(server_url.host_str().unwrap().trim_matches(['[', ']'])),
+        ),
+        (
+            OsString::from("KCORAL_SERVER_PORT"),
+            OsString::from(server_url.port_or_known_default().unwrap().to_string()),
+        ),
         (
             OsString::from("KCORAL_ROUTER_ENDPOINT"),
             OsString::from(&args.router_endpoint),

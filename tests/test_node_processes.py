@@ -35,11 +35,19 @@ while True: time.sleep(1)
 worker_file = root / f'worker-{os.getpid()}.json'
 child = subprocess.Popen([sys.executable, '-c', worker, str(worker_file)])
 while not worker_file.exists(): time.sleep(.01)
+first_generation = not history.exists()
+if mode == 'health-failure' and first_generation:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+if mode == 'graceful':
+    def finish(signum, frame):
+        time.sleep(.5)
+        (root / 'finished').touch()
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, finish)
 with history.open('a') as stream:
     stream.write(json.dumps([os.getpid(), *json.loads(worker_file.read_text())]) + '\n')
-if mode == 'crash' and len(history.read_text().splitlines()) == 1:
+if mode == 'crash' and first_generation:
     os._exit(7)
-if mode == 'ignore': signal.signal(signal.SIGTERM, signal.SIG_IGN)
 while True: time.sleep(1)
 '''
 
@@ -52,7 +60,7 @@ def wait_for(check, timeout=8):
         time.sleep(0.02)
 
 
-@pytest.mark.parametrize("mode", ["normal", "ignore", "crash", "health-failure"])
+@pytest.mark.parametrize("mode", ["normal", "graceful", "crash", "health-failure"])
 def test_node_reaps_descendants_that_escape_the_server_session(tmp_path, mode):
     binary = Path(
         os.environ.get(
@@ -114,6 +122,10 @@ def test_node_reaps_descendants_that_escape_the_server_session(tmp_path, mode):
                 pid for line in history.read_text().splitlines() for pid in json.loads(line)
             ]
             wait_for(lambda: all(not Path(f"/proc/{pid}").exists() for pid in descendants))
+            if mode == "graceful":
+                assert (tmp_path / "finished").exists()
+            if mode == "health-failure":
+                assert "sending SIGKILL" in (tmp_path / "node.log").read_text()
             assert unrelated.poll() is None
         finally:
             if node.poll() is None:

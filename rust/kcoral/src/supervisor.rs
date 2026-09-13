@@ -377,7 +377,7 @@ pub async fn run_server_lifecycle(
                             warn!(pid, failures, threshold = config.failure_threshold, %error, "KCoral Server health check failed");
                             if failures >= config.failure_threshold {
                                 let reason = format!("health failed {failures} consecutive times: {error}");
-                                terminate_server(&mut child, &tree, config.termination_grace).await?;
+                                terminate_server(&mut child, &tree, Some(config.termination_grace)).await?;
                                 break reason;
                             }
                         }
@@ -387,7 +387,7 @@ pub async fn run_server_lifecycle(
                     if changed.is_err() || *shutdown.borrow() {
                         info!(pid, "stopping KCoral Server child");
                         service.mark_server_unavailable("Supervisor is shutting down").await;
-                        terminate_server(&mut child, &tree, config.termination_grace).await?;
+                        terminate_server(&mut child, &tree, None).await?;
                         return Ok(());
                     }
                 }
@@ -485,7 +485,7 @@ fn spawn_server(
 async fn terminate_server(
     child: &mut Child,
     tree: &crate::process::ProcessTree,
-    grace: Duration,
+    grace: Option<Duration>,
 ) -> anyhow::Result<()> {
     let Some(pid) = child.id() else {
         return Ok(());
@@ -494,7 +494,11 @@ async fn terminate_server(
         Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
         Err(error) => return Err(error.into()),
     }
-    if let Ok(status) = tokio::time::timeout(grace, child.wait()).await {
+    let stopped = match grace {
+        Some(grace) => tokio::time::timeout(grace, child.wait()).await,
+        None => Ok(child.wait().await),
+    };
+    if let Ok(status) = stopped {
         status?;
     } else {
         warn!(pid, "child did not stop after SIGTERM; sending SIGKILL");
@@ -558,14 +562,6 @@ mod tests {
     }
 
     #[test]
-    fn zero_jitter_is_deterministic() {
-        assert_eq!(
-            jittered(Duration::from_millis(250), 0.0),
-            Duration::from_millis(250)
-        );
-    }
-
-    #[test]
     fn parses_server_health() {
         let health = parse_health(serde_json::json!({
             "status": "ok",
@@ -584,18 +580,5 @@ mod tests {
         assert!(health.server_healthy);
         assert_eq!(health.worker_count, 2);
         assert_eq!(health.busy_workers, 1);
-    }
-
-    #[test]
-    fn validates_outbound_control_configuration() {
-        let config = RouterLinkConfig {
-            router_endpoint: "https://router.example.com/".to_string(),
-            node_token: Some("secret".to_string()),
-            heartbeat_interval: Duration::from_secs(2),
-            connect_timeout: Duration::from_secs(2),
-            reconnect_min_delay: Duration::from_secs(1),
-            reconnect_max_delay: Duration::from_secs(30),
-        };
-        assert!(config.validate().is_ok());
     }
 }

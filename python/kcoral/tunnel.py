@@ -137,6 +137,7 @@ class TunnelManager:
         disconnected = asyncio.Event()
         call.add_done_callback(lambda _: disconnected.set())
         disconnected_task = asyncio.create_task(disconnected.wait())
+        slot_task = asyncio.current_task()
 
         async def stop_after_active():
             await self._closing.wait()
@@ -147,7 +148,9 @@ class TunnelManager:
                 # RPC here could discard bytes the router has not received yet.
                 await call.done_writing()
             else:
-                call.cancel()
+                # RPC cancellation alone does not unblock a write waiting for
+                # the initial connection when wait_for_ready is enabled.
+                slot_task.cancel()
 
         shutdown_task = asyncio.create_task(stop_after_active())
         slot_id = str(uuid.uuid4())
