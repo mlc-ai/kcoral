@@ -279,6 +279,7 @@ def create_app(
                 headers=headers,
             )
 
+        program.max_return_bytes = config.max_response_bytes
         timeout = _resolve_timeout(program, config)
         program.options["output_limit_bytes"] = _resolve_output_limit(program, config)
         if events.enabled:  # describing the workload is the one cost worth a branch

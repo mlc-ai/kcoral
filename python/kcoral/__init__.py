@@ -5,6 +5,7 @@ A request is a program (an instruction sequence). See ``docs/protocol.md``.
 
 from typing import TYPE_CHECKING, Any
 
+from .artifacts import ReturnedFile, ReturnedFolder
 from .client import (
     Client,
     KCoralError,
@@ -27,6 +28,8 @@ __all__ = [
     "ProgramResult",
     "ProtocolError",
     "Register",
+    "ReturnedFile",
+    "ReturnedFolder",
     "ServerConfig",
     "TransportError",
     "create_app",

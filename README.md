@@ -67,6 +67,10 @@ See [Your First Program](docs/getting-started/quickstart.md),
 [Writing a Program](docs/client_guide.md) and the
 [Python API](docs/reference/python-api.rst) for the complete example and interfaces.
 
+Use `Program.return_file()` or `return_folder()` to receive workspace outputs,
+then call `.save(destination)` on the result. See
+[returning files and folders](docs/client_guide.md#returning-files-and-folders).
+
 ## Protocol summary
 
 Programs contain `upload`, `get_function`, `run` and `return` instructions.

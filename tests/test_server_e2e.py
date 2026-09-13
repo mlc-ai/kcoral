@@ -1201,3 +1201,48 @@ def test_request_ids_accept_one_canonical_uuid_and_replace_unsafe_values():
             assert str(uuid.UUID(request_id)) == request_id
             assert response.json()["request_id"] == request_id
             assert (request_id == valid) is accepted
+
+
+def test_server_supplies_file_collection_byte_limit():
+    config = ServerConfig(
+        max_requests_per_worker=0,
+        max_response_bytes=4096,
+    )
+    source = """
+from pathlib import Path
+def make():
+    Path("out").mkdir()
+    Path("out/large").write_bytes(b"x" * 8192)
+    return 7
+"""
+    program = {
+        "instructions": [
+            {"op": "upload", "kind": "module", "id": "module", "source": source},
+            {"op": "get_function", "id": "fn", "module": {"$ref": "module"}, "name": "make"},
+            {"op": "run", "id": "value", "fn": {"$ref": "fn"}},
+            {"op": "return", "key": "kept", "value": {"$ref": "value"}},
+            {"op": "return", "key": "out", "kind": "folder", "path": "out"},
+        ]
+    }
+    with make_client(config) as client:
+        response = post_program(client, program)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "FAILED"
+    assert body["results"] == {"kept": {"type": "integer", "value": 7}}
+    assert body["error"]["kind"] == "serialization"
+    assert "max_response_bytes" in body["error"]["message"]
+
+
+def test_file_return_still_obeys_final_serialized_response_cap():
+    source = 'from pathlib import Path\nPath("report").write_bytes(b"x" * 4000)\n'
+    program = {
+        "instructions": [
+            {"op": "upload", "kind": "module", "id": "module", "source": source},
+            {"op": "return", "key": "report", "kind": "file", "path": "report"},
+        ]
+    }
+    with make_client(ServerConfig(max_requests_per_worker=0, max_response_bytes=4096)) as client:
+        response = post_program(client, program)
+    assert response.status_code == 500
+    assert response.json()["error"]["kind"] == "response_too_large"

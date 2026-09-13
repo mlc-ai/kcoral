@@ -87,6 +87,8 @@ Program.upload_folder(folder, *, path=...) -> None
 Program.get_function(id=..., module=..., name=..., cpu_only=False) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
+Program.return_file(key=..., path=...) -> None    # str or Register resolving to str
+Program.return_folder(key=..., path=...) -> None  # str or Register resolving to str
 
 Client(base_url, *, headers=None, connect_timeout_seconds=10)
 Client.execute(program, *, timeout_seconds=None, output_limit_bytes=None) -> ProgramResult
@@ -106,6 +108,16 @@ instructions; retries send the same instructions with different blob parts.
 It includes hidden files, rejects links, special files and repeated directories,
 and omits empty directories and original permissions/timestamps. A failed call
 leaves the program unchanged. Caching is automatic and best-effort.
+
+`return_file` and `return_folder` capture workspace-relative paths at that
+instruction; `path` may be an earlier register containing a path string.
+Use `result[key].save(destination)` to save locally. File results also provide
+`read_bytes()`; folder results provide `files` and `directories`. Folders include
+hidden files and empty directories. Missing paths, symlinks, and special files
+fail collection. Earlier returns survive later ordinary instruction failures.
+Saves require an existing parent; file replacement needs `overwrite=True`, and
+folder destinations must be new. Transfers are buffered and subject to server
+limits. See [client usage](../../../docs/client_guide.md#returning-files-and-folders).
 
 ## Instructions
 

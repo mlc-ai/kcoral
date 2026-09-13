@@ -536,6 +536,28 @@ program can interleave returns with the uploads and runs that follow them. A
 `return` that has already run contributes its entry to `results` even if a later
 instruction fails.
 
+### File and folder selection
+
+```json
+{"op": "return", "key": "report", "kind": "file", "path": "outputs/report.txt"}
+{"op": "return", "key": "debug", "kind": "folder", "path": {"$ref": "output_path"}}
+```
+
+These variants accept exactly `op`, `key`, `kind`, and `path`. `kind` is `file`
+or `folder`; `path` is a literal string or an earlier reference resolving to one.
+Paths follow file-upload rules and are relative to the original request workspace,
+even if code changes cwd. Return keys are unique across all variants.
+
+Each return snapshots contents at that instruction, without holding the GPU lease.
+Folders include hidden files and empty directories; original metadata is omitted.
+Symlinks, special files, repeated directories, and observable changes during reads
+are rejected. Missing paths, wrong types, invalid runtime paths, read failures,
+and collection limits fail that return with `serialization`. Failed returns add
+no result or binary parts; earlier returns survive ordinary instruction failures.
+
+Contents are buffered in the execution response. The existing `max_response_bytes`
+limit (default 256 MiB) applies. `output_limit_bytes` controls only stdout/stderr.
+
 ## Options
 
 | Field | Type | Required | Default | Notes |
@@ -622,23 +644,32 @@ body described under [Errors](#errors) instead.
 | array | `{"type": "array", "value": [<value>, ...]}` |
 | object | `{"type": "object", "value": {"<key>": <value>, ...}}` |
 | bytes | `{"type": "bytes", "part": "return:0", "sha256": "<sha256>"}` |
+| file | `{"type": "file", "size": 3, "part": "return:0", "sha256": "<sha256>"}` |
+| folder | `{"type": "folder", "files": {"nested/a": <file value>}, "directories": ["empty", "nested"]}` |
 | tensor | `{"type": "tensor", "dtype": "float16", "shape": [32, 128], "part": "return:0", "sha256": "<sha256>"}` |
 
 Arrays and objects recursively contain encoded values. Object keys are unique
 strings with no ordering semantics. Numbers must be finite. Python lists and
 tuples both encode as `array`.
 
-If no `bytes` or `tensor` appears, the response is `application/json`. Otherwise
+If no `bytes`, `tensor`, or `file` appears, the response is `application/json`. Otherwise
 it is `multipart/form-data`:
 
 | Part | Content type | Required | Notes |
 |---|---|---:|---|
 | `result` | `application/json` | yes | Response metadata and value tree |
-| `return:<index>` | `application/octet-stream` | conditional | Raw bytes for a bytes or tensor node |
+| `return:<index>` | `application/octet-stream` | conditional | Raw bytes for a bytes, tensor, or file node |
 
 Binary parts use depth-first numbering. Clients use `part` to locate data and
 verify `sha256`. Tensor data is C-contiguous, row-major, and little-endian; its
-length must match `dtype` and `shape`.
+length must match `dtype` and `shape`. A file's `size` is a non-negative integer
+(not a boolean) and must match its binary part length.
+
+Folder `files` maps sorted relative paths to file values; `directories` lists
+sorted directory paths, including every ancestor. The selected root is implicit.
+Paths must be canonical under file-upload rules, unique, and free of file/directory
+conflicts. An empty folder has empty `files` and `directories`. Each file uses
+its own binary part with the usual depth-first numbering and integrity checks.
 
 ### Errors
 
@@ -808,3 +839,6 @@ Follow the [quickstart](getting-started/quickstart.md) for a first request, the
 `upload_folder` expands into ordinary file-upload instructions and introduces
 no new protocol operation. File uploads return no register; see
 [files used by uploaded scripts](client_guide.md#files-used-by-uploaded-scripts).
+
+File/folder results decode to `ReturnedFile` and `ReturnedFolder`; see
+[client usage](client_guide.md#returning-files-and-folders).

@@ -12,12 +12,15 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import IO, Any, Protocol
 
+from .artifacts import ReturnedFile, ReturnedFolder
 from .deferred import DeferredGPUResult
 from .errors import ExecutionError, GPUAccessViolation
+from .file_transfer import collect
 from .keys import compute_blob_hash
 from .lease import Lease
 from .schemas import (
     DTYPE_ITEM_SIZES,
+    FileReturn,
     FileUpload,
     GetFunction,
     Instruction,
@@ -161,6 +164,27 @@ def _execute_in_workspace(
                             lease.acquire()
                             value = value.resolve()
                         env[instruction.id] = value
+                    elif isinstance(instruction, FileReturn):
+                        checkpoint = encoder.checkpoint()
+                        try:
+                            path = (
+                                env[instruction.path.id]
+                                if isinstance(instruction.path, Ref)
+                                else instruction.path
+                            )
+                            snapshot = collect(
+                                workspace_dir,
+                                path,
+                                instruction.kind,
+                                max_bytes=program.max_return_bytes - encoder.binary_size,
+                            )
+                            results[instruction.key] = encoder.encode_artifact(snapshot)
+                        except Exception as exc:
+                            encoder.rollback(checkpoint)
+                            raise ExecutionError(
+                                "serialization",
+                                f"cannot return {instruction.kind}: {type(exc).__name__}: {exc}",
+                            ) from exc
                     elif isinstance(instruction, Return):
                         # A return that fails mid-encode must leave nothing behind: it
                         # adds no results entry, so a binary part it already registered
@@ -303,7 +327,7 @@ def _place(
     instruction: Instruction, off_gpu: frozenset[str | Ref], runtime: Runtime, lease: Lease
 ) -> None:
     """Hold or drop the GPU for the instruction about to run."""
-    if isinstance(instruction, FileUpload):
+    if isinstance(instruction, (FileUpload, FileReturn)):
         _drop_gpu(runtime, lease)
         return
     if isinstance(instruction, Run) and instruction.fn in off_gpu:
@@ -347,6 +371,7 @@ class _ValueEncoder:
     def __init__(self, runtime: Runtime) -> None:
         self._runtime = runtime
         self.binary_parts: dict[str, bytes] = {}
+        self.binary_size = 0
 
     def encode(self, value: Any) -> dict[str, Any]:
         if value is None:
@@ -401,17 +426,28 @@ class _ValueEncoder:
             return encoded
         raise ExecutionError("serialization", f"cannot return value of type {type(value).__name__}")
 
+    def encode_artifact(self, value: ReturnedFile | ReturnedFolder) -> dict[str, Any]:
+        if isinstance(value, ReturnedFile):
+            data = value.read_bytes()
+            return {**self._binary_value("file", data), "size": len(data)}
+        return {
+            "type": "folder",
+            "files": {path: self.encode_artifact(file) for path, file in value.files.items()},
+            "directories": list(value.directories),
+        }
+
     def checkpoint(self) -> int:
         return len(self.binary_parts)
 
     def rollback(self, checkpoint: int) -> None:
         """Drop parts registered since ``checkpoint``, keeping numbering contiguous."""
         for name in list(self.binary_parts)[checkpoint:]:
-            del self.binary_parts[name]
+            self.binary_size -= len(self.binary_parts.pop(name))
 
     def _binary_value(self, value_type: str, data: bytes) -> dict[str, Any]:
         part_name = f"return:{len(self.binary_parts)}"
         self.binary_parts[part_name] = data
+        self.binary_size += len(data)
         return {
             "type": value_type,
             "part": part_name,

@@ -170,7 +170,7 @@ def test_parse_file_upload_normalizes_relative_path_without_creating_a_handle():
     ["", ".", "..", "../tensor", "data/../tensor", "/tmp/tensor", "data\\tensor", "x\x00y"],
 )
 def test_file_upload_rejects_unsafe_paths(path):
-    with pytest.raises(ValidationError, match="file upload 'path'"):
+    with pytest.raises(ValidationError, match="filesystem 'path'"):
         parse_program(
             {"instructions": [{"op": "upload", "kind": "file", "blob": TENSOR_HASH, "path": path}]}
         )

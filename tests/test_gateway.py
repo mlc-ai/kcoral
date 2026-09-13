@@ -175,6 +175,8 @@ async def _cache_affinity(tmp_path, upload_kind):
             )
             reader = program.get_function(id="read", module=module, name="read")
             value = program.run(id="value", fn=reader)
+            program.return_file(key="file", path="input/value.bin")
+            program.return_folder(key="folder", path="input")
         program.return_(key="value", value=value)
 
         def execute():
@@ -197,6 +199,9 @@ async def _cache_affinity(tmp_path, upload_kind):
 
         result = await asyncio.wait_for(asyncio.to_thread(execute), 10)
         assert result.results["value"] == data
+        if upload_kind == "folder":
+            assert result["file"].read_bytes() == data
+            assert result["folder"].files["value.bin"].read_bytes() == data
         assert [item[2] for item in observations] == ["CACHE_MISS", "MULTIPART"]
         assert observations[0][0] == observations[1][0]
         assert observations[0][1] != observations[1][1]

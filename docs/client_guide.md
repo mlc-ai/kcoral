@@ -46,6 +46,8 @@ name; it is not the value itself.
 | `get_function(id=..., module=..., name=..., cpu_only=False)` | Select a function or object from an earlier module or library | `Register` |
 | `run(id=..., fn=..., args=None)` | Call a selected function or a built-in tool | `Register` |
 | `return_(key=..., value=...)` | Select an earlier value for the response | `None` |
+| `return_file(key=..., path=...)` | Select a workspace file for the response | `None` |
+| `return_folder(key=..., path=...)` | Select a workspace folder for the response | `None` |
 | `instructions` | Inspect a shallow copy of the wire instruction list | `list[dict]` |
 
 Instruction identifiers must be nonempty and unique. The name `return_` has a
@@ -119,7 +121,7 @@ measurement returned by `builtin.benchmark`.
    one last request containing every local blob.
 3. **Execute in order.** One worker runs the instructions. There is no retained
    program session between submissions.
-4. **Return selected values.** Only `return_` instructions contribute result
+4. **Return selected values.** Only return instructions contribute result
    entries. Returning early preserves that entry if a later instruction fails.
 5. **Clean up.** The request's registers, GPU values and temporary files expire.
    Closing the client closes connections; it does not erase server caches.
@@ -209,6 +211,39 @@ program unchanged.
 Each execution gets a fresh working directory, removed after completion,
 failure, timeout, or worker crash. Caching is automatic and best-effort.
 The workspace is not a sandbox for uploaded Python code.
+
+## Returning files and folders
+
+After uploaded code creates outputs in the request workspace:
+
+```python
+program.return_file(key="report", path="outputs/report.txt")
+program.return_folder(key="debug", path="outputs/debug")
+result = client.execute(program)
+result["report"].save("report.txt")
+result["debug"].save("debug")
+```
+
+`path` accepts a relative POSIX path or an earlier `Register` containing one.
+Each return captures contents at that instruction; later writes do not change
+it. Ordinary `return_` of a path string returns only the string. Earlier returns
+remain available if a later instruction fails; a failed collection adds nothing.
+
+`ReturnedFile.read_bytes()` reads the received contents. `ReturnedFolder.files`
+maps relative paths to `ReturnedFile`; `.directories` lists its directories.
+Folders include hidden files and empty directories, but omit original metadata.
+Missing paths, symlinks, special files, and files changing during collection fail
+the return. Finish writing outputs before returning them.
+
+`.save()` writes the exact local destination and requires an existing parent.
+File replacement needs `overwrite=True`; folder destinations must be new.
+Saving rejects symlink traversal and `..` and preserves existing files on failure.
+Folders are visible while being written. Failed saves remove partial folders;
+an abrupt process exit can leave them behind.
+Results remain usable after closing the client. Filesystem operations target Linux.
+
+Contents arrive in the same buffered response and are subject to server limits;
+`execute()` does not save files automatically.
 
 ## Handling failures
 

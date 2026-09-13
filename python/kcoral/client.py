@@ -16,6 +16,7 @@ import httpx
 import ml_dtypes
 import numpy as np
 
+from .artifacts import ReturnedFile, ReturnedFolder, validate_manifest
 from .keys import compute_blob_hash, is_blob_hash, verify_blob
 from .multipart import parse_multipart
 from .schemas import (
@@ -317,6 +318,31 @@ class Program:
         self._instructions.append({"op": "run", "id": id, "fn": wire_fn, "args": wire_args})
         return Register(id)
 
+    def return_file(self, *, key: str, path: str | Register) -> None:
+        """Select a regular file at this instruction, relative to the request workspace."""
+        self._return_path(key=key, path=path, kind="file")
+
+    def return_folder(self, *, key: str, path: str | Register) -> None:
+        """Select a complete folder, including hidden files and empty directories."""
+        self._return_path(key=key, path=path, kind="folder")
+
+    def _return_path(self, *, key: str, path: str | Register, kind: str) -> None:
+        self._check_return_key(key)
+        if isinstance(path, Register):
+            if path.id not in self._ids:
+                raise ValueError(f"return {key!r} references unknown handle {path.id!r}")
+            wire_path = _reference(path)
+        else:
+            wire_path = normalize_file_path(path)
+        self._instructions.append({"op": "return", "key": key, "kind": kind, "path": wire_path})
+        self._return_keys.add(key)
+
+    def _check_return_key(self, key: str) -> None:
+        if not isinstance(key, str) or not key:
+            raise ValueError("return key must be a non-empty string")
+        if key in self._return_keys:
+            raise ValueError(f"duplicate return key: {key!r}")
+
     def return_(self, *, key: str, value: Register | dict[str, str]) -> None:
         """Select an earlier value for the response's results mapping.
 
@@ -329,10 +355,7 @@ class Program:
         entry in the partial result. Only serializable values can be returned;
         compiled modules and function handles cannot be sent back.
         """
-        if not isinstance(key, str) or not key:
-            raise ValueError("return key must be a non-empty string")
-        if key in self._return_keys:
-            raise ValueError(f"duplicate return key: {key!r}")
+        self._check_return_key(key)
         reference = _reference(value) if isinstance(value, Register) else value
         if not (
             isinstance(reference, dict)
@@ -924,6 +947,29 @@ def _decode_value(encoded: Any, binary_parts: dict[str, bytes], used_parts: set[
     if value_type == "bytes":
         _expect_fields(encoded, {"type", "part", "sha256"})
         return _binary_part(encoded, binary_parts, used_parts)
+    if value_type == "file":
+        _expect_fields(encoded, {"type", "size", "part", "sha256"})
+        size = encoded["size"]
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise ValueError("file size must be a non-negative integer")
+        data = _binary_part(encoded, binary_parts, used_parts)
+        if len(data) != size:
+            raise ValueError("file binary length does not match size")
+        return ReturnedFile(data)
+    if value_type == "folder":
+        _expect_fields(encoded, {"type", "files", "directories"})
+        files, directories = encoded["files"], encoded["directories"]
+        if not isinstance(files, dict) or not isinstance(directories, list):
+            raise ValueError("folder files/directories have the wrong type")
+        validate_manifest(files, directories)
+        if any(
+            not isinstance(child, dict) or child.get("type") != "file" for child in files.values()
+        ):
+            raise ValueError("folder files must contain file values")
+        return ReturnedFolder(
+            {path: _decode_value(child, binary_parts, used_parts) for path, child in files.items()},
+            tuple(directories),
+        )
     if value_type == "tensor":
         _expect_fields(encoded, {"type", "dtype", "shape", "part", "sha256"})
         dtype = encoded["dtype"]

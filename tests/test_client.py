@@ -734,3 +734,47 @@ def test_tensor_round_trip_on_gpu():
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+
+
+@pytest.mark.parametrize("fail_after_return", [None, "return", "run"])
+def test_file_folder_returns_survive_workspace_cleanup(server_url, tmp_path, fail_after_return):
+    from pathlib import Path
+
+    p = Program()
+    p.upload_file(blob=b"input", path="input.txt")
+    module = p.upload(
+        id="module",
+        kind="module",
+        source="""
+from pathlib import Path
+import os
+def make():
+    Path("out/nested/empty").mkdir(parents=True)
+    Path("out/.hidden").write_bytes(b"")
+    Path("out/nested/report").write_bytes(Path("input.txt").read_bytes() + b" report")
+    return os.getcwd()
+def report_path():
+    return "out/nested/report"
+""",
+    )
+    make = p.get_function(id="make", module=module, name="make", cpu_only=True)
+    get_path = p.get_function(id="get_path", module=module, name="report_path", cpu_only=True)
+    workspace = p.run(id="workspace", fn=make)
+    path = p.run(id="path", fn=get_path)
+    p.return_(key="workspace", value=workspace)
+    p.return_file(key="report", path=path)
+    p.return_folder(key="outputs", path="out")
+    if fail_after_return == "return":
+        p.return_file(key="missing", path="missing")
+    elif fail_after_return == "run":
+        p.run(id="fail", fn="builtin.missing")
+    with Client(server_url) as client:
+        result = client.execute(p)
+    assert result.completed == (fail_after_return is None)
+    assert not Path(result["workspace"]).exists()
+    result["report"].save(tmp_path / "report")
+    result["outputs"].save(tmp_path / "outputs")
+    assert (tmp_path / "report").read_bytes() == b"input report"
+    assert (tmp_path / "outputs/nested/report").read_bytes() == b"input report"
+    assert (tmp_path / "outputs/nested/empty").is_dir()
+    assert (tmp_path / "outputs/.hidden").read_bytes() == b""

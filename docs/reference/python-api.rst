@@ -18,7 +18,7 @@ Program construction
 --------------------
 
 .. autoclass:: Program
-   :members: instructions, upload, upload_file, upload_folder, get_function, run, return_
+   :members: instructions, upload, upload_file, upload_folder, get_function, run, return_, return_file, return_folder
 
 .. autoclass:: Register
    :members: id
@@ -29,6 +29,12 @@ Results
 .. autoclass:: ProgramResult
    :members: completed
    :special-members: __getitem__
+
+.. autoclass:: ReturnedFile
+   :members: read_bytes, save
+
+.. autoclass:: ReturnedFolder
+   :members: files, directories, save
 
 .. _python-errors:
 
