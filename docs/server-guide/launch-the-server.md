@@ -45,7 +45,7 @@ that throughput numbers should record the setting.
 
 Start with one GPU instance for remote compilation and measurement. Use separate
 CPU and GPU instances when compilation capacity should scale independently;
-the [compilation workflow](../tutorials/benchmark-kernel.md#where-to-compile)
+the [Remote Compilation tutorial](../tutorials/remote-compilation.md)
 explains how to pass a compiled library between them.
 The CPU compilation service does not provide general GPU execution.
 
