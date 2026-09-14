@@ -1,11 +1,17 @@
 # Remote Compilation
 
-Compile a kernel in one request, return the compiled library to the client,
-and use that library in a later request for remote execution. The two requests
-can go to different KCoral servers, such as a CPU (central processing unit)
-compilation server and a GPU (graphics processing unit) execution server.
-A single GPU server with the compilation tools installed can also serve both
-roles.
+In large-scale kernel evaluation, compilation can take much longer than kernel
+execution. The compilation step needs only a CPU (central processing unit),
+while execution needs a GPU (graphics processing unit). Running that compilation
+work on expensive GPU servers increases cost and can leave GPUs underutilized.
+
+A more cost-effective approach is to compile on inexpensive CPU-only machines,
+download the compiled result, and upload it to a GPU server for execution.
+KCoral supports this workflow through file upload and download: one request
+returns a compiled shared library, and the next uploads it for remote execution.
+
+The two requests can use different servers. A single GPU server with the
+compilation tools installed can also serve both roles.
 
 The client carries the compiled artifact between the requests. Each request
 has its own `Program` and its own handles:
