@@ -46,7 +46,7 @@ A Router accepts client requests and chooses an available compute node. Each
 node runs `kcoral-node` to supervise its Python server; both node processes
 connect outward to the Router. Clients use the same execution API.
 
-See [Router deployment](docs/server/router.md) for setup, scheduling and failure
+See [Router deployment](docs/server-guide/router.md) for setup, scheduling and failure
 handling, and the [Rust package guide](rust/kcoral/README.md) for implementation
 and integration test commands.
 

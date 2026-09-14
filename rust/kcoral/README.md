@@ -40,7 +40,7 @@ It passes `KCORAL_ROUTER_ENDPOINT`, `KCORAL_NODE_ID`, and the optional
 as its control stream. The host and port from `--server-url` become the child's
 `KCORAL_SERVER_HOST` and `KCORAL_SERVER_PORT` defaults. Without a command after
 `--`, the manager runs `kcoral`; explicit child flags override the defaults.
-See the [Router deployment guide](../../docs/server/router.md) for examples.
+See the [Router deployment guide](../../docs/server-guide/router.md) for examples.
 
 The router and supervisor themselves rely on systemd, Kubernetes, or an
 equivalent service manager for process restart. A supervisor restart also
