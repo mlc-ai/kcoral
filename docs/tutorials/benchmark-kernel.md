@@ -59,9 +59,7 @@ result = gpu_client.execute(build_benchmark_program(library))
 The CPU server starts with `--device cpu --num-workers N`. It has no target of its
 own, reports `gpu_count: 0`, and never initializes PyTorch or a CUDA context.
 Only CUDA C compilation is supported in CPU mode; tensor creation, library
-loading, correctness checks, and timing belong in the GPU request. See
-[`../examples/cpu_compile_gpu_execute.py`](examples/split-compilation.md)
-for the complete programs.
+loading, correctness checks, and timing belong in the GPU request.
 
 **Compiling on the server is the recommended starting point.** Upload the kernel
 as source text and let one of the `builtin.compile_*` builtins build it. The
@@ -246,16 +244,5 @@ CPU data. `check_close` and `assert_close` accept its CPU result as `expected`.
 The check is best effort: it cannot see a child process, and it catches a call
 only after it reached the GPU. The flag applies to the handle as a `run` target
 only; passed to `benchmark`, the function runs on the GPU's time.
-[`../examples/remote_compile_client.py`](examples/remote-compilation.md)
-checks every kernel against such a reference.
-
-
-## More complete examples
-
-```{toctree}
-:maxdepth: 1
-
-examples/remote-compilation
-examples/library-upload
-examples/split-compilation
-```
+The [Remote Compilation tutorial](remote-compilation.md) uses this approach
+to check kernels in each supported language.

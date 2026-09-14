@@ -45,7 +45,8 @@ that throughput numbers should record the setting.
 
 Start with one GPU instance for remote compilation and measurement. Use separate
 CPU and GPU instances when compilation capacity should scale independently;
-the [two-server example](../tutorials/examples/split-compilation.md) shows the requests.
+the [compilation workflow](../tutorials/benchmark-kernel.md#where-to-compile)
+explains how to pass a compiled library between them.
 The CPU compilation service does not provide general GPU execution.
 
 `0.0.0.0` listens on every network interface. The default `127.0.0.1` listens

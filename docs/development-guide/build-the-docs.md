@@ -45,7 +45,6 @@ docs/
 ├── client-guide/
 ├── server-guide/
 ├── tutorials/
-│   └── examples/
 ├── development-guide/
 └── python-api/
 ```
