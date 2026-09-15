@@ -118,7 +118,7 @@ boundary.
 | `--max-status-age-seconds` | `5` | Maximum age of a node health report |
 | `--unhealthy-threshold` | `3` | Failed observations before removing a ready node |
 | `--recovery-threshold` | `2` | Successful observations before a failed node returns |
-| `--queue-wait-timeout-seconds` | `30` | Maximum wait for capacity |
+| `--queue-wait-timeout-seconds` | `1800` | Maximum wait for capacity |
 | `--max-queued-requests` | `1024` | Bound on requests waiting for capacity |
 | `--node-retention-seconds` | `600` | Retention of disconnected, unused node records |
 | `--max-request-bytes` | `268435456` | Maximum accepted request body size |

@@ -25,7 +25,7 @@ struct Args {
     unhealthy_threshold: u32,
     #[arg(long, default_value_t = 2)]
     recovery_threshold: u32,
-    #[arg(long, default_value_t = 30.0)]
+    #[arg(long, default_value_t = 1800.0)]
     queue_wait_timeout_seconds: f64,
     #[arg(long, default_value_t = 1024)]
     max_queued_requests: usize,

@@ -276,7 +276,7 @@ if result.status == "FAILED":
 - **An exception** — the client could not obtain a valid program outcome.
   `KCoralError` carries `status_code` and `kind`: `503` with a
   `Retry-After` header means no worker was free, and `504` means the program hit
-  `timeout_seconds` (default 300 s, maximum 3600). `TransportError` means no HTTP
+  `timeout_seconds` (default 300 s, maximum 900). `TransportError` means no HTTP
   response could be obtained; the server may already have executed the program,
   so check whether repeating its effects is acceptable before retrying.
   `ProtocolError` means the response did not follow the protocol.

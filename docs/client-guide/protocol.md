@@ -604,7 +604,7 @@ limit (default 256 MiB) applies. `output_limit_bytes` controls only stdout/stder
 
 | Field | Type | Required | Default | Notes |
 |---|---|---:|---|---|
-| `timeout_seconds` | number | no | `300` | Worker execution deadline; maximum `3600` |
+| `timeout_seconds` | number | no | `300` | Worker execution deadline; maximum `900` |
 | `output_limit_bytes` | integer | no | `1048576` | Maximum bytes returned for each of stdout and stderr; maximum `16777216`; `0` disables capture |
 
 A value above either maximum is clamped to it, not rejected.

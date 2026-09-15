@@ -38,8 +38,8 @@ class ServerConfig:
     disk_cache_dir: Path | None = field(default_factory=_default_disk_cache_dir)
     disk_cache_capacity_mbytes: int = 16 * 1024  # MiB (1024**2 bytes); 0 disables file caching
     default_timeout_seconds: float = 300.0  # per-request execution timeout
-    max_timeout_seconds: float = 3600.0
-    worker_wait_timeout_seconds: float = 30.0  # wait for a free worker before 503
+    max_timeout_seconds: float = 900.0
+    worker_wait_timeout_seconds: float = 1800.0  # wait for a free worker before 503
     workers_per_gpu: int = 8
     max_requests_per_worker: int = 1  # fresh process/context per request; 0 = unlimited
     worker_termination_grace_seconds: float = 5.0  # SIGTERM-to-SIGKILL window on kill
