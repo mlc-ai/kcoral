@@ -7,7 +7,7 @@ owns compilation, device data and measurement.
 
 ## Prerequisites
 
-Install the [GPU worker environment](../getting-started/installation.md#running-gpu-programs)
+Install the [GPU worker environment](../getting-started/installation.md#gpu-server)
 and [launch the server](../server-guide/launch-the-server.md). The first example uses TIRx,
 TVM's Python-embedded kernel language. TVM is a tensor compiler. Later sections
 explain CUDA C, NVIDIA's GPU extension to C++, CuTeDSL, NVIDIA's Python language

@@ -1,30 +1,55 @@
 # Your First Program
 
-Upload a four-element tensor, add one on the GPU (graphics processing unit),
-and return the result. The uploaded function checks that its input is on the
-GPU before doing arithmetic. The client only needs KCoral and NumPy, a Python
-array library; the computation happens on the server.
+Start a KCoral server, then submit a program that adds one to a four-element
+tensor on its GPU (graphics processing unit) and returns the result.
 
-## Before you start
+## Required hardware
 
-Install the [client](installation.md#the-client) and use a running server with
-the [GPU worker environment](installation.md#running-gpu-programs). A CPU
-(central processing unit) compilation server cannot run this example. See
-[Launch the server](../server-guide/launch-the-server.md) if you need to start one.
+You need one Linux machine with an NVIDIA GPU and a compatible driver. Install
+the [GPU server environment](installation.md#gpu-server) on it; this
+also installs the client. The example uses PyTorch, a tensor library included
+in that environment, and does not compile a custom kernel.
+
+The steps below run the server and client on that same machine, in two
+terminals. A CPU (central processing unit) compilation server cannot run this
+program: the uploaded function checks that the tensor is on a GPU before
+doing arithmetic.
+
+## Launch the server
+
+In the first terminal, open the repository directory, activate the installed
+environment, and start one worker on GPU 0:
+
+```bash
+source .venv/bin/activate
+kcoral --device gpu --gpus 0 --workers-per-gpu 1 --host 127.0.0.1 --port 8000
+```
+
+GPU 0 is the first GPU listed by `nvidia-smi`. Wait for server startup to finish
+and leave this terminal running. The client will connect to
+`http://127.0.0.1:8000`.
 
 ## Submit the program
 
-Run from your repository checkout, replacing the address when using a remote server:
+In a second terminal, open the same repository directory and activate the
+environment:
 
 ```bash
-KCORAL_URL=http://localhost:8000 python examples/first_program.py
+source .venv/bin/activate
 ```
+
+Save the following complete program as `first_program.py`:
 
 ```{literalinclude} ../../examples/first_program.py
 :language: python
 ```
 
-{download}`Download the complete program <../../examples/first_program.py>`.
+You can also {download}`download first_program.py <../../examples/first_program.py>`.
+Run it from the directory where you saved it:
+
+```bash
+KCORAL_URL=http://127.0.0.1:8000 python first_program.py
+```
 
 Expected output:
 
@@ -32,6 +57,19 @@ Expected output:
 COMPLETED
 [1. 2. 3. 4.]
 ```
+
+The program checks that the request completed and that the returned array has
+the expected values. When you finish, press `Ctrl+C` in the server terminal to
+stop it.
+
+### Use a remote server
+
+To submit from another machine, start the server with `--host 0.0.0.0` so it
+listens beyond the local machine. Install the
+[client](installation.md#install-the-client) on the submitting machine, save the same
+program there, and set `KCORAL_URL` to the server's reachable address, for
+example `http://192.168.1.10:8000`. The client machine does not need a GPU.
+See [Launch the server](../server-guide/launch-the-server.md) for more configuration.
 
 ## How it works
 

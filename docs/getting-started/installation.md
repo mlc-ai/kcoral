@@ -1,89 +1,141 @@
 # Installation
 
-Run these commands from a checkout of the KCoral repository. Python 3.10 or
-newer runs the package; building this documentation uses Python 3.12.
+Install the client on the machine that submits programs. If you also host a
+KCoral server, install a server environment on each machine that runs it.
+The steps below install KCoral from source.
 
-The client sends programs to an existing server. GPU means graphics processing
-unit; CPU means central processing unit. Only the server's workers need the
-GPU libraries or compilation tools listed below. CUDA is NVIDIA's GPU programming
-platform; `nvcc` is its compiler. TVM is a tensor compiler, and TVM FFI is its
-foreign-function interface for calling compiled code. PyTorch provides tensors,
-`ninja` runs compilation tasks, and CUPTI (CUDA Profiling Tools Interface) provides
-GPU activity timestamps. The [language guide](../tutorials/benchmark-kernel.md#languages-supported-by-remote-compilation)
-describes TIRx, CuTeDSL and Triton kernel compilation.
+## Get the source
 
-## The client
+You need Git and Python 3.10 or newer. The server commands below use Python 3.12
+on Linux.
 
 ```bash
-pip install .
+git clone https://github.com/mlc-ai/kcoral.git
+cd kcoral
 ```
 
-This gives the Python client on its own, which is all that sending programs to
-a running server needs. It does not depend on a GPU, so it can install on a
-machine with no GPU, no CUDA and no compiler.
+Run the remaining commands from this repository directory.
 
-## The server
+<a id="the-client"></a>
 
-The `server` extra adds the HTTP front-end, FastAPI and uvicorn, which the
-client never imports:
+## Install the client
+
+Create and activate a virtual environment, then install KCoral:
 
 ```bash
-pip install '.[server]'
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install .
 ```
 
-Neither the client nor the front-end touches a GPU. Running programs needs a
-worker environment holding more, and how much depends on what the programs use:
+This installs the client and its dependencies. The client machine needs no GPU
+(graphics processing unit), CUDA toolkit, or compiler. CUDA is NVIDIA's GPU
+programming platform.
 
-| To run | The worker environment needs |
-|---|---|
-| a CPU compilation server | TVM FFI, `nvcc`, `ninja`, and a host C++ compiler |
-| any GPU program | PyTorch and TVM FFI |
-| `compile_tirx` | TVM as well |
-| `compile_cuda` | `nvcc`, a host C++ compiler, and `ninja` as well |
-| `compile_cutedsl`, or a CuTeDSL library upload | `nvidia-cutlass-dsl` as well |
-| `compile_triton` | `triton`, which the CUDA PyTorch wheels already carry |
-| `benchmark`, or a `cpu_only` function | `cupti-python` as well |
-| a program importing FlashInfer | `flashinfer-python` 0.6.17 or newer as well |
-
-A builtin whose requirement is absent answers `unavailable` and the rest of the
-server is unaffected, so a partial environment is a usable deployment.
-
-Build whichever of the environments below matches the work.
-
-## Front-end, engine, and client
-
-The lockfile builds this one, CPU-only, with no GPU or compiler needed:
+Verify that the client imports successfully:
 
 ```bash
-uv sync --no-editable
+python -c "from kcoral import Client, Program; print('KCoral client is ready')"
 ```
 
-`uv sync --no-editable --no-default-groups` narrows it to the client's dependencies alone.
+If you already have a server address, continue to
+[Your First Program](quickstart.md).
 
-## Running GPU programs
+<a id="the-server"></a>
 
-The `gpu` group adds PyTorch, TVM, TVM FFI, CuTeDSL, and the CUPTI Python
-bindings, which together cover every builtin and every kind of library upload,
-plus other dependencies for programs whose reference calls it:
+## Install the server
+
+On the server machine, get the source as above and install
+[uv](https://docs.astral.sh/uv/getting-started/installation/), a Python package
+and environment manager. Choose one of the environments below. Each command
+creates `.venv`, installs KCoral with the client and server dependencies, and
+uses the versions recorded in `uv.lock`. uv downloads Python 3.12 if needed.
+
+<a id="running-gpu-programs"></a>
+
+### GPU server
+
+Use this environment to execute and benchmark GPU kernels. Before installing:
+
+- Install an NVIDIA driver compatible with the CUDA 13.2 PyTorch packages
+  selected by the repository. Confirm that `nvidia-smi` lists your GPU.
+- To compile CUDA C kernels on this server, also install the
+  [CUDA toolkit](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/)
+  and a supported host C++ compiler. Confirm that `nvcc --version` and
+  `c++ --version` work in your shell.
+
+Install the Python packages and activate the environment:
 
 ```bash
-uv sync --no-editable --group gpu
+uv sync --locked --no-editable --group gpu --python 3.12
+source .venv/bin/activate
 ```
 
-`nvcc` and a host C++ compiler still come from the system; everything else is a
-wheel, and no environment variables are needed.
+The `gpu` dependency group includes the tensor, compilation and profiling
+libraries used by the built-in tools. It does not install the system driver or
+host C++ compiler.
 
-## Running CPU compilation workers
-
-The `compiler` group adds TVM FFI and `ninja` without installing PyTorch or
-other GPU runtimes. The CUDA toolkit and a host C++ compiler still come from the
-system:
+Check that PyTorch, the tensor library used by workers, can access the GPU:
 
 ```bash
-uv sync --no-editable --group compiler
+python -c "import torch, tvm_ffi; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))"
+kcoral --help
 ```
 
-## Next steps
+The first command should print your GPU's name. The second should display the
+server's command-line options. Continue to
+[Launch the server](../server-guide/launch-the-server.md) to start it.
 
-If you have a server address, follow the [quickstart](quickstart.md).
-To run your own server, continue to [deployment](../server-guide/launch-the-server.md).
+<a id="running-cpu-compilation-workers"></a>
+
+### CPU compilation server
+
+Use this environment to compile CUDA C on a CPU (central processing unit), then
+send the compiled library to a GPU server for execution. This machine needs the
+[CUDA toolkit](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/),
+including `nvcc`, and a supported host C++ compiler; it does not need a GPU.
+Install the toolkit's compiler components without the GPU driver on this host.
+
+```bash
+uv sync --locked --no-editable --group compiler --python 3.12
+source .venv/bin/activate
+```
+
+The `compiler` group installs TVM FFI (a foreign-function interface for compiled
+code) and Ninja (a build tool). Verify the Python package and compiler tools:
+
+```bash
+python -c "import tvm_ffi; print('KCoral compiler dependencies are ready')"
+nvcc --version
+c++ --version
+ninja --version
+kcoral --help
+```
+
+Each command should succeed. Follow
+[Remote Compilation](../tutorials/remote-compilation.md) to launch the CPU and
+GPU servers and pass a compiled library between them.
+
+<a id="front-end-engine-and-client"></a>
+
+### Server without worker libraries
+
+If you only need the server package, for example to develop the request-handling
+code, install the default environment:
+
+```bash
+uv sync --locked --no-editable --python 3.12
+source .venv/bin/activate
+kcoral --help
+```
+
+This installs the client and server packages. Add the `gpu` or `compiler` group
+above before running the corresponding worker workloads. For an existing Python
+environment managed with pip, `python -m pip install '.[server]'` installs the
+same server extra; it does not install worker libraries.
+
+## Use the environment
+
+In a new terminal, return to the repository and run `source .venv/bin/activate`
+before invoking `python` or `kcoral`. Repeat the appropriate installation command
+after updating the source to reinstall KCoral and its dependencies.

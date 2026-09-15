@@ -27,14 +27,14 @@ elements. CUDA C is NVIDIA's GPU extension to C++.
 
 ## Prepare the two servers
 
-Install the [client](../getting-started/installation.md#the-client) on the
+Install the [client](../getting-started/installation.md#install-the-client) on the
 machine coordinating the requests. It needs no local compiler or GPU.
 The two server roles have different requirements:
 
 | Role | Environment |
 | --- | --- |
-| CPU compiler | The [compiler environment](../getting-started/installation.md#running-cpu-compilation-workers), the CUDA toolkit with `nvcc`, and a host C++ compiler |
-| GPU executor | The [GPU worker environment](../getting-started/installation.md#running-gpu-programs), including PyTorch, TVM FFI and CUPTI for benchmarking |
+| CPU compiler | The [compiler environment](../getting-started/installation.md#cpu-compilation-server), the CUDA toolkit with `nvcc`, and a host C++ compiler |
+| GPU executor | The [GPU worker environment](../getting-started/installation.md#gpu-server), including PyTorch, TVM FFI and CUPTI for benchmarking |
 
 `nvcc` compiles CUDA source. TVM FFI is a foreign-function interface for calling
 compiled code and exchanging tensors. CUPTI is NVIDIA's CUDA Profiling Tools
