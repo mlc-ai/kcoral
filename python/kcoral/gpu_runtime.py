@@ -1,8 +1,7 @@
-"""The GPU runtime: materialize uploads, resolve builtins.
+"""The GPU runtime: materialize uploads, load uploaded modules.
 
 The one :class:`Runtime` that touches a GPU; it runs inside the worker process
-and has no compiler of its own — compiling and running kernels are builtins (see
-:mod:`kcoral.builtin_ops`). torch is imported lazily, so importing this
+and executes the harness supplied by the client. torch is imported lazily, so importing this
 module touches no GPU.
 """
 
@@ -26,8 +25,10 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from . import builtin_ops, process_state
+from . import process_state
+from .cuda_source import CUDAModule
 from .errors import ExecutionError, GPUAccessViolation
+from .python_module import LoadedPythonModule, materialize_module
 
 # Libraries already dlopened by this worker, keyed by the SHA-256 of their bytes.
 # Purely a memoization — every request carries the bytes it needs. Bounded because
@@ -37,13 +38,6 @@ _LOADED_LIBRARIES: OrderedDict[str, Any] = OrderedDict()
 _LOADED_LIBRARIES_LIMIT = 32
 _LIBRARY_DIR: Path | None = None
 _LOADERS_READY = False
-
-
-@dataclass(frozen=True)
-class LoadedPythonModule:
-    """The namespace created by executing one uploaded Python source module."""
-
-    namespace: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -67,22 +61,21 @@ class LoadedFunction:
 class GPURuntime:
     """Construct inside the worker after its GPU is pinned. Building it checks that
     torch and tvm_ffi import (the mandatory deps), so a broken environment fails at
-    startup, not mid-run. Full tvm is optional — only ``compile_tirx`` needs it, and
-    it fails gracefully when tvm is absent."""
+    startup, not mid-run. Full tvm is optional; uploaded TIRx harnesses and
+    libraries containing TVM modules need it."""
 
     def __init__(self) -> None:
         _require_torch_and_ffi()
         self._seeded_fnames: list[str] = []  # linecache keys to clear on reset
         _warm_up()
-        self._builtins = builtin_ops.snapshot_registry()
         self._process_state = process_state.snapshot()
         self._request_libraries: list[LoadedLibrary] = []
 
     def load_module(self, source: str, language: str = "python") -> Any:
         if language == "cuda":
-            # Nothing runs here: get_function selects source for a compile builtin.
-            return builtin_ops.CUDAModule(source=source)
-        return self._materialize_module(source)
+            # Nothing runs here: get_function selects source for an uploaded compiler.
+            return CUDAModule(source=source)
+        return materialize_module(source, self._seeded_fnames)
 
     def load_library(self, data: bytes) -> LoadedLibrary:
         library = _materialize_library(data)
@@ -93,13 +86,8 @@ class GPURuntime:
 
     def get_function(self, module: Any, name: str) -> Any:
         if isinstance(module, LoadedPythonModule):
-            try:
-                return module.namespace[name]
-            except KeyError:
-                raise ExecutionError(
-                    "parse", f"the uploaded Python module defines no name {name!r}"
-                ) from None
-        if isinstance(module, builtin_ops.CUDAModule):
+            return module.get_function(name)
+        if isinstance(module, CUDAModule):
             return module.get_function(name)
         if not isinstance(module, LoadedLibrary):
             raise ExecutionError(
@@ -144,15 +132,6 @@ class GPURuntime:
         shape = [int(dimension) for dimension in tensor.shape]
         data = tensor.reshape(-1).view(torch.uint8).numpy().tobytes()
         return dtype, shape, data
-
-    def builtin(self, name: str) -> Callable:
-        fn = builtin_ops.resolve(name)
-        if fn is None:
-            raise ExecutionError("runtime", f"unknown function: {name!r}")
-        return fn
-
-    def cpu_only_builtins(self) -> frozenset[str]:
-        return builtin_ops.cpu_only_builtins()
 
     @contextmanager
     def forbid_gpu(self) -> Iterator[None]:
@@ -225,7 +204,6 @@ class GPURuntime:
     def reset(self) -> None:
         import torch
 
-        builtin_ops.restore_registry(self._builtins)
         process_state.restore(self._process_state)
         for fname in self._seeded_fnames:
             linecache.cache.pop(fname, None)
@@ -239,24 +217,6 @@ class GPURuntime:
         # replace this worker instead of returning its context to the pool.
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
-
-    def _materialize_module(self, source: str) -> LoadedPythonModule:
-        # A kernel is re-read from its source text at compile time, so seed
-        # linecache. Key by content hash so two functions in one program don't
-        # overwrite each other's source.
-        digest = hashlib.sha1(source.encode("utf-8")).hexdigest()[:16]
-        fname = f"<uploaded:{digest}>"
-        linecache.cache[fname] = (len(source), None, source.splitlines(True), fname)
-        self._seeded_fnames.append(fname)
-        ns: dict = {}
-        try:
-            # Trusted only because the worker is a GPU-pinned, crash-isolated process.
-            exec(compile(source, fname, "exec"), ns)
-        except SyntaxError as exc:
-            raise ExecutionError("parse", f"syntax error: {exc}") from exc
-        except Exception as exc:
-            raise ExecutionError("parse", f"{type(exc).__name__}: {exc}") from exc
-        return LoadedPythonModule(namespace=ns)
 
 
 def _call_site(frames: list[traceback.FrameSummary]) -> str:
@@ -366,7 +326,9 @@ def _materialize_tensor(data: bytes, dtype_name: str, shape: list[int]) -> Any:
     import torch
 
     try:
-        dtype = builtin_ops.torch_dtype(dtype_name)
+        dtype = getattr(torch, dtype_name, None)
+        if not isinstance(dtype, torch.dtype):
+            raise ExecutionError("runtime", f"unknown dtype: {dtype_name!r}")
         if not data:
             return torch.empty(shape, dtype=dtype, device="cuda")
         return torch.frombuffer(bytearray(data), dtype=dtype).reshape(shape).to("cuda")

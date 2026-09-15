@@ -21,7 +21,7 @@ cat .agents/skills/kcoral-client/SKILL.md
 {download}`Download the skill <../../.claude/skills/kcoral-client/SKILL.md>`.
 
 Give the agent access to the same revision of the skill, the
-[KCoral Protocol](../client-guide/protocol.md), [Builtin Tools](../client-guide/builtin-tools.md) and
+[KCoral Protocol](../client-guide/protocol.md) and
 [Writing a Program](../client-guide/writing-a-program.md). The protocol is the authority for field
 validation when a summary and the protocol disagree. The Python API supplies
 the actual method signatures.
@@ -37,8 +37,8 @@ For example, give the agent this prompt from the repository checkout:
 
 ```text
 Read .agents/skills/kcoral-client/SKILL.md before writing the client.
-Use docs/client-guide/protocol.md for field validation and docs/client-guide/builtin-tools.md
-for built-in function parameters.
+Use docs/client-guide/protocol.md for field validation. Upload your own Python harness
+for compilation, allocation, correctness checks, and measurement.
 
 Write a runnable Python client for the KCoral server at http://localhost:8000.
 Implement add-one for 4096 float32 elements using CUDA C. Compile on the
@@ -55,24 +55,23 @@ Replace the task's workload and endpoint with yours. Supply any required files
 and their expected relative paths. If the agent may execute submissions, make
 that scope explicit; otherwise ask it to produce the program for review.
 
-## Have the agent build one self-contained program
+## Have the agent build a program
 
 The skill guides the agent through this sequence:
 
 1. Inspect `Client.health()` and, when compiling a library, the GPU server's
    `Client.target()` so it uses an available toolchain and the right architecture.
 2. Upload the module and use `get_function()` to select the kernel or launcher.
-3. Allocate device inputs with built-in tools, or upload data whose exact values
+3. Allocate device inputs in uploaded Python, or upload data whose exact values
    matter. Use `upload_file()` or `upload_folder()` for scripts that read files.
-4. Compile with the matching built-in function, or upload a prebuilt library.
-5. Run the kernel and compare it against a reference with `builtin.assert_close`.
-6. Call `builtin.benchmark` only after the comparison succeeds.
+4. Compile with an uploaded harness, or upload a prebuilt library.
+5. Run the kernel and compare it against a reference with your harness’s assertions.
+6. Run your measurement harness only after the comparison succeeds.
 7. Add `return_()` instructions for the correctness and timing reports, then
    submit with `Client.execute()` and inspect the outcome.
 
-The [benchmark tutorial](benchmark-kernel.md) and its complete script provide
-a concrete example. Use the Python client rather than having the agent hand-build
-multipart requests: the client handles hashing, missing-blob negotiation and
+The [benchmark tutorial](benchmark-kernel.md) explains compilation and GPU
+lease handling. Use the Python client to construct multipart requests: the client handles hashing, missing-blob negotiation and
 decoding tensor results.
 
 ## Review the generated program
@@ -83,15 +82,16 @@ decoding tensor results.
 | Output tensors are written before comparison | An uninitialized allocation is not a computed answer |
 | The result is explicitly selected by `return_()` | `run()` alone does not send a value back |
 | File uploads use the dedicated helper methods | `Program.upload(kind="file")` is not supported |
-| Compilation has its own `run` instruction | This lets the worker release its GPU lease during compilation |
+| Host-only work is selected with `get_function(..., cpu_only=True)` and invoked in its own `run` | The worker releases the GPU lease and checks for CUDA access |
 | `assert_close` precedes `benchmark` | Incorrect output should not produce a successful timing report |
 | The program checks `result.completed` before reading expected keys | Failures can return only partial results |
 | Target and version information accompanies results | Generated code must match the actual server environment |
 
-Inside uploaded Python, the agent may call `kcoral.builtin` directly. However,
-compilation performed inside such a function does not automatically release the
-GPU. For nested argument structures, use explicit `{"$ref": "id"}` dictionaries;
-the Python client only converts top-level `Register` arguments automatically.
+Uploaded Python can use its own libraries, CLI tools and profiler scripts.
+`cpu_only=True` applies only to the selected function's own `run` instruction.
+Compilation that loads a CUDA module must keep the lease or split host building
+and GPU loading into separate instructions. Nested reference-shaped arguments
+remain JSON literals; pass handles as top-level arguments.
 
 ## Preserve evidence and iterate
 

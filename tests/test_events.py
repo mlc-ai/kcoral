@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
+from support.programs import harness_instructions
 
 from kcoral.app import create_app
 from kcoral.config import ServerConfig
@@ -13,7 +14,7 @@ from kcoral.testing import fake_runtime_factory
 
 STRUCTURAL_PROGRAM = {
     "instructions": [
-        {"op": "run", "id": "value", "fn": "builtin.structural"},
+        *harness_instructions("value", "structural"),
         {"op": "return", "key": "value", "value": {"$ref": "value"}},
     ]
 }
@@ -97,7 +98,7 @@ def test_accepted_record_describes_the_workload(tmp_path):
     program = {
         "instructions": [
             {"op": "upload", "id": "m", "kind": "module", "language": "python", "source": "x = 1"},
-            {"op": "run", "id": "value", "fn": "builtin.structural"},
+            *harness_instructions("value", "structural"),
             {"op": "return", "key": "value", "value": {"$ref": "value"}},
         ],
         "options": {"timeout_seconds": 12.0},
@@ -105,10 +106,10 @@ def test_accepted_record_describes_the_workload(tmp_path):
     with _make_client(tmp_path) as client:
         assert _post(client, program).status_code == 200
     accepted = _one(_read_events(tmp_path), "request_accepted")
-    assert accepted["instructions"] == 3
-    assert accepted["ops"] == {"upload": 1, "run": 1, "return": 1}
-    assert accepted["uploads"] == {"module:python": 1}
-    assert accepted["builtins"] == ["builtin.structural"]
+    assert accepted["instructions"] == 5
+    assert accepted["ops"] == {"upload": 2, "get_function": 1, "run": 1, "return": 1}
+    assert accepted["uploads"] == {"module:python": 2}
+    assert "builtins" not in accepted
     assert accepted["timeout_seconds"] == 12.0
     assert accepted["request_bytes"] > 0
 
@@ -128,14 +129,14 @@ def test_arrival_is_recorded_before_a_request_can_be_rejected(tmp_path):
 
 
 def test_program_failure_records_the_failing_instruction(tmp_path):
-    program = {"instructions": [{"op": "run", "id": "bad", "fn": "builtin.stale_cuda_error"}]}
+    program = {"instructions": [*harness_instructions("bad", "stale_cuda_error")]}
     with _make_client(tmp_path) as client:
         assert _post(client, program).status_code == 200
     finished = _finished(tmp_path)
     assert finished["finish_reason"] == "program_failed" and finished["status"] == "FAILED"
     assert finished["error_kind"] == "runtime"
     assert "cudaErrorInvalidValue" in finished["error_message"]
-    assert finished["instruction_index"] == 0 and finished["instruction_op"] == "run"
+    assert finished["instruction_index"] == 2 and finished["instruction_op"] == "run"
     assert finished["instruction_id"] == "bad"
     # The client's kernel misbehaved, not the server: not an ERROR.
     assert finished["level"] == "INFO"
@@ -164,7 +165,7 @@ def test_request_limit_is_the_reason_a_healthy_worker_retires(tmp_path):
 
 
 def test_poisoned_context_is_the_reason_a_failed_cleanup_retires_a_worker(tmp_path):
-    program = {"instructions": [{"op": "run", "id": "bad", "fn": "builtin.poison"}]}
+    program = {"instructions": [*harness_instructions("bad", "poison")]}
     with _make_client(tmp_path) as client:
         assert _post(client, program).status_code == 200
     events = _read_events(tmp_path)
@@ -176,7 +177,7 @@ def test_poisoned_context_is_the_reason_a_failed_cleanup_retires_a_worker(tmp_pa
 
 def test_timeout_is_the_reason_a_worker_never_answered(tmp_path):
     program = {
-        "instructions": [{"op": "run", "id": "sleep", "fn": "builtin.sleep", "args": [5]}],
+        "instructions": [*harness_instructions("sleep", "sleep", [5])],
         "options": {"timeout_seconds": 0.5},
     }
     with _make_client(tmp_path) as client:
@@ -189,7 +190,7 @@ def test_timeout_is_the_reason_a_worker_never_answered(tmp_path):
 
 
 def test_crash_is_the_reason_a_worker_exited_mid_request(tmp_path):
-    program = {"instructions": [{"op": "run", "id": "boom", "fn": "builtin.crash"}]}
+    program = {"instructions": [*harness_instructions("boom", "crash")]}
     with _make_client(tmp_path) as client:
         assert _post(client, program).status_code == 200
     events = _read_events(tmp_path)
@@ -273,7 +274,7 @@ VIOLATING_PROGRAM = {
 
 
 def test_a_cpu_only_function_touching_the_gpu_is_a_warning_naming_both_requests(tmp_path):
-    holding = {"instructions": [{"op": "run", "id": "hold", "fn": "builtin.sleep", "args": [1.0]}]}
+    holding = {"instructions": [*harness_instructions("hold", "sleep", [1.0])]}
     with _make_client(tmp_path, workers_per_gpu=2) as client:
         alone = _post(client, VIOLATING_PROGRAM).json()
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -398,7 +399,7 @@ def test_a_record_stays_cheap_enough_to_leave_on(tmp_path):
 
 
 def test_a_killed_worker_leaves_its_output_behind(tmp_path):
-    program = {"instructions": [{"op": "run", "id": "boom", "fn": "builtin.crash_after_output"}]}
+    program = {"instructions": [*harness_instructions("boom", "crash_after_output")]}
     with _make_client(tmp_path) as client:
         assert _post(client, program).status_code == 200
     finished = _finished(tmp_path)

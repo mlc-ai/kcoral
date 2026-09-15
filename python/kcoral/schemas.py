@@ -59,7 +59,7 @@ class Ref:
 @dataclass
 class Run:
     id: str
-    fn: str | Ref
+    fn: Ref
     args: list[Any] = field(default_factory=list)  # ``Ref`` or a JSON literal
     op: Literal["run"] = "run"
 
@@ -419,15 +419,9 @@ def _parse_get_function(item: dict[str, Any], index: int, handles: set[str]) -> 
 def _parse_run(item: dict[str, Any], index: int, handles: set[str]) -> Run:
     _check_fields(item, {"op", "id", "fn", "args"}, {"op", "id", "fn"}, f"instruction {index}")
     raw_fn = item["fn"]
-    fn: str | Ref
-    if isinstance(raw_fn, str):
-        if not raw_fn:
-            raise ValidationError(f"run {item['id']!r}: 'fn' must not be empty")
-        fn = raw_fn
-    elif is_ref(raw_fn):
-        fn = _resolve_ref(raw_fn, handles, item["id"])
-    else:
-        raise ValidationError(f"run {item['id']!r}: 'fn' must be a name or {{'$ref': id}}")
+    if not is_ref(raw_fn):
+        raise ValidationError(f"run {item['id']!r}: 'fn' must be {{'$ref': id}}")
+    fn = _resolve_ref(raw_fn, handles, item["id"])
 
     raw_args = item.get("args", [])
     if not isinstance(raw_args, list):

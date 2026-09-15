@@ -9,45 +9,25 @@ import re
 import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..deferred import DeferredGPUResult
-from ..errors import ExecutionError
+from kcoral.cuda_source import CUDAModule
+from kcoral.errors import ExecutionError
+
 from ._common import short
-from ._registry import register_builtin
 
 
-@dataclass(frozen=True)
-class CUDAModule:
-    """Uploaded CUDA C source, optionally with a selected exported function."""
-
-    source: str
-    name: str | None = None
-
-    def get_function(self, name: str) -> CUDAModule:
-        if not name.isidentifier():
-            raise ExecutionError("parse", "a CUDA function name must be an identifier")
-        if name == "main":
-            raise ExecutionError("parse", "C++ reserves 'main'; name the function otherwise")
-        return CUDAModule(source=self.source, name=name)
-
-
-@register_builtin("compile_cuda", cpu_only=True)
 def compile_cuda(src: Any, cfg: Any = None) -> Any:
     """Build a CUDA C upload into its exported function, caching the build on
     disk. cfg: ``extra_cuda_cflags``."""
     options = _validate_compile_request(src, cfg, "compile_cuda")
     cuda_cflags = _string_list(options, "extra_cuda_cflags")
     library_path = _build_cuda(src, cuda_cflags)
-    # Building is host-only and may overlap another worker's benchmark. Loading
-    # the shared object registers its CUDA fatbinary, so defer that small phase
-    # until the engine has reacquired this GPU's lease.
-    return DeferredGPUResult(lambda: _load_compiled_function(library_path, src.name))
+    # This function includes CUDA module loading, so callers must hold the lease.
+    return _load_compiled_function(library_path, src.name)
 
 
-@register_builtin("compile_cuda_binary", cpu_only=True)
 def compile_cuda_binary(src: Any, cfg: Any = None) -> bytes:
     """Build a CUDA C upload for an explicit GPU architecture and return its
     shared-object bytes. cfg: ``arch`` and optional ``extra_cuda_cflags``."""
@@ -67,15 +47,15 @@ def compile_cuda_binary(src: Any, cfg: Any = None) -> bytes:
 # --- helpers ----------------------------------------------------------------
 
 
-def _validate_compile_request(src: Any, cfg: Any, builtin: str) -> dict:
+def _validate_compile_request(src: Any, cfg: Any, harness: str) -> dict:
     if not isinstance(src, CUDAModule) or src.name is None:
         raise ExecutionError(
             "compile",
-            f"{builtin} expects a function selected from a module upload whose language is 'cuda'",
+            f"{harness} expects a function selected from a module upload whose language is 'cuda'",
         )
     options = cfg if cfg is not None else {}
     if not isinstance(options, dict):
-        raise ExecutionError("compile", f"{builtin} options must be a dict")
+        raise ExecutionError("compile", f"{harness} options must be a dict")
     return options
 
 

@@ -10,6 +10,7 @@ import ml_dtypes
 import numpy as np
 import pytest
 import uvicorn
+from support.programs import harness_function
 
 from kcoral import Client, Program, Register
 from kcoral.app import create_app
@@ -351,7 +352,7 @@ def test_nested_binary_results_are_decoded(server_url):
 
 def test_failed_instruction_is_data(server_url):
     program = Program()
-    program.run(id="bad", fn="builtin.nope")
+    program.run(id="bad", fn=harness_function(program, "nope", "bad"))
     with Client(server_url) as client:
         outcome = client.execute(program)
     assert outcome.status == "FAILED" and outcome.results == {}
@@ -386,7 +387,7 @@ def test_interleaved_return_survives_a_later_failure(server_url):
     fn = program.get_function(id="fn", module=module, name="main")
     early = program.run(id="early", fn=fn)
     program.return_(key="early", value=early)  # checkpointed before the failure
-    program.run(id="bad", fn="builtin.nope")
+    program.run(id="bad", fn=harness_function(program, "nope", "bad"))
     with Client(server_url) as client:
         outcome = client.execute(program)
     assert outcome.status == "FAILED"
@@ -397,7 +398,7 @@ def test_interleaved_return_survives_a_later_failure(server_url):
 
 def test_timeout_raises_server_error(server_url):
     program = Program()
-    program.run(id="sleep", fn="builtin.sleep", args=[5])
+    program.run(id="sleep", fn=harness_function(program, "sleep", "sleep"), args=[5])
     with Client(server_url) as client:
         with pytest.raises(KCoralError) as exc_info:
             client.execute(program, timeout_seconds=0.5)
@@ -435,9 +436,9 @@ def test_program_builder_allows_interleaved_returns():
     program = Program()
     register = program.upload(id="module", kind="module", source="def main(): pass\n")
     program.return_(key="module", value=register)
-    program.run(id="later", fn="builtin.structural")
+    program.run(id="later", fn=harness_function(program, "structural", "later"))
     program.return_(key="later", value=Register("later"))
-    assert len(program.instructions) == 4
+    assert len(program.instructions) == 6
 
     with pytest.raises(ValueError, match="unknown handle"):
         Program().return_(key="missing", value=Register("nope"))
@@ -767,7 +768,7 @@ def report_path():
     if fail_after_return == "return":
         p.return_file(key="missing", path="missing")
     elif fail_after_return == "run":
-        p.run(id="fail", fn="builtin.missing")
+        p.run(id="fail", fn=harness_function(p, "missing", "fail"))
     with Client(server_url) as client:
         result = client.execute(p)
     assert result.completed == (fail_after_return is None)

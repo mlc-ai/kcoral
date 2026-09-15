@@ -220,7 +220,8 @@ def test_file_upload_rejects_duplicate_and_file_directory_conflicts(paths, match
             },
             "unsupported dtype",
         ),
-        ({"op": "run", "id": "x", "fn": "builtin.zeros", "extra": 1}, "unknown field"),
+        ({"op": "run", "id": "x", "fn": {"$ref": "x"}, "extra": 1}, "unknown field"),
+        ({"op": "run", "id": "x", "fn": "builtin.zeros"}, "'fn' must be"),
         ({"op": "unknown", "id": "x"}, "unknown op"),
         (
             {"op": "upload", "id": "x", "kind": "module", "source": "", "entry": "main"},
@@ -270,8 +271,8 @@ def test_duplicate_handles_and_return_keys_rejected():
         parse_program(
             {
                 "instructions": [
-                    {"op": "run", "id": "x", "fn": "builtin.zeros"},
-                    {"op": "run", "id": "x", "fn": "builtin.empty"},
+                    {"op": "upload", "id": "x", "kind": "module", "source": "def main(): pass"},
+                    {"op": "upload", "id": "x", "kind": "module", "source": "def main(): pass"},
                 ]
             }
         )
@@ -279,7 +280,7 @@ def test_duplicate_handles_and_return_keys_rejected():
         parse_program(
             {
                 "instructions": [
-                    {"op": "run", "id": "x", "fn": "builtin.zeros"},
+                    {"op": "upload", "id": "x", "kind": "module", "source": "def main(): pass"},
                     {"op": "return", "key": "x", "value": {"$ref": "x"}},
                     {"op": "return", "key": "x", "value": {"$ref": "x"}},
                 ]
@@ -291,9 +292,9 @@ def test_returns_may_interleave_with_uploads_and_runs():
     program = parse_program(
         {
             "instructions": [
-                {"op": "run", "id": "x", "fn": "builtin.zeros"},
+                {"op": "upload", "id": "x", "kind": "module", "source": "def main(): pass"},
                 {"op": "return", "key": "x", "value": {"$ref": "x"}},
-                {"op": "run", "id": "y", "fn": "builtin.zeros", "args": [{"$ref": "x"}]},
+                {"op": "run", "id": "y", "fn": {"$ref": "x"}, "args": [{"$ref": "x"}]},
                 {"op": "return", "key": "y", "value": {"$ref": "y"}},
             ]
         }
@@ -307,7 +308,7 @@ def test_forward_references_rejected():
         parse_program(
             {
                 "instructions": [
-                    {"op": "run", "id": "x", "fn": "builtin.zeros", "args": [{"$ref": "y"}]}
+                    {"op": "run", "id": "x", "fn": {"$ref": "x"}, "args": [{"$ref": "y"}]}
                 ]
             }
         )
@@ -317,7 +318,7 @@ def test_forward_references_rejected():
             {
                 "instructions": [
                     {"op": "return", "key": "x", "value": {"$ref": "x"}},
-                    {"op": "run", "id": "x", "fn": "builtin.zeros"},
+                    {"op": "upload", "id": "x", "kind": "module", "source": "def main(): pass"},
                 ]
             }
         )
@@ -407,7 +408,9 @@ def test_invalid_options_rejected(options):
     with pytest.raises(ValidationError):
         parse_program(
             {
-                "instructions": [{"op": "run", "id": "x", "fn": "builtin.zeros"}],
+                "instructions": [
+                    {"op": "upload", "id": "x", "kind": "module", "source": "def main(): pass"}
+                ],
                 "options": options,
             }
         )

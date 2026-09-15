@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 from typing import Any
 
 # Knobs read and written as an attribute, as (dotted path under ``torch``, name).
@@ -40,11 +41,14 @@ _TORCH_CALLS = (
 )
 
 # The RNG is deliberately not restored: rewinding it would hand every request the
-# same `builtin.randn` draw, a bigger change than the reseeding it would undo.
+# same random draw, a bigger change than the reseeding it would undo.
 
 
 def snapshot() -> dict[str, Any]:
     """The settings as they stand, to hand back to :func:`restore` later.
+
+    Capture PyTorch settings only if it is already loaded; taking a snapshot
+    does not import PyTorch.
 
     Take it after the runtime's warm-up, not before: the warm-up sets
     ``CUTE_DSL_LIBS`` and its loaders run once, so an earlier snapshot would restore
@@ -55,7 +59,8 @@ def snapshot() -> dict[str, Any]:
 
 def restore(snapshot: dict[str, Any]) -> None:
     """Put the settings back as ``snapshot`` found them."""
-    _restore_torch(snapshot["torch"])
+    if snapshot["torch"]:
+        _restore_torch(snapshot["torch"])
     environ = snapshot["environ"]
     current = _environ()
     for name in set(current) - set(environ):
@@ -88,7 +93,9 @@ def _environ() -> dict[str, str]:
 
 
 def _snapshot_torch() -> dict[str, Any]:
-    import torch
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return {}
 
     state: dict[str, Any] = {}
     for path, name in _TORCH_ATTRS:

@@ -295,22 +295,25 @@ class Program:
         self._instructions.append(instruction)
         return Register(id)
 
-    def run(
-        self, *, id: str, fn: str | Register | dict[str, str], args: list[Any] | None = None
-    ) -> Register:
+    def run(self, *, id: str, fn: Register, args: list[Any] | None = None) -> Register:
         """Append a function call and return a register for its result.
 
         :param id: Unique identifier for the computed result.
-        :param fn: A built-in name such as ``builtin.zeros``, a function register,
-            or a wire reference of the form ``{"$ref": "id"}``.
+        :param fn: The :class:`Register` returned by :meth:`get_function`,
+            or by an earlier :meth:`run` that returned a callable.
         :param args: Positional arguments; omitted or ``None`` means no arguments.
-            Top-level registers are encoded automatically. Inside nested lists
-            or dictionaries, use explicit ``{"$ref": "id"}`` references.
+            Top-level registers are encoded automatically. Nested lists and
+            dictionaries remain JSON literals, including reference-shaped objects.
         :returns: A register, without automatically returning the value to the client.
-        :raises ValueError: If the instruction identifier is empty or duplicated.
+        :raises TypeError: If ``fn`` is not a :class:`Register`.
+        :raises ValueError: If an identifier is invalid or a reference is unknown.
         """
+        if not isinstance(fn, Register):
+            raise TypeError("fn must be a Register")
+        if fn.id not in self._ids:
+            raise ValueError(f"run {id!r} references unknown handle {fn.id!r}")
+        wire_fn = _reference(fn)
         self._add_id(id)
-        wire_fn: Any = _reference(fn) if isinstance(fn, Register) else fn
         wire_args = [
             _reference(argument) if isinstance(argument, Register) else argument
             for argument in (args or [])

@@ -51,6 +51,15 @@ outcome. See :doc:`../client-guide/protocol` for server error codes.
 
 .. autoclass:: ProtocolError
 
+GPU utilities
+-------------
+
+Uploaded Python can import these functions from ``kcoral.builtins``.
+
+.. autofunction:: kcoral.builtins.compile_tirx
+
+.. autofunction:: kcoral.builtins.benchmark
+
 .. _server-integration:
 
 Server integration

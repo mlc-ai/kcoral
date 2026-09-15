@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
 from .engine import Runtime, execute
 from .errors import ExecutionError, GPUAccessViolation
-from .gpu_runtime import LoadedPythonModule  # imports no GPU libraries
 from .lease import Lease
+from .python_module import LoadedPythonModule
 from .schemas import Program, ProgramOutcome
 
 
@@ -21,12 +20,11 @@ def execute_for_test(
     program: Program,
     runtime: Runtime,
     lease: Lease,
-    cpu_only: frozenset[str] = frozenset(),
     **kwargs: Any,
 ) -> ProgramOutcome:
     """Own a temporary workspace for an engine test running without a worker."""
     with tempfile.TemporaryDirectory(prefix="kcoral-test-") as workspace_dir:
-        return execute(program, runtime, lease, cpu_only, workspace_dir=workspace_dir, **kwargs)
+        return execute(program, runtime, lease, workspace_dir=workspace_dir, **kwargs)
 
 
 class _UnsharedGPU:
@@ -45,47 +43,11 @@ class _UnsharedGPU:
 UNSHARED_GPU = _UnsharedGPU()
 
 
-class _Opaque:
-    pass
-
-
 @dataclass
 class _FakeTensor:
     data: bytes
     dtype: str
     shape: list[int]
-
-
-def _opaque(*_args: Any) -> _Opaque:
-    return _Opaque()
-
-
-def _structural(*_args: Any) -> dict[str, Any]:
-    return {"ok": True, "values": [None, False, 7, 1.5, "text"]}
-
-
-def _binary(*_args: Any) -> bytes:
-    return b"binary-result"
-
-
-def _pid(*_args: Any) -> int:
-    return os.getpid()
-
-
-def _crash(*_args: Any):
-    os._exit(1)
-
-
-def _crash_after_output(*_args: Any):
-    """Exit the way a native fault does: a message on the descriptor, then gone
-    before anything can send it back over the pipe."""
-    os.write(2, b"fatal: simulated device-side assert\n")
-    os._exit(1)
-
-
-def _sleep(seconds: Any = 0.0, *_args: Any) -> dict[str, float]:
-    time.sleep(float(seconds))
-    return {"slept": float(seconds)}
 
 
 _watched_cuda_calls: list[str] | None = None  # recorded while a forbid_gpu guard is up
@@ -97,17 +59,6 @@ def simulate_cuda_call(name: str = "cudaMalloc") -> None:
         _watched_cuda_calls.append(name)
 
 
-_BUILTINS: dict[str, Callable] = {
-    "builtin.opaque": _opaque,
-    "builtin.structural": _structural,
-    "builtin.binary": _binary,
-    "builtin.crash": _crash,
-    "builtin.crash_after_output": _crash_after_output,
-    "builtin.sleep": _sleep,
-    "builtin.cpu_sleep": _sleep,  # same work, declared not to need the GPU
-}
-
-
 class FakeRuntime:
     def __init__(self) -> None:
         self._poisoned = False
@@ -115,7 +66,7 @@ class FakeRuntime:
 
     def load_module(self, source: str, language: str = "python") -> Any:
         assert language == "python", "the fake runtime has no compiler"
-        namespace: dict[str, Any] = {}
+        namespace: dict[str, Any] = {"_test_runtime": self}
         try:
             exec(compile(source, "<uploaded>", "exec"), namespace)
         except SyntaxError as exc:
@@ -157,21 +108,6 @@ class FakeRuntime:
         if not isinstance(value, _FakeTensor):
             return None
         return value.dtype, value.shape, value.data
-
-    def builtin(self, name: str) -> Callable:
-        if name == "builtin.poison":
-            return self._poison
-        if name == "builtin.stale_cuda_error":
-            return self._stale_cuda_error
-        if name == "builtin.stale_cuda_error_unavailable":
-            return self._stale_cuda_error_unavailable
-        fn = _BUILTINS.get(name)
-        if fn is None:
-            raise ExecutionError("runtime", f"unknown function: {name!r}")
-        return fn
-
-    def cpu_only_builtins(self) -> frozenset[str]:
-        return frozenset({"builtin.cpu_sleep"})
 
     @contextmanager
     def forbid_gpu(self) -> Iterator[None]:

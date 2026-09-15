@@ -89,10 +89,42 @@ Example `program` part:
 ```json
 {
   "instructions": [
-    {"op": "run", "id": "x", "fn": "builtin.zeros", "args": [{"shape": [4], "dtype": "float32"}]},
-    {"op": "return", "key": "output", "value": {"$ref": "x"}}
+    {
+      "op": "upload",
+      "id": "harness",
+      "kind": "module",
+      "source": "def main(x): return x + 1"
+    },
+    {
+      "op": "get_function",
+      "id": "main",
+      "module": {
+        "$ref": "harness"
+      },
+      "name": "main",
+      "cpu_only": true
+    },
+    {
+      "op": "run",
+      "id": "output",
+      "fn": {
+        "$ref": "main"
+      },
+      "args": [
+        41
+      ]
+    },
+    {
+      "op": "return",
+      "key": "output",
+      "value": {
+        "$ref": "output"
+      }
+    }
   ],
-  "options": {"timeout_seconds": 30}
+  "options": {
+    "timeout_seconds": 30
+  }
 }
 ```
 
@@ -192,8 +224,8 @@ CUDA source is retained for compilation. Upload binds the whole module, and
 callable: a compiler tool may consume it first.
 
 All Python-based kernel languages use the same module upload shape; their
-compilation choices belong in [Builtin Tools](builtin-tools.md) and the
-[benchmark tutorial](../tutorials/benchmark-kernel.md#languages-supported-by-remote-compilation).
+compilation is implemented by uploaded harness code. See the
+[benchmark tutorial](../tutorials/benchmark-kernel.md#on-a-gpu-server).
 
 <a id="cuda-c-modules"></a>
 <a id="cutedsl-modules"></a>
@@ -213,7 +245,9 @@ compilation choices belong in [Builtin Tools](builtin-tools.md) and the
 ```
 
 `blob` names raw contiguous row-major bytes. Their length must equal
-`product(shape) * dtype.itemsize`. The tensor is copied to the assigned GPU.
+`product(shape) * dtype.itemsize`. Supply those bytes in a multipart part named
+`blob:<sha256>` when the blob is not already cached. The tensor is copied to the
+assigned GPU.
 
 ##### Bytes
 
@@ -448,8 +482,11 @@ Select a named object from an earlier module or library upload.
 #### Details
 
 For Python source, the name indexes the executed namespace. For CUDA source it
-produces the named source function consumed by `compile_cuda` or
-`compile_cuda_binary`; C++ `main` and non-identifiers are rejected. For a
+returns an object containing the uploaded text as `source` and the selected
+function name as `name`. For example, uploading `"void add() {}"` and selecting
+`"add"` gives an object whose `source == "void add() {}"` and `name == "add"`.
+A compiler can read those fields to build the function. C++ `main` and
+non-identifiers are rejected. For a
 TVM-FFI library it calls the loaded module's `get_function`; the function keeps
 its defining module alive.
 
@@ -492,21 +529,20 @@ earlier instructions.
 | --- | --- | --- | --- |
 | `op` | string | yes | `run` |
 | `id` | string | yes | Unique handle for the result |
-| `fn` | string or reference | yes | A `builtin.*` name or an earlier callable handle |
+| `fn` | reference | yes | An earlier callable handle, `{"$ref": id}` |
 | `args` | array | no | Positional arguments, default `[]` |
 
 #### Details
 
-Reference values in `args` resolve recursively. Other JSON values pass as
+Top-level reference values in `args` resolve to earlier handles. References
+nested inside lists or objects remain literals. Other JSON values pass as
 literals. Selecting an object with `get_function` does not prove it is callable;
 using a non-callable object here fails at execution. `run` binds the computed
 value but does not include it in the response; add a `return` to expose it.
 
-<a id="builtins"></a>
-
-The server supplies named functions for allocation, compilation, correctness
-checks and measurement. [Builtin Tools](builtin-tools.md) defines their
-arguments, defaults, returned fields and device requirements.
+Uploaded Python can perform tasks such as allocation, compilation, correctness
+checks and measurement. A callable returned by a `run` can be used by a later
+`run`.
 
 ### return
 
@@ -609,9 +645,10 @@ in the `X-Request-ID` header.
 The four timings decompose a request: `queue_ms` waiting for a worker, then
 `elapsed_ms` of execution, of which `lease_wait_ms` was spent waiting for the GPU
 and `lease_held_ms` holding it. What is left,
-`elapsed_ms - lease_wait_ms - lease_held_ms`, is work done off the GPU. Only
-`lease_held_ms` is GPU time, so it, not `elapsed_ms`, is what a caller should
-divide by to cost a benchmark in GPU-seconds.
+`elapsed_ms - lease_wait_ms - lease_held_ms`, is execution without a GPU lease.
+`lease_held_ms` measures how long the request reserves the GPU, including any
+host work performed while holding the lease. Kernel measurements are reported
+separately by the uploaded program.
 
 <a id="fields-1"></a>
 
@@ -780,61 +817,45 @@ failure outside an instruction, or a server failure answers `ERROR`.
   "instructions": [
     {
       "op": "upload",
-      "id": "kernel_module",
+      "id": "harness",
       "kind": "module",
-      "source": "<TIRx source defining main>"
+      "source": "def main(x): return x + 1"
     },
     {
       "op": "get_function",
-      "id": "kernel",
-      "module": {"$ref": "kernel_module"},
-      "name": "main"
-    },
-    {
-      "op": "upload",
-      "id": "input",
-      "kind": "tensor",
-      "blob": "<input_sha256>",
-      "dtype": "float32",
-      "shape": [256]
+      "id": "main",
+      "module": {
+        "$ref": "harness"
+      },
+      "name": "main",
+      "cpu_only": true
     },
     {
       "op": "run",
       "id": "output",
-      "fn": "builtin.empty",
-      "args": [{"shape": [256], "dtype": "float32"}]
-    },
-    {
-      "op": "run",
-      "id": "compiled",
-      "fn": "builtin.compile_tirx",
-      "args": [{"$ref": "kernel"}, {"N": 256}]
-    },
-    {
-      "op": "run",
-      "id": "invoke",
-      "fn": {"$ref": "compiled"},
-      "args": [{"$ref": "input"}, {"$ref": "output"}]
-    },
-    {
-      "op": "run",
-      "id": "timing",
-      "fn": "builtin.benchmark",
+      "fn": {
+        "$ref": "main"
+      },
       "args": [
-        {"$ref": "compiled"},
-        {"$ref": "input"},
-        {"$ref": "output"},
-        {"warmup": 10, "repeat": 50}
+        41
       ]
     },
-    {"op": "return", "key": "timing", "value": {"$ref": "timing"}},
-    {"op": "return", "key": "output", "value": {"$ref": "output"}}
+    {
+      "op": "return",
+      "key": "output",
+      "value": {
+        "$ref": "output"
+      }
+    }
   ],
-  "options": {"timeout_seconds": 120}
+  "options": {
+    "timeout_seconds": 30
+  }
 }
 ```
 
-The multipart request includes `blob:<input_sha256>` with the raw input tensor.
+This program uploads its own harness and returns `42`; it needs no binary parts.
+The same upload/get_function/run shape supports GPU harnesses and compiler tools.
 
 ## Python client
 

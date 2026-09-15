@@ -6,39 +6,38 @@ import numpy as np
 
 from kcoral import Client, Program
 
-KERNEL = r"""
+SOURCE = r"""
 from __future__ import annotations
+
+import torch
 from tvm.script import tirx as T
+from kcoral.builtins import compile_tirx, benchmark
 
 @T.jit
-def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):
+def add_one(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):
     T.device_entry()
     i = T.cta_id([N])
     t = T.thread_id([1])
     B[i] = A[i] + 1.0
+
+
+def evaluate(src):
+    dst = torch.empty_like(src)
+    compiled = compile_tirx(add_one, {"N": src.numel()})
+    compiled(src, dst)
+    torch.testing.assert_close(dst, src + 1.0, rtol=1e-2, atol=1e-3)
+    return {"check": {"passed": True}, "timing": benchmark(compiled, src, dst)}
 """
-REFERENCE = "def main(a):\n    return a + 1.0\n"
 
 
 def build_program() -> Program:
     program = Program()
-    kernel_module = program.upload(id="kernel_module", kind="module", source=KERNEL)
-    kernel = program.get_function(id="kernel", module=kernel_module, name="main")
-    reference_module = program.upload(id="reference_module", kind="module", source=REFERENCE)
-    reference = program.get_function(id="reference", module=reference_module, name="main")
-
-    src = program.upload(id="src", kind="tensor", value=np.arange(256, dtype=np.float32))
-    dst = program.run(id="dst", fn="builtin.empty", args=[{"shape": [256], "dtype": "float32"}])
-
-    compiled = program.run(id="compiled", fn="builtin.compile_tirx", args=[kernel, {"N": 256}])
-    program.run(id="invoke", fn=compiled, args=[src, dst])
-
-    expected = program.run(id="expected", fn=reference, args=[src])
-    check = program.run(id="check", fn="builtin.assert_close", args=[dst, expected])
-    timing = program.run(id="timing", fn="builtin.benchmark", args=[compiled, src, dst])
-
-    program.return_(key="check", value=check)
-    program.return_(key="timing", value=timing)
+    module = program.upload(id="module", kind="module", source=SOURCE)
+    evaluate = program.get_function(id="evaluate", module=module, name="evaluate")
+    values = np.arange(256, dtype=np.float32)
+    src = program.upload(id="src", kind="tensor", value=values)
+    report = program.run(id="report", fn=evaluate, args=[src])
+    program.return_(key="report", value=report)
     return program
 
 
@@ -47,8 +46,8 @@ def main() -> None:
         result = client.execute(build_program(), timeout_seconds=120)
     if not result.completed:
         raise SystemExit(f"Benchmark failed: {result.error}")
-    print(result.results["check"])
-    print(result.results["timing"])
+    print(result.results["report"]["check"])
+    print(result.results["report"]["timing"])
 
 
 if __name__ == "__main__":

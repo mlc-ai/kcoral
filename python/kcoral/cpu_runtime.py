@@ -2,41 +2,45 @@
 
 from __future__ import annotations
 
+import gc
 import importlib.metadata
-from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
-from . import builtin_ops
+from . import process_state
+from .cuda_source import CUDAModule
 from .errors import ExecutionError
-
-_COMPILE_BUILTIN = "builtin.compile_cuda_binary"
+from .python_module import LoadedPythonModule, materialize_module
 
 
 class CPURuntime:
     """Runtime exposed by ``--device cpu`` workers.
 
-    CPU workers accept CUDA source and can return a compiled shared object. GPU
-    tensors, uploaded libraries, Python modules, and execution builtins remain
-    unavailable so constructing this runtime never imports or initializes a GPU
-    library.
+    CPU workers accept CUDA source and can return a compiled shared object.
+    Uploaded Python supplies the compilation harness. GPU tensors and uploaded
+    libraries remain unavailable; constructing this runtime imports no GPU library.
     """
 
     def __init__(self) -> None:
-        self._builtins = builtin_ops.snapshot_registry()
+        self._seeded_fnames: list[str] = []
+        self._process_state = process_state.snapshot()
 
     def load_module(self, source: str, language: str = "python") -> Any:
         if language == "cuda":
-            return builtin_ops.CUDAModule(source=source)
-        raise ExecutionError("unavailable", "Python modules are unavailable in CPU mode")
+            return CUDAModule(source=source)
+        return materialize_module(source, self._seeded_fnames)
 
     def load_library(self, data: bytes) -> Any:
         raise ExecutionError("unavailable", "library uploads require a GPU worker")
 
     def get_function(self, module: Any, name: str) -> Any:
-        if isinstance(module, builtin_ops.CUDAModule):
+        if isinstance(module, LoadedPythonModule):
             return module.get_function(name)
-        raise ExecutionError("unavailable", "only CUDA source modules are available in CPU mode")
+        if isinstance(module, CUDAModule):
+            return module.get_function(name)
+        raise ExecutionError(
+            "unavailable", "get_function expects an uploaded Python or CUDA source module"
+        )
 
     def target(self) -> dict[str, str]:
         """CPU workers compile for the architecture supplied by the client."""
@@ -59,17 +63,6 @@ class CPURuntime:
     def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None:
         return None
 
-    def builtin(self, name: str) -> Callable:
-        fn = builtin_ops.resolve(name)
-        if fn is None:
-            raise ExecutionError("runtime", f"unknown function: {name!r}")
-        if name != _COMPILE_BUILTIN:
-            raise ExecutionError("unavailable", f"{name} is unavailable in CPU mode")
-        return fn
-
-    def cpu_only_builtins(self) -> frozenset[str]:
-        return frozenset({_COMPILE_BUILTIN})
-
     def forbid_gpu(self) -> AbstractContextManager[None]:
         return nullcontext()  # there is no GPU here to touch
 
@@ -80,7 +73,13 @@ class CPURuntime:
         return None
 
     def reset(self) -> None:
-        builtin_ops.restore_registry(self._builtins)
+        import linecache
+
+        for fname in self._seeded_fnames:
+            linecache.cache.pop(fname, None)
+        self._seeded_fnames.clear()
+        gc.collect()
+        process_state.restore(self._process_state)
 
 
 def cpu_runtime_factory() -> CPURuntime:

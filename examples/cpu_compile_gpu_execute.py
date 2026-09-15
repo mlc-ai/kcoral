@@ -33,8 +33,68 @@ void add_one(tvm::ffi::TensorView x, tvm::ffi::TensorView y) {
 REFERENCE = "def main(a):\n    return a + 1.0\n"
 
 
+# These functions and imports are uploaded to the server.
+OPERATIONS = r"""
+from kcoral.builtins import benchmark
+
+
+def empty(spec):
+    import torch
+
+    return torch.empty(spec["shape"], dtype=getattr(torch, spec["dtype"]), device="cuda")
+
+
+def randn(spec):
+    import torch
+
+    generator = torch.Generator(device="cuda").manual_seed(spec.get("seed", 0))
+    return torch.randn(
+        spec["shape"], dtype=getattr(torch, spec["dtype"]), device="cuda", generator=generator
+    )
+
+
+def assert_close(actual, expected):
+    import torch
+
+    torch.testing.assert_close(actual.cpu(), expected.cpu(), rtol=1e-2, atol=1e-3)
+    return {"ok": True}
+
+
+def compile_cuda_binary(source, cfg):
+    import os
+    from pathlib import Path
+
+    import tvm_ffi.cpp
+
+    arch = cfg["arch"].removeprefix("sm_")
+    suffix = "a" if arch.endswith("a") else ""
+    digits = arch.removesuffix("a")
+    key = "TVM_FFI_CUDA_ARCH_LIST"
+    previous = os.environ.get(key)
+    os.environ[key] = f"{int(digits[:-1])}.{digits[-1]}{suffix}"
+    try:
+        path = tvm_ffi.cpp.build_inline(
+            name=f"example_{source.name}",
+            cuda_sources=source.source,
+            functions=source.name,
+            backend="cuda",
+            extra_cuda_cflags=cfg.get("extra_cuda_cflags"),
+        )
+        return Path(path).read_bytes()
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+"""
+
+
 def compile_program(arch: str) -> Program:
     program = Program()
+    operations = program.upload(id="operations", kind="module", source=OPERATIONS)
+    compile_cuda_binary = program.get_function(
+        id="compile_cuda_binary", module=operations, name="compile_cuda_binary", cpu_only=True
+    )
     module = program.upload(
         id="source",
         kind="module",
@@ -44,7 +104,7 @@ def compile_program(arch: str) -> Program:
     source = program.get_function(id="add_one_source", module=module, name="add_one")
     library = program.run(
         id="library",
-        fn="builtin.compile_cuda_binary",
+        fn=compile_cuda_binary,
         args=[source, {"arch": arch, "extra_cuda_cflags": ["-O3"]}],
     )
     program.return_(key="library", value=library)
@@ -53,22 +113,27 @@ def compile_program(arch: str) -> Program:
 
 def benchmark_program(library: bytes) -> Program:
     program = Program()
+    operations = program.upload(id="operations", kind="module", source=OPERATIONS)
+    empty = program.get_function(id="empty", module=operations, name="empty")
+    randn = program.get_function(id="randn", module=operations, name="randn")
+    assert_close = program.get_function(id="assert_close", module=operations, name="assert_close")
+    benchmark = program.get_function(id="benchmark", module=operations, name="benchmark")
     module = program.upload(id="kernel_module", kind="library", value=library)
     kernel = program.get_function(id="kernel", module=module, name="add_one")
     reference_module = program.upload(id="reference_module", kind="module", source=REFERENCE)
     reference = program.get_function(id="reference", module=reference_module, name="main")
     src = program.run(
         id="src",
-        fn="builtin.randn",
+        fn=randn,
         args=[{"shape": [N], "dtype": "float32", "seed": 0}],
     )
-    dst = program.run(id="dst", fn="builtin.empty", args=[{"shape": [N], "dtype": "float32"}])
+    dst = program.run(id="dst", fn=empty, args=[{"shape": [N], "dtype": "float32"}])
     program.run(id="invoke", fn=kernel, args=[src, dst])
     expected = program.run(id="expected", fn=reference, args=[src])
-    check = program.run(id="check", fn="builtin.assert_close", args=[dst, expected])
+    check = program.run(id="check", fn=assert_close, args=[dst, expected])
     timing = program.run(
         id="timing",
-        fn="builtin.benchmark",
+        fn=benchmark,
         args=[kernel, src, dst, {"warmup_ms": 25, "repeat_ms": 100}],
     )
     program.return_(key="check", value=check)

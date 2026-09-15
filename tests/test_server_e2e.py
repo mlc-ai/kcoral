@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
+from support.programs import harness_instructions, python_instructions
 
 from kcoral.app import create_app
 from kcoral.config import ServerConfig
@@ -129,7 +130,7 @@ def _cuda_toolchain_available() -> bool:
     Probed rather than opted into: unlike a GPU test, compiling contends with
     nothing, so it should run wherever it can."""
     try:
-        from kcoral.builtin_ops.cuda import _require_cuda_toolchain
+        from support.cuda import _require_cuda_toolchain
 
         _require_cuda_toolchain()
     except Exception:
@@ -158,12 +159,9 @@ def test_cpu_cuda_compilation_end_to_end():
                 "module": {"$ref": "source_module"},
                 "name": "add_one",
             },
-            {
-                "op": "run",
-                "id": "library",
-                "fn": "builtin.compile_cuda_binary",
-                "args": [{"$ref": "source"}, {"arch": arch}],
-            },
+            *harness_instructions(
+                "library", "compile_cuda_binary", [{"$ref": "source"}, {"arch": arch}]
+            ),
             {"op": "return", "key": "library", "value": {"$ref": "library"}},
         ]
     }
@@ -201,9 +199,9 @@ def test_completed_program_returns_only_selected_values():
 def test_failed_instruction_stops_after_a_return_that_already_ran():
     program = {
         "instructions": [
-            {"op": "run", "id": "ok", "fn": "builtin.structural"},
+            *harness_instructions("ok", "structural"),
             {"op": "return", "key": "ok", "value": {"$ref": "ok"}},
-            {"op": "run", "id": "bad", "fn": "builtin.nope"},
+            *harness_instructions("bad", "nope"),
             {"op": "return", "key": "never", "value": {"$ref": "ok"}},
         ]
     }
@@ -213,7 +211,7 @@ def test_failed_instruction_stops_after_a_return_that_already_ran():
     assert response.status_code == 200 and data["status"] == "FAILED"
     assert set(data["results"]) == {"ok"}
     error = data["error"]
-    assert error["kind"] == "runtime" and error["instruction_index"] == 2
+    assert error["kind"] == "runtime" and error["instruction_index"] == 6
     assert error["instruction_op"] == "run" and error["instruction_id"] == "bad"
     assert "Traceback" in error["traceback"]
 
@@ -417,7 +415,7 @@ def test_strict_json_and_unknown_instruction_are_400():
             client,
             {},
             raw_program=(
-                '{"instructions":[{"op":"run","id":"x","fn":"builtin.structural","args":[NaN]}]}'
+                '{"instructions":[{"op":"run","id":"x","fn":{"$ref":"fn"},"args":[NaN]}]}'
             ),
         )
         unknown = post_program(client, {"instructions": [{"op": "frob"}]})
@@ -462,7 +460,7 @@ def test_request_and_response_size_limits():
 def test_binary_response_uses_multipart():
     program = {
         "instructions": [
-            {"op": "run", "id": "value", "fn": "builtin.binary"},
+            *harness_instructions("value", "binary"),
             {"op": "return", "key": "value", "value": {"$ref": "value"}},
         ]
     }
@@ -504,10 +502,10 @@ def test_stdout_stderr_and_output_limit_are_request_level():
 
 def test_timeout_and_worker_crash_statuses():
     timeout_program = {
-        "instructions": [{"op": "run", "id": "sleep", "fn": "builtin.sleep", "args": [3]}],
+        "instructions": [*harness_instructions("sleep", "sleep", [3])],
         "options": {"timeout_seconds": 0.5},
     }
-    crash_program = {"instructions": [{"op": "run", "id": "crash", "fn": "builtin.crash"}]}
+    crash_program = {"instructions": [*harness_instructions("crash", "crash")]}
     with make_client() as client:
         timeout = post_program(client, timeout_program)
         crash = post_program(client, crash_program)
@@ -517,7 +515,7 @@ def test_timeout_and_worker_crash_statuses():
     assert crash.json()["error"] == {
         "kind": "runtime",
         "message": "worker exited while executing the instruction",
-        "instruction_index": 0,
+        "instruction_index": 2,
         "instruction_op": "run",
         "instruction_id": "crash",
         "traceback": "",
@@ -525,7 +523,7 @@ def test_timeout_and_worker_crash_statuses():
 
 
 def test_poisoned_context_returns_runtime_then_next_request_recovers():
-    poison_program = {"instructions": [{"op": "run", "id": "bad", "fn": "builtin.poison"}]}
+    poison_program = {"instructions": [*harness_instructions("bad", "poison")]}
     app = create_app(
         ServerConfig(gpus=[0], workers_per_gpu=1), runtime_factory=fake_runtime_factory
     )
@@ -629,18 +627,15 @@ def test_real_kernel_end_to_end():
                 "dtype": "float32",
                 "shape": [256],
             },
-            {
-                "op": "run",
-                "id": "output",
-                "fn": "builtin.empty",
-                "args": [{"shape": [256], "dtype": "float32"}],
-            },
-            {
-                "op": "run",
-                "id": "compiled",
-                "fn": "builtin.compile_tirx",
-                "args": [{"$ref": "kernel"}, {"N": 256}],
-            },
+            *python_instructions(
+                "output",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
+            *harness_instructions("compiled", "compile_tirx", [{"$ref": "kernel"}, {"N": 256}]),
             {
                 "op": "run",
                 "id": "invoke",
@@ -834,12 +829,14 @@ def test_prebuilt_library_is_cached_like_a_tensor(tmp_path):
                 "dtype": "float32",
                 "shape": [256],
             },
-            {
-                "op": "run",
-                "id": "output",
-                "fn": "builtin.empty",
-                "args": [{"shape": [256], "dtype": "float32"}],
-            },
+            *python_instructions(
+                "output",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
             {
                 "op": "run",
                 "id": "invoke",
@@ -902,18 +899,15 @@ def test_cuda_c_kernel_end_to_end():
                 "dtype": "float32",
                 "shape": [256],
             },
-            {
-                "op": "run",
-                "id": "output",
-                "fn": "builtin.empty",
-                "args": [{"shape": [256], "dtype": "float32"}],
-            },
-            {
-                "op": "run",
-                "id": "compiled",
-                "fn": "builtin.compile_cuda",
-                "args": [{"$ref": "kernel"}],
-            },
+            *python_instructions(
+                "output",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
+            *harness_instructions("compiled", "compile_cuda", [{"$ref": "kernel"}]),
             {
                 "op": "run",
                 "id": "invoke",
@@ -960,12 +954,7 @@ def test_illegal_access_replaces_only_worker_and_next_gpu_request_recovers():
                 "module": {"$ref": "sync_module"},
                 "name": "main",
             },
-            {
-                "op": "run",
-                "id": "compiled",
-                "fn": "builtin.compile_cuda",
-                "args": [{"$ref": "kernel"}],
-            },
+            *harness_instructions("compiled", "compile_cuda", [{"$ref": "kernel"}]),
             {"op": "run", "id": "invoke", "fn": {"$ref": "compiled"}},
             {"op": "run", "id": "sync", "fn": {"$ref": "sync_fn"}},
         ],
@@ -973,12 +962,14 @@ def test_illegal_access_replaces_only_worker_and_next_gpu_request_recovers():
     }
     healthy_program = {
         "instructions": [
-            {
-                "op": "run",
-                "id": "q",
-                "fn": "builtin.zeros",
-                "args": [{"shape": [16], "dtype": "float32"}],
-            },
+            *python_instructions(
+                "q",
+                """import torch
+def main(shape):
+    return torch.zeros(shape, dtype=torch.float32, device="cuda")
+""",
+                [[16]],
+            ),
             {"op": "return", "key": "q", "value": {"$ref": "q"}},
         ],
         "options": {"timeout_seconds": 60},
@@ -1022,12 +1013,14 @@ def test_parallel_triton_illegal_accesses_match_and_workers_recover(tmp_path, mo
                 "module": {"$ref": "kernel_module"},
                 "name": "run",
             },
-            {
-                "op": "run",
-                "id": "output",
-                "fn": "builtin.empty",
-                "args": [{"shape": [256], "dtype": "float32"}],
-            },
+            *python_instructions(
+                "output",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
             {
                 "op": "run",
                 "id": "invoke",
@@ -1095,24 +1088,21 @@ def test_cuda_last_error_fails_current_request_without_replacing_worker():
                 "module": {"$ref": "kernel_module"},
                 "name": "stale_launch",
             },
-            {
-                "op": "run",
-                "id": "compiled",
-                "fn": "builtin.compile_cuda",
-                "args": [{"$ref": "kernel"}],
-            },
+            *harness_instructions("compiled", "compile_cuda", [{"$ref": "kernel"}]),
             {"op": "run", "id": "invoke", "fn": {"$ref": "compiled"}},
         ],
         "options": {"timeout_seconds": 300},
     }
     healthy_program = {
         "instructions": [
-            {
-                "op": "run",
-                "id": "q",
-                "fn": "builtin.zeros",
-                "args": [{"shape": [16], "dtype": "float32"}],
-            },
+            *python_instructions(
+                "q",
+                """import torch
+def main(shape):
+    return torch.zeros(shape, dtype=torch.float32, device="cuda")
+""",
+                [[16]],
+            ),
             {"op": "return", "key": "q", "value": {"$ref": "q"}},
         ],
         "options": {"timeout_seconds": 60},
@@ -1141,42 +1131,37 @@ def test_cuda_last_error_fails_current_request_without_replacing_worker():
     os.environ.get("KCORAL_GPU_TEST") != "1",
     reason="real-kernel end-to-end test requires KCORAL_GPU_TEST=1",
 )
-def test_compiling_does_not_hold_the_gpu():
-    """The point of the lease, against the real toolchain: `compile_tirx` is the
-    bulk of this request, and the GPU is free throughout it."""
-
-    def compiling(source):
-        return {
+def test_uploaded_host_compilation_does_not_hold_the_gpu():
+    """Explicit-architecture CUDA building is host-only; loading is a separate step."""
+    app = gpu_app()
+    with TestClient(app) as client:
+        arch = client.get("/health").json()["target"]["arch"]
+        program = {
             "instructions": [
                 {
                     "op": "upload",
-                    "id": "kernel_module",
+                    "id": "source",
                     "kind": "module",
-                    "source": source,
+                    "language": "cuda",
+                    "source": CUDA_KERNEL + f"\n// uncached build {time.time_ns()}\n",
                 },
                 {
                     "op": "get_function",
                     "id": "kernel",
-                    "module": {"$ref": "kernel_module"},
-                    "name": "main",
+                    "module": {"$ref": "source"},
+                    "name": "scale",
                 },
-                {
-                    "op": "run",
-                    "id": "compiled",
-                    "fn": "builtin.compile_tirx",
-                    "args": [{"$ref": "kernel"}, {"N": 256}],
-                },
-                {"op": "return", "key": "ok", "value": {"$ref": "compiled"}},
+                *harness_instructions(
+                    "compiled", "compile_cuda_binary", [{"$ref": "kernel"}, {"arch": arch}]
+                ),
+                {"op": "return", "key": "library", "value": {"$ref": "compiled"}},
             ],
             "options": {"timeout_seconds": 120},
         }
-
-    app = gpu_app()
-    with TestClient(app) as client:
-        response = post_program(client, compiling(KERNEL), {})
-    result, _ = response_parts(response)
-    # Returning the executable is not serializable, so the program fails at the
-    # return - after the compile, which is all this measures.
+        response = post_program(client, program)
+    result, parts = response_parts(response)
+    assert result["status"] == "COMPLETED", result.get("error")
+    assert parts["return:0"].startswith(b"\x7fELF")
     assert result["elapsed_ms"] > 100
     assert result["lease_held_ms"] < 50
 

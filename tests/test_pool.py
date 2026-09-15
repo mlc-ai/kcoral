@@ -3,6 +3,7 @@ import threading
 import time
 
 import pytest
+from support.programs import harness_call
 
 from kcoral.lease import GPULeases
 from kcoral.pool import PoolBusy, WorkerPool
@@ -12,11 +13,15 @@ from kcoral.worker import Worker, WorkerCrashed, WorkerTimeout, worker_main
 
 
 def prog(*instrs):
-    return Program(instructions=list(instrs))
+    return Program(
+        instructions=[
+            step for item in instrs for step in (item if isinstance(item, list) else [item])
+        ]
+    )
 
 
 def op(id="x"):
-    return Run(id, "builtin.structural", [])
+    return harness_call(id, "structural", [])
 
 
 def successful_program():
@@ -59,7 +64,7 @@ def test_cpu_timeout_respawns_without_a_gpu():
     pool = WorkerPool([], fake_runtime_factory, cpu_workers=1, max_requests_per_worker=0)
     try:
         with pytest.raises(WorkerTimeout) as exc_info:
-            pool.submit(prog(Run("sleep", "builtin.sleep", [2.0])), timeout=0.2)
+            pool.submit(prog(*harness_call("sleep", "sleep", [2.0])), timeout=0.2)
         recovered = pool.submit(successful_program(), timeout=10)
     finally:
         pool.shutdown()
@@ -95,9 +100,9 @@ def test_timeout_removes_the_parent_owned_request_workspace(pool, tmp_path):
 
 def test_crash_replaces_worker_and_recovers(pool):
     with pytest.raises(WorkerCrashed) as exc_info:
-        pool.submit(prog(Run("boom", "builtin.crash", [])), timeout=10)
+        pool.submit(prog(*harness_call("boom", "crash", [])), timeout=10)
     assert exc_info.value.gpu_id == 0 and exc_info.value.elapsed_ms >= 0
-    assert exc_info.value.instruction_index == 0 and exc_info.value.exitcode == 1
+    assert exc_info.value.instruction_index == 2 and exc_info.value.exitcode == 1
     # worker was respawned; the next request succeeds on the fresh worker
     assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
 
@@ -115,7 +120,7 @@ def settled(pool):
 
 def test_poisoned_context_replaces_worker_and_recovers(pool):
     original_pid = pool._workers[0]._proc.pid
-    outcome = pool.submit(prog(Run("bad", "builtin.poison", [])), timeout=10)
+    outcome = pool.submit(prog(*harness_call("bad", "poison", [])), timeout=10)
     assert outcome.execution.status == "FAILED"
     assert outcome.execution.error["kind"] == "runtime"
     assert outcome.execution.error["message"] == "simulated illegal memory access"
@@ -126,7 +131,7 @@ def test_poisoned_context_replaces_worker_and_recovers(pool):
 
 def test_last_error_fails_current_request_without_replacing_worker(pool):
     original_pid = pool._workers[0]._proc.pid
-    outcome = pool.submit(prog(Run("bad", "builtin.stale_cuda_error", [])), timeout=10)
+    outcome = pool.submit(prog(*harness_call("bad", "stale_cuda_error", [])), timeout=10)
 
     assert outcome.execution.status == "FAILED"
     assert outcome.execution.error["kind"] == "runtime"
@@ -228,7 +233,6 @@ def test_worker_prepares_before_parent_grants_gpu_initialization(monkeypatch):
                 "__ready__": {
                     "target": {"arch": "fake"},
                     "versions": {},
-                    "cpu_only": ["builtin.cpu_sleep"],
                     "device_uuid": None,
                 }
             },
@@ -321,7 +325,7 @@ def test_replacement_does_not_claim_gpu_when_preparation_fails():
 
 def test_timeout_kills_and_replaces_worker(pool):
     with pytest.raises(WorkerTimeout) as exc_info:
-        pool.submit(prog(Run("s", "builtin.sleep", [5.0])), timeout=0.5)
+        pool.submit(prog(*harness_call("s", "sleep", [5.0])), timeout=0.5)
     assert exc_info.value.gpu_id == 0 and exc_info.value.elapsed_ms >= 500
     assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
 
@@ -346,7 +350,7 @@ def test_health_reports_idle_workers(pool):
 def test_backpressure_when_all_workers_busy(pool):
     def slow():
         try:
-            pool.submit(prog(Run("s", "builtin.sleep", [1.0])), timeout=10)
+            pool.submit(prog(*harness_call("s", "sleep", [1.0])), timeout=10)
         except Exception:
             pass
 
@@ -379,7 +383,7 @@ def _submit_into(results, key, pool, program, **kwargs):
 def test_gpu_work_is_exclusive_across_workers_on_one_gpu(shared_gpu_pool):
     """Two workers, one GPU: the second waits out the first rather than sharing."""
     results: dict[str, object] = {}
-    busy = prog(Run("s", "builtin.sleep", [1.0]))
+    busy = prog(*harness_call("s", "sleep", [1.0]))
     holder = _submit_into(results, "holder", shared_gpu_pool, busy)
     holder.start()
     time.sleep(0.3)  # let it take the lease
@@ -395,11 +399,11 @@ def test_gpu_work_is_exclusive_across_workers_on_one_gpu(shared_gpu_pool):
     assert results["waiter"].lease_wait_ms > 400
 
 
-def test_a_cpu_only_builtin_hands_the_gpu_over(shared_gpu_pool):
+def test_a_cpu_only_function_hands_the_gpu_over(shared_gpu_pool):
     """The point of the whole arrangement: a worker compiling holds no GPU, so a
     second one measures during it rather than queueing behind it."""
     results: dict[str, object] = {}
-    compiling = prog(op("warm"), Run("c", "builtin.cpu_sleep", [1.0]), op("after"))
+    compiling = prog(op("warm"), *harness_call("c", "cpu_sleep", [1.0]), op("after"))
     first = _submit_into(results, "compiling", shared_gpu_pool, compiling)
     first.start()
     time.sleep(0.3)  # into the cpu_sleep, where the lease is dropped
@@ -419,7 +423,7 @@ def test_killing_a_worker_frees_the_gpu_it_held(shared_gpu_pool):
     """A worker killed mid-program cannot release its own lease, so the parent
     does it - otherwise that GPU would be stranded for good."""
     with pytest.raises(WorkerTimeout):
-        shared_gpu_pool.submit(prog(Run("s", "builtin.sleep", [10.0])), timeout=0.5)
+        shared_gpu_pool.submit(prog(*harness_call("s", "sleep", [10.0])), timeout=0.5)
     assert shared_gpu_pool.health()["gpus"] == [{"gpu_id": 0, "lease_depth": 0}]
     # The other worker can still reach the GPU.
     assert shared_gpu_pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
@@ -427,7 +431,7 @@ def test_killing_a_worker_frees_the_gpu_it_held(shared_gpu_pool):
 
 def test_poison_replaces_only_the_corresponding_worker(shared_gpu_pool):
     before = [worker._proc.pid for worker in shared_gpu_pool._workers]
-    outcome = shared_gpu_pool.submit(prog(Run("bad", "builtin.poison", [])), timeout=10)
+    outcome = shared_gpu_pool.submit(prog(*harness_call("bad", "poison", [])), timeout=10)
     after = [worker._proc.pid for worker in settled(shared_gpu_pool)._workers]
 
     assert outcome.execution.error["kind"] == "runtime"
@@ -480,13 +484,13 @@ def test_lease_invariants_hold_while_workers_die_under_load():
 
         try:
             if i % 6 == 0:  # dies holding the GPU
-                send(prog(Run(f"x{i}", "builtin.crash", [])), 30)
+                send(prog(*harness_call(f"x{i}", "crash", [])), 30)
             elif i % 11 == 0:  # hangs holding it, and is killed
-                send(prog(Run(f"h{i}", "builtin.sleep", [30.0])), 0.5)
+                send(prog(*harness_call(f"h{i}", "sleep", [30.0])), 0.5)
             else:
                 program = prog(
-                    Run(f"c{i}", "builtin.cpu_sleep", [0.02]),
-                    Run(f"g{i}", "builtin.sleep", [0.01]),
+                    *harness_call(f"c{i}", "cpu_sleep", [0.02]),
+                    *harness_call(f"g{i}", "sleep", [0.01]),
                     Return("v", Ref(f"g{i}")),
                 )
                 finished.append(send(program, 30).execution.status)

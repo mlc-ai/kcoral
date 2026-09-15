@@ -6,15 +6,14 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..errors import ExecutionError
+from kcoral.errors import ExecutionError
+
 from ._common import short, split_cfg
-from ._registry import register_builtin
 
 # CuTeDSL colours its diagnostics, and the escapes would ship to the client.
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
-@register_builtin("compile_cutedsl", cpu_only=True)
 def compile_cutedsl(fn: Any, *rest: Any) -> Any:
     """Compile a ``@cute.jit`` kernel handle for the tensors it will run on, whose
     dtype and layout it specializes on. Nothing is cached: what a compiled kernel

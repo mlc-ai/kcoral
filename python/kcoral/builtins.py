@@ -1,57 +1,102 @@
-"""Builtins that need no kernel-language toolchain: tensor creation, timing, and
-correctness comparison. They accept any callable a compile builtin returns."""
+"""Compilation and GPU measurement functions for uploaded Python programs.
+
+Import with ``from kcoral.builtins import compile_tirx, benchmark``. GPU toolchain
+imports happen when a function is called.
+"""
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
 
-from ..errors import ExecutionError
-from ._common import short, split_cfg, torch_dtype
-from ._registry import register_builtin
+from .errors import ExecutionError
+
+__all__ = ["benchmark", "compile_tirx"]
+
+# Bounded because each cached executable retains a loaded GPU module.
+_COMPILED: OrderedDict[int, Any] = OrderedDict()
+_COMPILED_LIMIT = 32
 
 
-@register_builtin("randn")
-def randn(spec: Any) -> Any:
-    import torch
+def compile_tirx(fn: Any, bindings: Any = None) -> Any:
+    """Compile a ``@T.jit`` or ``@T.prim_func`` kernel handle. ``bindings`` supplies
+    the ``T.constexpr`` values a ``@T.jit`` kernel is specialized on.
 
-    shape, dtype, seed = _read_spec(spec)
-    if not dtype.is_floating_point:
-        raise ExecutionError("runtime", "randn requires a floating dtype")
-    gen = None
-    if seed is not None:
-        gen = torch.Generator(device="cuda")
-        gen.manual_seed(int(seed))
-    return torch.randn(shape, dtype=dtype, device="cuda", generator=gen)
+    Compiled executables are cached by structural hash, with at most 32 entries.
+    This function can call CUDA while compiling and should run with GPU access.
+    """
+    try:
+        import tvm
+    except ImportError as exc:  # tvm is an optional server dependency
+        raise ExecutionError(
+            "unavailable",
+            "server-side compilation requires tvm, which is not installed on this server",
+        ) from exc
+
+    if bindings is not None and not isinstance(bindings, dict):
+        raise ExecutionError("compile", "compile_tirx bindings must be a dict of constexpr values")
+    kwargs = bindings or {}
+    if isinstance(fn, tvm.tirx.PrimFunc):  # a @T.prim_func kernel — already concrete
+        if kwargs:
+            raise ExecutionError(
+                "compile",
+                "bindings apply only to @T.jit kernels; this kernel is already a PrimFunc",
+            )
+        pf = fn
+    elif hasattr(fn, "specialize"):  # a @T.jit kernel handle (TIRJit)
+        try:
+            pf = fn.specialize(**kwargs)  # TIRX parse happens here
+        except tvm.error.DiagnosticError as exc:
+            raise ExecutionError("parse", _short(exc)) from exc
+        except TypeError as exc:  # wrong, missing, or unhashable constexpr bindings
+            raise ExecutionError("compile", _short(exc)) from exc
+    else:
+        raise ExecutionError(
+            "compile", "compile_tirx expects a @T.jit or @T.prim_func kernel handle"
+        )
+    # Specializing is free and hashing costs microseconds; codegen is the 500ms.
+    import tvm_ffi
+
+    key = tvm_ffi.structural_hash(pf)
+    cached = _COMPILED.get(key)
+    if cached is not None:
+        _COMPILED.move_to_end(key)
+        return cached
+    try:
+        mod = tvm.IRModule({"main": pf})
+        executable = tvm.compile(mod, target=tvm.target.Target("cuda"), tir_pipeline="tirx")
+    except tvm.error.InternalError as exc:  # lowering
+        raise ExecutionError("compile", _short(exc)) from exc
+    except RuntimeError as exc:  # codegen (nvcc/nvrtc)
+        raise ExecutionError("compile", _short(exc)) from exc
+    _COMPILED[key] = executable
+    if len(_COMPILED) > _COMPILED_LIMIT:
+        _COMPILED.popitem(last=False)
+    return executable
 
 
-@register_builtin("empty")
-def empty(spec: Any) -> Any:
-    import torch
-
-    shape, dtype, _ = _read_spec(spec)
-    return torch.empty(shape, dtype=dtype, device="cuda")
-
-
-@register_builtin("zeros")
-def zeros(spec: Any) -> Any:
-    import torch
-
-    shape, dtype, _ = _read_spec(spec)
-    return torch.zeros(shape, dtype=dtype, device="cuda")
-
-
-@register_builtin("benchmark")
 def benchmark(mod: Any, *rest: Any) -> dict:
     """Per-iteration GPU activity timing from CUPTI. cfg:
     ``warmup_ms``/``repeat_ms`` budgets convert to iteration counts using a
     5-call estimate, or ``warmup``/``repeat`` set explicit counts; ``flush_l2``
-    zeroes a 2x-L2 buffer before every call, outside the timed span."""
+    zeroes a 2x-L2 buffer before every call, outside the timed span.
+
+    Pass the callable followed by its arguments and an optional configuration
+    dict. Defaults: ``warmup_ms=25``, ``repeat_ms=100``, ``flush_l2=True``.
+    Explicit ``warmup`` and ``repeat`` counts override their respective budgets.
+
+    Returns ``latency_ms_median``, ``latency_ms_mean``, ``latency_ms_min`` and
+    ``latency_ms_max``, plus the selected counts, ``flush_l2`` and
+    ``activities_stable``. A span runs from the first to last GPU activity
+    launched by each call; host gaps between those activities are included.
+    Requires PyTorch and cupti-python in the execution environment.
+    """
     import statistics
 
     import torch
 
-    tensors, cfg = split_cfg(rest)
+    tensors, cfg = _split_cfg(rest)
     if not callable(mod):
         raise ExecutionError("runtime", "benchmark expects a compiled module handle")
     flush_l2 = bool(cfg.get("flush_l2", True))
@@ -72,7 +117,7 @@ def benchmark(mod: Any, *rest: Any) -> dict:
         torch.cuda.synchronize()
         times, activities_stable = _time_cupti(call, repeat, flush)
     except RuntimeError as exc:  # a tvm run error or torch "CUDA error: ..."
-        raise ExecutionError("runtime", short(exc)) from exc
+        raise ExecutionError("runtime", _short(exc)) from exc
     return {
         "latency_ms_median": statistics.median(times),
         "latency_ms_mean": statistics.mean(times),
@@ -84,52 +129,6 @@ def benchmark(mod: Any, *rest: Any) -> dict:
         "warmup": warmup,
         "repeat": repeat,
     }
-
-
-@register_builtin("check_close")
-def check_close(actual: Any, expected: Any, *rest: Any) -> dict:
-    import torch
-
-    _, cfg = split_cfg(rest)
-    rtol = float(cfg.get("rtol", 1e-2))
-    atol = float(cfg.get("atol", 1e-3))
-    try:
-        torch.cuda.synchronize()
-        a = actual.float()
-        e = expected.float().to(a.device)  # a reference computed on the CPU compares as is
-        diff = (a - e).abs()
-        max_abs = float(diff.max())
-        # max |a-e|/|e| over nonzero e; masking keeps it finite (JSON-safe).
-        nz = e != 0
-        max_rel = float((diff[nz] / e[nz].abs()).max()) if bool(nz.any()) else 0.0
-        passed = bool(torch.allclose(a, e, rtol=rtol, atol=atol))
-    except RuntimeError as exc:
-        raise ExecutionError("runtime", short(exc)) from exc
-    return {
-        "passed": passed,
-        "max_abs_err": max_abs,
-        "max_rel_err": max_rel,
-        "rtol": rtol,
-        "atol": atol,
-    }
-
-
-@register_builtin("assert_close")
-def assert_close(actual: Any, expected: Any, *rest: Any) -> dict:
-    """Like ``check_close``, but a mismatch is a failure: it raises ``correctness``
-    so the instruction FAILs and the rest of the program is skipped."""
-    result = check_close(actual, expected, *rest)
-    if not result["passed"]:
-        raise ExecutionError(
-            "correctness",
-            f"outputs differ: max_abs_err={result['max_abs_err']}, "
-            f"max_rel_err={result['max_rel_err']} exceed "
-            f"atol={result['atol']}, rtol={result['rtol']}",
-        )
-    return result
-
-
-# --- helpers ----------------------------------------------------------------
 
 
 def _iteration_counts(call: Callable, cfg: dict, flush: Any) -> tuple[int, int]:
@@ -262,10 +261,12 @@ def _time_cupti(call: Callable, repeat: int, flush: Any) -> tuple[list[float], b
                     cleanup_errors.append(exc)
             if cleanup_errors and not active_exception:
                 raise ExecutionError(
-                    "unavailable", f"CUPTI cleanup failed: {short(cleanup_errors[0])}"
+                    "unavailable", f"CUPTI cleanup failed: {_short(cleanup_errors[0])}"
                 )
     except cupti.cuptiError as exc:
-        raise ExecutionError("unavailable", f"CUPTI activity tracing failed: {short(exc)}") from exc
+        raise ExecutionError(
+            "unavailable", f"CUPTI activity tracing failed: {_short(exc)}"
+        ) from exc
 
     launch_records.sort()
     launch_starts = [record[0] for record in launch_records]
@@ -306,11 +307,18 @@ def _time_cupti(call: Callable, repeat: int, flush: Any) -> tuple[list[float], b
     return times, activities_stable
 
 
-def _read_spec(spec: Any) -> tuple[list[int], Any, Any]:
-    if not isinstance(spec, dict):
-        raise ExecutionError("runtime", "expected a {shape, dtype} spec")
-    try:
-        shape = [int(d) for d in spec["shape"]]
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ExecutionError("runtime", f"bad 'shape' in spec: {exc}") from exc
-    return shape, torch_dtype(spec.get("dtype", "float16")), spec.get("seed")
+def _short(text: str | Exception, limit: int = 600) -> str:
+    """Truncate text keeping both ends: a tvm diagnostic leads with its message,
+    a compiler failure ends with its diagnostic."""
+    text = str(text).strip()
+    if len(text) <= limit:
+        return text
+    head = limit // 3
+    return f"{text[:head]} …[truncated]… {text[head - limit :]}"
+
+
+def _split_cfg(args: tuple) -> tuple[tuple, dict]:
+    """Split a harness's trailing config dict from its leading tensor args."""
+    if args and isinstance(args[-1], dict):
+        return args[:-1], args[-1]
+    return args, {}

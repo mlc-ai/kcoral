@@ -1,6 +1,6 @@
 # KCoral
 
-KCoral runs self-contained programs on remote GPU workers. Upload code and data,
+KCoral runs programs on remote GPU workers. Upload code and data,
 call functions, check correctness and return measurements. A GPU is a graphics
 processing unit; a CPU is a central processing unit. CPU compilation services
 can build kernels for a separate GPU server.
@@ -10,7 +10,7 @@ can build kernels for a separate GPU server.
 | Your task | Read |
 | --- | --- |
 | Run your first GPU program | [Installation](getting-started/installation.md) and [Your First Program](getting-started/quickstart.md) |
-| Write a client program | [Writing a Program](client-guide/writing-a-program.md), [KCoral Protocol](client-guide/protocol.md) and [Builtin Tools](client-guide/builtin-tools.md) |
+| Write a client program | [Writing a Program](client-guide/writing-a-program.md), [KCoral Protocol](client-guide/protocol.md) |
 | Operate a service | [Launch the server](server-guide/launch-the-server.md), [Logging](server-guide/logging.md) and [Router](server-guide/router.md) |
 | Compile remotely, then execute the returned library in another request | [Remote Compilation](tutorials/remote-compilation.md) |
 | Measure or automate a workload | [Benchmark a Kernel with KCoral](tutorials/benchmark-kernel.md) and [Agent Integration Guide](tutorials/agent-integration.md) |
@@ -32,7 +32,6 @@ getting-started/quickstart
 
 client-guide/writing-a-program
 client-guide/protocol
-client-guide/builtin-tools
 ```
 
 ```{toctree}

@@ -4,6 +4,7 @@ import socket
 
 import grpc
 import pytest
+from support.programs import harness_instructions
 
 from kcoral import kcoral_gateway_pb2 as gateway_pb
 from kcoral import kcoral_gateway_pb2_grpc as gateway_grpc
@@ -186,7 +187,7 @@ def test_real_app_executes_multipart_request_over_outbound_grpc():
 async def _test_real_app_executes_multipart_request_over_outbound_grpc():
     program = {
         "instructions": [
-            {"op": "run", "id": "value", "fn": "builtin.binary"},
+            *harness_instructions("value", "binary"),
             {"op": "return", "key": "value", "value": {"$ref": "value"}},
         ]
     }

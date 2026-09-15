@@ -12,6 +12,7 @@ from pathlib import Path
 import grpc
 import httpx
 import pytest
+from support.programs import harness_function
 
 from kcoral import Client, Program
 from kcoral import kcoral_gateway_pb2 as pb
@@ -386,7 +387,7 @@ async def _graceful_tunnel_shutdown(tmp_path):
         try:
             await ready_nodes(url, 1)
             program = Program()
-            program.run(id="sleep", fn="builtin.sleep", args=[0.3])
+            program.run(id="sleep", fn=harness_function(program, "sleep", "sleep"), args=[0.3])
 
             def execute():
                 with Client(url) as client:

@@ -1,9 +1,11 @@
 # Remote Compilation
 
 In large-scale kernel evaluation, compilation can take much longer than kernel
-execution. The compilation step needs only a CPU (central processing unit),
-while execution needs a GPU (graphics processing unit). Running that compilation
-work on expensive GPU servers increases cost and can leave GPUs underutilized.
+execution. Build steps that need only a CPU (central processing unit) can run
+separately from execution on a GPU (graphics processing unit). Running that
+host work on expensive GPU servers can increase cost and leave GPUs underutilized.
+Some compiler APIs query CUDA or load GPU modules during compilation; those
+steps need GPU access.
 
 A more cost-effective approach is to compile on inexpensive CPU-only machines,
 download the compiled result, and upload it to a GPU server for execution.
@@ -38,8 +40,8 @@ The two server roles have different requirements:
 
 `nvcc` compiles CUDA source. TVM FFI is a foreign-function interface for calling
 compiled code and exchanging tensors. CUPTI is NVIDIA's CUDA Profiling Tools
-Interface, used to collect GPU activity timestamps. CPU compilation mode
-currently supports CUDA C through `builtin.compile_cuda_binary`.
+Interface, used to collect GPU activity timestamps. This example uploads Python
+that builds CUDA C through TVM FFI.
 
 On the compilation host, start a CPU server:
 
@@ -86,14 +88,16 @@ arch = gpu_client.target()["arch"]
 ```
 
 `target()` reads `GET /health`. The CPU server has no GPU target of its own;
-pass the execution server's `arch` explicitly to `builtin.compile_cuda_binary`.
+pass the execution server's `arch` explicitly to the uploaded `compile_cuda_binary`
+function.
 For example, a server might report `sm_100a`; use its actual reported value.
 
 ## Request 1: compile and return the library
 
 The source defines a GPU kernel and a host function, `add_one`, which launches
 it. The host function uses TVM FFI's `TensorView` parameters to access tensors.
-The server supplies the required includes and export wrapper.
+The uploaded compiler uses `tvm_ffi.cpp.build_inline` to supply the required
+includes and export wrapper.
 
 ```{literalinclude} ../../examples/cpu_compile_gpu_execute.py
 :language: python
@@ -101,22 +105,34 @@ The server supplies the required includes and export wrapper.
 :end-before: REFERENCE =
 ```
 
-The compilation program uploads this source, selects `add_one`, compiles for
-`arch`, and explicitly returns the library:
+The example's `OPERATIONS` string defines the Python compiler and execution
+helpers uploaded by each program:
+
+```{literalinclude} ../../examples/cpu_compile_gpu_execute.py
+:language: python
+:start-at: OPERATIONS =
+:end-before: def compile_program
+```
+
+The compilation program uploads that Python and the CUDA source, selects
+`compile_cuda_binary` with `get_function(..., cpu_only=True)`, selects the CUDA
+source name `add_one`, compiles for `arch`, and explicitly returns the library:
 
 ```{literalinclude} ../../examples/cpu_compile_gpu_execute.py
 :language: python
 :pyobject: compile_program
 ```
 
-`builtin.compile_cuda_binary` builds a shared library without loading it or
+The uploaded `compile_cuda_binary` function builds a shared library without loading it or
 launching the kernel. `return_(key="library", ...)` selects the bytes for the
 response. After `cpu_client.execute()` succeeds,
 `compiled.results["library"]` is a Python `bytes` object containing the shared
 library, equivalent to the contents of a `.so` file.
 
 The compilation request creates no GPU tensors. It can finish and release its
-worker before the execution request begins.
+worker before the execution request begins. When using a GPU server for this
+request, `cpu_only=True` releases its lease during the compiler function's `run`.
+The Python module upload still executes its top-level code under the lease.
 
 ## Request 2: upload the library and execute
 
@@ -132,7 +148,9 @@ output tensors, and runs the kernel:
 Loading the library recreates a module and function handle on the execution
 server. This program contains no compilation operation. It compares the kernel
 output against an uploaded Python reference on that server, then benchmarks
-only if `builtin.assert_close` passes.
+only if the uploaded `assert_close` function passes. That function uses
+`torch.testing.assert_close`; measurement uses the importable
+`kcoral.builtins.benchmark` helper.
 
 The response returns `check` and `timing`. Tensor data stays on the execution
 server; the client receives the correctness report and timing statistics.
@@ -159,7 +177,7 @@ in microseconds. A lease gives a worker exclusive access to its GPU; the CPU
 compilation request holds no GPU lease. The execution request's
 `result.results["check"]` contains the correctness report and
 `result.results["timing"]` contains the measurement statistics. See
-[Benchmark a Kernel with KCoral](benchmark-kernel.md#measuring) to interpret them.
+[Benchmark a Kernel with KCoral](benchmark-kernel.md#measuring-gpu-activity) to interpret them.
 
 ## Reuse the artifact and handle failures
 

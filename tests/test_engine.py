@@ -1,6 +1,6 @@
 import pytest
+from support.programs import harness_call
 
-from kcoral.deferred import DeferredGPUResult
 from kcoral.engine import execute
 from kcoral.keys import compute_blob_hash
 from kcoral.schemas import FileUpload, GetFunction, Program, Ref, Return, Run, Upload
@@ -84,7 +84,7 @@ def test_cleanup_failure_preserves_runtime_error_and_marks_worker_unhealthy():
     runtime = FakeRuntime()
     cleanup_errors = []
     outcome = execute_for_test(
-        Program([Run("bad", "builtin.poison", [])]),
+        Program([*harness_call("bad", "poison", [])]),
         runtime,
         UNSHARED_GPU,
         cleanup_failed=cleanup_errors.append,
@@ -100,7 +100,7 @@ def test_cuda_last_error_is_attributed_to_the_current_request_without_poisoning_
     runtime = FakeRuntime()
     cleanup_errors = []
     outcome = execute_for_test(
-        Program([Run("bad", "builtin.stale_cuda_error", [])]),
+        Program([*harness_call("bad", "stale_cuda_error", [])]),
         runtime,
         UNSHARED_GPU,
         cleanup_failed=cleanup_errors.append,
@@ -109,7 +109,7 @@ def test_cuda_last_error_is_attributed_to_the_current_request_without_poisoning_
     assert outcome.status == "FAILED"
     assert outcome.error["kind"] == "runtime"
     assert outcome.error["message"] == "CUDA error cudaErrorInvalidValue (1): invalid argument"
-    assert outcome.error["instruction_index"] == 0
+    assert outcome.error["instruction_index"] == 2
     assert outcome.error["instruction_id"] == "bad"
     assert cleanup_errors == []
     assert runtime.take_last_error() is None
@@ -117,7 +117,7 @@ def test_cuda_last_error_is_attributed_to_the_current_request_without_poisoning_
 
 def test_cuda_last_error_overrides_cupti_unavailable_error():
     outcome = execute_for_test(
-        Program([Run("bad", "builtin.stale_cuda_error_unavailable", [])]),
+        Program([*harness_call("bad", "stale_cuda_error_unavailable", [])]),
         FakeRuntime(),
         UNSHARED_GPU,
     )
@@ -125,47 +125,6 @@ def test_cuda_last_error_overrides_cupti_unavailable_error():
     assert outcome.status == "FAILED"
     assert outcome.error["kind"] == "runtime"
     assert outcome.error["message"] == "CUDA error cudaErrorInvalidValue (1): invalid argument"
-
-
-def test_cpu_only_builtin_finalizes_deferred_gpu_result_under_lease():
-    events = []
-
-    class RecordingLease:
-        held = False
-
-        def acquire(self):
-            self.held = True
-            events.append("acquire")
-
-        def release(self):
-            self.held = False
-            events.append("release")
-
-    lease = RecordingLease()
-
-    class DeferredRuntime(FakeRuntime):
-        def builtin(self, name):
-            if name != "builtin.deferred":
-                return super().builtin(name)
-
-            def finalize():
-                assert lease.held
-                events.append("finalize")
-                return 42
-
-            return lambda: DeferredGPUResult(finalize)
-
-    # Placement is the parent's word now, not the worker's: pass the set that a
-    # parent would have read out of this runtime before any program ran.
-    outcome = execute_for_test(
-        Program([Run("compiled", "builtin.deferred", [])]),
-        DeferredRuntime(),
-        lease,
-        cpu_only=frozenset({"builtin.deferred"}),
-    )
-
-    assert outcome.status == "COMPLETED"
-    assert events == ["acquire", "finalize", "release"]
 
 
 @pytest.mark.parametrize(
@@ -202,7 +161,7 @@ def test_missing_python_function_fails_get_function(source, name):
 
 def test_unreturned_values_are_not_serialized():
     outcome = execute_for_test(
-        Program([Run("opaque", "builtin.opaque", [])]), FakeRuntime(), UNSHARED_GPU
+        Program([*harness_call("opaque", "opaque", [])]), FakeRuntime(), UNSHARED_GPU
     )
     assert outcome.status == "COMPLETED" and outcome.results == {}
 
@@ -272,8 +231,8 @@ def test_instruction_failure_stops_and_describes_the_instruction():
     outcome = execute_for_test(
         Program(
             [
-                Run("ok", "builtin.structural", []),
-                Run("bad", "builtin.nope", []),
+                *harness_call("ok", "structural", []),
+                *harness_call("bad", "nope", []),
                 Return("ok", ref("ok")),
             ]
         ),
@@ -282,7 +241,7 @@ def test_instruction_failure_stops_and_describes_the_instruction():
     )
     assert outcome.status == "FAILED" and outcome.results == {}
     error = outcome.error
-    assert error["kind"] == "runtime" and error["instruction_index"] == 1
+    assert error["kind"] == "runtime" and error["instruction_index"] == 5
     assert error["instruction_op"] == "run" and error["instruction_id"] == "bad"
     assert "Traceback" in error["traceback"]
 
@@ -291,9 +250,9 @@ def test_returns_that_ran_survive_a_later_failure():
     outcome = execute_for_test(
         Program(
             [
-                Run("ok", "builtin.structural", []),
+                *harness_call("ok", "structural", []),
                 Return("early", ref("ok")),
-                Run("bad", "builtin.nope", []),
+                *harness_call("bad", "nope", []),
                 Return("late", ref("ok")),
             ]
         ),
@@ -311,7 +270,7 @@ def test_failed_return_rolls_back_only_its_own_binary_parts():
     outcome = execute_for_test(
         Program(
             [
-                Run("blob", "builtin.binary", []),
+                *harness_call("blob", "binary", []),
                 Return("kept", ref("blob")),
                 Upload("module", "module", source=source),
                 GetFunction("fn", ref("module"), "main"),
@@ -327,18 +286,18 @@ def test_failed_return_rolls_back_only_its_own_binary_parts():
     # Without rollback the aborted return would leave an orphan 'return:1'.
     assert outcome.binary_parts == {"return:0": b"binary-result"}
     error = outcome.error
-    assert error["kind"] == "serialization" and error["instruction_index"] == 5
+    assert error["kind"] == "serialization" and error["instruction_index"] == 7
     assert error["instruction_op"] == "return" and error["instruction_id"] is None
 
 
 def test_unsupported_return_is_serialization_failure():
     outcome = execute_for_test(
-        Program([Run("opaque", "builtin.opaque", []), Return("value", ref("opaque"))]),
+        Program([*harness_call("opaque", "opaque", []), Return("value", ref("opaque"))]),
         FakeRuntime(),
         UNSHARED_GPU,
     )
     assert outcome.status == "FAILED" and outcome.error["kind"] == "serialization"
-    assert outcome.error["instruction_index"] == 1
+    assert outcome.error["instruction_index"] == 3
 
 
 def test_invalid_exported_tensor_is_serialization_failure():
@@ -347,7 +306,7 @@ def test_invalid_exported_tensor_is_serialization_failure():
             return "float32", [2], b"short"
 
     outcome = execute_for_test(
-        Program([Run("opaque", "builtin.opaque", []), Return("value", ref("opaque"))]),
+        Program([*harness_call("opaque", "opaque", []), Return("value", ref("opaque"))]),
         InvalidTensorRuntime(),
         UNSHARED_GPU,
     )
@@ -582,24 +541,32 @@ def test_a_gpu_access_error_keeps_its_kind_over_a_stale_cuda_error():
     )
 
 
-def test_a_program_cannot_talk_its_worker_out_of_the_gpu_lease():
-    """Placement is the parent's call. A program that lists a GPU builtin as CPU-only
-    in the registry its own worker holds would otherwise hand back the lease and keep
-    using the GPU, spoiling whatever another worker was measuring on that card."""
-
-    class ClaimsEverythingIsCpuOnly(FakeRuntime):
-        def cpu_only_builtins(self):
-            return frozenset({"builtin.structural"})
-
-    program = Program([Run("x", "builtin.structural", [])])
-
+def test_explicit_host_build_and_gpu_load_use_the_correct_lease():
     lease = RecordingLease()
-    assert execute_for_test(program, ClaimsEverythingIsCpuOnly(), lease).status == "COMPLETED"
-    assert lease.acquires == 1  # the worker's own claim bought it nothing
+    runtime = FakeRuntime()
+    runtime.lease = lease
+    source = """
+def build():
+    assert not _test_runtime.lease.held
+    return b'artifact'
 
-    lease = RecordingLease()
-    parent_says = frozenset({"builtin.structural"})
-    assert (
-        execute_for_test(program, FakeRuntime(), lease, cpu_only=parent_says).status == "COMPLETED"
+def load(artifact):
+    assert _test_runtime.lease.held
+    assert artifact == b'artifact'
+    return lambda x: x + 1
+"""
+    program = Program(
+        [
+            Upload("module", "module", source=source),
+            GetFunction("build", ref("module"), "build", cpu_only=True),
+            GetFunction("load", ref("module"), "load"),
+            Run("artifact", ref("build")),
+            Run("kernel", ref("load"), [ref("artifact")]),
+            Run("result", ref("kernel"), [41]),
+            Return("result", ref("result")),
+        ]
     )
-    assert lease.acquires == 0  # the parent's word is the one that counts
+    outcome = execute_for_test(program, runtime, lease)
+    assert outcome.status == "COMPLETED", outcome.error
+    assert outcome.results["result"] == {"type": "integer", "value": 42}
+    assert lease.acquires == lease.releases == 2

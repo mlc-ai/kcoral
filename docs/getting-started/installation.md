@@ -72,7 +72,7 @@ source .venv/bin/activate
 ```
 
 The `gpu` dependency group includes the tensor, compilation and profiling
-libraries used by the built-in tools. It does not install the system driver or
+libraries available to uploaded Python programs. It does not install the system driver or
 host C++ compiler.
 
 Check that PyTorch, the tensor library used by workers, can access the GPU:

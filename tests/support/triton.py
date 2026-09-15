@@ -5,12 +5,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..errors import ExecutionError
+from kcoral.errors import ExecutionError
+
 from ._common import short, split_cfg
-from ._registry import register_builtin
 
 
-@register_builtin("compile_triton", cpu_only=True)
 def compile_triton(fn: Any, *rest: Any) -> Any:
     """Compile a ``@triton.jit`` kernel for the arguments it specializes on. cfg:
     ``grid``, one to three ints, plus any keyword the launch takes — ``num_warps``,

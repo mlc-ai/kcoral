@@ -44,7 +44,7 @@ name; it is not the value itself.
 | `upload_file(blob=..., path=...)` | Snapshot bytes as a file in the request workspace | `None` |
 | `upload_folder(folder, path=...)` | Snapshot a local directory as file uploads | `None` |
 | `get_function(id=..., module=..., name=..., cpu_only=False)` | Select a function or object from an earlier module or library | `Register` |
-| `run(id=..., fn=..., args=None)` | Call a selected function or a built-in tool | `Register` |
+| `run(id=..., fn=..., args=None)` | Call a selected or computed callable | `Register` |
 | `return_(key=..., value=...)` | Select an earlier value for the response | `None` |
 | `return_file(key=..., path=...)` | Select a workspace file for the response | `None` |
 | `return_folder(key=..., path=...)` | Select a workspace folder for the response | `None` |
@@ -57,6 +57,8 @@ trailing underscore because `return` is a Python keyword. Use the
 ### Upload and select a function
 
 ```python
+import numpy as np
+
 from kcoral import Program
 
 program = Program()
@@ -64,7 +66,8 @@ module = program.upload(
     id="module", kind="module", source="def scale(x, factor): return x * factor"
 )
 scale = program.get_function(id="scale", module=module, name="scale")
-x = program.run(id="x", fn="builtin.zeros", args=[{"shape": [4], "dtype": "float32"}])
+values = np.zeros(4, dtype=np.float32)
+x = program.upload(id="x", kind="tensor", value=values)
 y = program.run(id="y", fn=scale, args=[x, 2])
 program.return_(key="output", value=y)
 ```
@@ -76,17 +79,22 @@ precompiled library follows the same selection step.
 
 ### Pass values and references
 
-`run` accepts a built-in name such as `"builtin.zeros"` or a function register.
-Top-level `Register` arguments are encoded automatically. Inside nested lists
-or dictionaries, write an explicit `{"$ref": register.id}` reference:
+Pass the value returned by `get_function` as the `fn` argument to `run`:
 
 ```python
-nested_arguments = [{"input": {"$ref": x.id}, "scale": 2}]
+scale = program.get_function(id="scale", module=module, name="scale")
+y = program.run(id="scaled", fn=scale, args=[x, 2])
 ```
 
-All references must point to earlier instructions. Ordinary numbers, strings,
-lists and dictionaries pass as literal values, except dictionaries with the exact
-`{"$ref": "id"}` form. The protocol recursively resolves that reference form.
+`scale` is a `Register`, a Python object holding the ID `"scale"`. The client
+serializes it as `{"$ref": "scale"}` in the request. The same applies to a
+`Register` returned by a `run` that produced another callable.
+
+Top-level `Register` arguments in `args` are encoded the same way. Ordinary
+numbers, strings, lists and dictionaries pass as JSON literals. An explicit
+`{"$ref": "id"}` in a top-level argument also resolves to that earlier value;
+reference-shaped dictionaries nested inside lists or objects remain literals.
+All references must point to earlier instructions in the same request.
 
 ## Submit and read results
 
@@ -110,7 +118,7 @@ are Python `bytes`. Modules and callable handles cannot be returned.
 `queue_ms` measures waiting for a worker. `elapsed_ms` is worker execution time,
 including `lease_wait_ms` waiting for exclusive GPU access and `lease_held_ms`
 holding that access. These request-level durations are different from a kernel's
-measurement returned by `builtin.benchmark`.
+measurement reported by your harness or profiler.
 
 ## Request lifecycle
 
@@ -139,30 +147,33 @@ execution's output. Learn the separate rules in the protocol's
 
 ## Tensors
 
-**Create them on the server** unless the client needs to specify their exact
-values:
+You can initialize tensors remotely by uploading Python, or upload tensors
+created locally.
+
+For remote initialization:
 
 ```python
-program.run(id="x", fn="builtin.randn", args=[{"shape": [4096, 4096], "dtype": "bfloat16", "seed": 0}])
-program.run(id="y", fn="builtin.zeros", args=[{"shape": [4096, 4096], "dtype": "float32"}])
+module = program.upload(id="allocator", kind="module", source="""
+import torch
+
+def make_input():
+    return torch.randn((4096, 4096), dtype=torch.bfloat16, device="cuda")
+""")
+make_input = program.get_function(id="make_input", module=module, name="make_input")
+x = program.run(id="x", fn=make_input)
 ```
 
-Uploading instead pays for local generation, hashing, and the transfer, which
-makes it markedly more expensive than creating the tensor on the server, and
-increasingly so as the tensor grows. Re-uploading identical bytes hits the
-server's blob cache and skips the transfer, but the cached bytes are still
-copied to the GPU on every request, so the gap narrows rather than closes.
+For a local tensor:
 
-Upload when the values themselves matter: a reference you computed locally, a
-fixed input your results have to stay reproducible against, or a tensor whose
-contents the kernel's work depends on, such as the `q_indptr` and `kv_indptr`
-arrays telling a paged-attention kernel where each sequence begins. `kind="tensor"`
-accepts a NumPy array, a torch tensor, any object supporting DLPack, or raw
-bytes together with `dtype` and `shape`.
+```python
+import numpy as np
 
-`randn` requires a floating-point dtype and takes an optional `seed`. It,
-`empty` and `zeros` all fall back to `float16` when `dtype` is omitted, so it is
-worth stating explicitly.
+values = np.zeros((4, 4), dtype=np.float32)
+x = program.upload(id="x", kind="tensor", value=values)
+```
+
+`kind="tensor"` accepts a NumPy array, a torch tensor, any object supporting
+DLPack, or raw bytes together with `dtype` and `shape`.
 
 Accepted dtypes: `bool`, `uint8`, `int8`, `int16`, `int32`, `int64`, `float16`,
 `float32`, `float64`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`.
@@ -278,13 +289,11 @@ if result.status == "FAILED":
 <a id="languages-supported-by-remote-compilation"></a>
 <a id="measuring"></a>
 <a id="checking-correctness"></a>
-<a id="calling-builtins-from-uploaded-code"></a>
 <a id="running-your-own-code-off-the-gpu"></a>
 
 - [Benchmark a Kernel with KCoral](../tutorials/benchmark-kernel.md) explains
   compilation choices, supported languages, correctness checks, measurement,
-  calling built-ins from uploaded code and functions that release the GPU.
+  uploaded harnesses and functions that release the GPU.
 - [KCoral Protocol](protocol.md) defines endpoints and instruction fields.
-- [Builtin Tools](builtin-tools.md) lists server functions and their options.
 - [Agent Integration Guide](../tutorials/agent-integration.md) shows how to give a
   coding agent the repository skill and a concrete execution task.

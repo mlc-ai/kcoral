@@ -28,7 +28,6 @@ from .schemas import (
     FileUpload,
     Program,
     ProgramOutcome,
-    Run,
     Upload,
     expected_tensor_nbytes,
     parse_program,
@@ -543,19 +542,15 @@ def _program_shape(program: Program) -> dict[str, object]:
     program it describes."""
     ops: Counter[str] = Counter()
     uploads: Counter[str] = Counter()
-    builtins: set[str] = set()
     for instruction in program.instructions:
         ops[instruction.op] += 1
         if isinstance(instruction, (Upload, FileUpload)):
             kind = instruction.kind
             uploads[f"{kind}:{instruction.language}" if kind == "module" else kind] += 1
-        elif isinstance(instruction, Run) and isinstance(instruction.fn, str):
-            builtins.add(instruction.fn)
     return {
         "instructions": len(program.instructions),
         "ops": dict(ops),
         "uploads": dict(uploads) or None,
-        "builtins": sorted(builtins) or None,
         "blob_bytes": sum(len(data) for data in program.blob_bytes.values()) or None,
     }
 
