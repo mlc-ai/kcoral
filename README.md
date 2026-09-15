@@ -69,7 +69,7 @@ See [Your First Program](docs/getting-started/quickstart.md),
 
 Use `Program.return_file()` or `return_folder()` to receive workspace outputs,
 then call `.save(destination)` on the result. See
-[returning files and folders](docs/client_guide.md#returning-files-and-folders).
+[returning files and folders](docs/client-guide/writing-a-program.md#returning-files-and-folders).
 
 ## Protocol summary
 

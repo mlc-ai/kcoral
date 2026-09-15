@@ -526,7 +526,9 @@ Select an earlier value for the response.
 |---|---|---:|---|
 | `op` | string | yes | `"return"` |
 | `key` | string | yes | Unique key in the response `results` object |
-| `value` | `{"$ref": id}` | yes | Earlier handle to return |
+| `value` | `{"$ref": id}` | For value returns | Earlier handle to return; omit `kind` and `path` |
+| `kind` | string | For file/folder returns | `"file"` or `"folder"`; omit `value` |
+| `path` | string or `{"$ref": id}` | For file/folder returns | Workspace path, supplied literally or through an earlier handle |
 
 #### Details
 
@@ -536,10 +538,15 @@ program can interleave returns with the uploads and runs that follow them. A
 `return` that has already run contributes its entry to `results` even if a later
 instruction fails.
 
-### File and folder selection
+#### File and folder selection
 
 ```json
 {"op": "return", "key": "report", "kind": "file", "path": "outputs/report.txt"}
+```
+
+To return a folder whose path is held in an earlier register:
+
+```json
 {"op": "return", "key": "debug", "kind": "folder", "path": {"$ref": "output_path"}}
 ```
 

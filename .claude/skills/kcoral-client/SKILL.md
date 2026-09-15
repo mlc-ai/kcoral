@@ -117,7 +117,7 @@ hidden files and empty directories. Missing paths, symlinks, and special files
 fail collection. Earlier returns survive later ordinary instruction failures.
 Saves require an existing parent; file replacement needs `overwrite=True`, and
 folder destinations must be new. Transfers are buffered and subject to server
-limits. See [client usage](../../../docs/client_guide.md#returning-files-and-folders).
+limits. See [client usage](../../../docs/client-guide/writing-a-program.md#returning-files-and-folders).
 
 ## Instructions
 
