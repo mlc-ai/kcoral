@@ -48,6 +48,7 @@ def test_shutdown_drains_active_job_and_rejects_waiter():
             queued = executor.submit(pool.submit, Program(instructions=[]), 10, 30)
             wait_until(lambda: pool._idle.snapshot()[1] == 1)
             pool.begin_shutdown()
+            assert pool.load()["request_capacity"] == 0
             with pytest.raises(PoolBusy):
                 queued.result(timeout=1)
             with pytest.raises(PoolBusy, match="shutting down"):

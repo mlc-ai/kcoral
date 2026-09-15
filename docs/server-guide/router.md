@@ -123,11 +123,12 @@ boundary.
 | `--node-retention-seconds` | `600` | Retention of disconnected, unused node records |
 | `--max-request-bytes` | `268435456` | Maximum accepted request body size |
 
-The Router's `/health` reports `status`, `instance_id`, `active_requests`,
-`queue_length`, `target`, `versions` and a `workers` list containing node records.
-It does not report an aggregate `gpu_count`. Each node record includes its
-name, capacity, available capacity, connected data slots, instance identifiers,
-restart count and health diagnostics.
+The Router uses the [health schema](../client-guide/protocol.md#get-health),
+with router-local request counts.
+
+The supervisor polls loopback-only `/internal/worker-status` and forwards worker
+occupancy and environment information to the router. Node eligibility follows
+these states:
 
 | Node status | Meaning |
 | --- | --- |

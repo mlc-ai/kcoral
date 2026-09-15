@@ -202,6 +202,7 @@ struct PoolState {
 struct PoolInner {
     config: RouterConfig,
     instance_id: String,
+    started_at: String,
     state: Mutex<PoolState>,
     notify: Notify,
     queue_slots: Arc<Semaphore>,
@@ -224,6 +225,8 @@ impl NodePool {
                 queue_slots: Arc::new(Semaphore::new(config.max_queued_requests)),
                 config,
                 instance_id: Uuid::new_v4().to_string(),
+                started_at: chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now())
+                    .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
                 state: Mutex::new(PoolState::default()),
                 notify: Notify::new(),
             }),
@@ -572,6 +575,43 @@ impl NodePool {
         self.inner.notify.notify_waiters();
     }
 
+    pub async fn health(&self) -> Value {
+        let state = self.inner.state.lock().await;
+        let now = Instant::now();
+        let ready = state
+            .nodes
+            .iter()
+            .any(|node| node.status == NodeStatus::Ready && !node.slots.is_empty());
+        let capacity = state
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.status == NodeStatus::Ready
+                    && node.control_connection_id.is_some()
+                    && !node.saturated_until.is_some_and(|deadline| deadline > now)
+            })
+            .map(|node| node.slots.len() as u64)
+            .sum::<u64>();
+        let (target, versions) = state
+            .cohort
+            .as_ref()
+            .map(|cohort| (cohort.target.clone(), cohort.versions.clone()))
+            .unwrap_or_default();
+        json!({
+            "status": if ready { "ok" } else { "unavailable" },
+            "instance_id": self.inner.instance_id,
+            "started_at": self.inner.started_at,
+            "gpu_count": null,
+            "load": {
+                "request_capacity": capacity,
+                "requests_in_progress": state.nodes.iter().map(|node| node.in_flight).sum::<u64>(),
+                "requests_waiting": self.inner.config.max_queued_requests - self.inner.queue_slots.available_permits(),
+            },
+            "target": target,
+            "versions": versions,
+        })
+    }
+
     pub async fn snapshot(&self) -> Value {
         let state = self.inner.state.lock().await;
         let now = Instant::now();
@@ -847,6 +887,68 @@ mod tests {
             last_error: String::new(),
             health_age_millis: 0,
         }
+    }
+
+    #[tokio::test]
+    async fn public_health_tracks_capacity_queueing_and_disconnection() {
+        let pool = NodePool::new(config()).unwrap();
+        pool.record_status(None, "control", status("one", true, "cpu"))
+            .await
+            .unwrap();
+        assert_eq!(pool.health().await["load"]["request_capacity"], 0);
+        pool.register_slot(slot("one", "first")).await.unwrap();
+        let guard = pool.acquire(None, "assigned").await.unwrap();
+        let queued_pool = pool.clone();
+        let queued = tokio::spawn(async move { queued_pool.acquire(None, "queued").await });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while pool.health().await["load"]["requests_waiting"] != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            pool.health().await["load"],
+            json!({
+                "request_capacity": 1, "requests_in_progress": 1, "requests_waiting": 1
+            })
+        );
+        queued.abort();
+        let _ = queued.await;
+        pool.control_disconnected("node", "control", "lost control connection")
+            .await;
+        let disconnected = pool.health().await;
+        assert_eq!(disconnected["status"], "unavailable");
+        assert_eq!(
+            disconnected["load"],
+            json!({
+                "request_capacity": 0, "requests_in_progress": 1, "requests_waiting": 0
+            })
+        );
+        guard.finish().await;
+        assert_eq!(pool.health().await["load"]["requests_in_progress"], 0);
+    }
+
+    #[tokio::test]
+    async fn public_capacity_excludes_backoff_and_incompatible_nodes() {
+        let pool = NodePool::new(config()).unwrap();
+        pool.record_status(None, "control", status("one", true, "cpu"))
+            .await
+            .unwrap();
+        pool.register_slot(slot("one", "first")).await.unwrap();
+        {
+            let mut state = pool.inner.state.lock().await;
+            state.nodes[0].saturated_until = Some(Instant::now() + Duration::from_secs(10));
+        }
+        assert_eq!(pool.health().await["load"]["request_capacity"], 0);
+        pool.record_status(Some("node"), "control", status("one", true, "cpu"))
+            .await
+            .unwrap();
+        assert_eq!(pool.health().await["load"]["request_capacity"], 1);
+        pool.record_status(Some("node"), "control", status("one", true, "other"))
+            .await
+            .unwrap();
+        assert_eq!(pool.health().await["load"]["request_capacity"], 0);
     }
 
     #[test]

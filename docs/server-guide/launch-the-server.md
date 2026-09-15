@@ -25,9 +25,9 @@ kcoral --device gpu --gpus 0 --workers-per-gpu 8 --host 0.0.0.0 --port 8001
 See [configuration](#configuration) for every option and its default.
 
 Check readiness with `GET /health`, which also reports the `target` an uploaded
-library must be built for and the `versions` the worker runs. A CPU server
-reports `gpu_count: 0`; the client reads the target from the GPU server. Submit
-programs with `POST /execute` using `multipart/form-data`.
+library must be built for and the `versions` the worker runs. When compiling on
+a CPU server, read the target from the GPU server. Submit programs with
+`POST /execute` using `multipart/form-data`.
 
 Several workers share each GPU, so one can compile while another measures on the
 GPU it is not using; they take turns through a per-GPU lease and never run on it

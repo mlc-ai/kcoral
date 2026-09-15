@@ -23,8 +23,8 @@ with Client("http://localhost:8000", connect_timeout_seconds=10) as client:
     print(target["arch"])
 ```
 
-`health()` returns the server's readiness and worker metadata. `target()` reads
-the GPU architecture an uploaded compiled library must match; ask the GPU
+`health()` reports endpoint status, load, and compilation metadata.
+`target()` reads the GPU architecture an uploaded compiled library must match; ask the GPU
 server for it, not a CPU compilation server. Optional `headers` are sent with
 every request. If you do not use `with`, call `client.close()` explicitly.
 

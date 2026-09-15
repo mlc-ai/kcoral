@@ -146,7 +146,7 @@ impl SupervisorState {
     }
 
     pub async fn refresh_health(&self) -> anyhow::Result<()> {
-        let health_url = self.server_url.join("health")?;
+        let health_url = self.server_url.join("internal/worker-status")?;
         let result = tokio::time::timeout(self.health_timeout, async {
             let response = self
                 .client
@@ -422,27 +422,20 @@ fn parse_health(body: Value) -> anyhow::Result<SupervisorStatus> {
         anyhow::bail!("health response status is not ok");
     }
     let server_instance_id = required_string(object.get("instance_id"), "instance_id")?;
-    let workers = object
-        .get("workers")
-        .and_then(Value::as_array)
-        .filter(|workers| !workers.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("health response has no workers"))?;
-    let busy_workers = workers
-        .iter()
-        .filter(|worker| worker.get("status").and_then(Value::as_str) == Some("busy"))
-        .count() as u64;
-    if workers.iter().any(|worker| {
-        !matches!(
-            worker.get("status").and_then(Value::as_str),
-            Some("idle" | "busy")
-        )
-    }) {
-        anyhow::bail!("health response has invalid worker status");
-    }
+    let worker_count = object
+        .get("worker_count")
+        .and_then(Value::as_u64)
+        .filter(|count| *count > 0)
+        .ok_or_else(|| anyhow::anyhow!("worker status has invalid worker_count"))?;
+    let busy_workers = object
+        .get("busy_workers")
+        .and_then(Value::as_u64)
+        .filter(|count| *count <= worker_count)
+        .ok_or_else(|| anyhow::anyhow!("worker status has invalid busy_workers"))?;
     Ok(SupervisorStatus {
         server_healthy: true,
         server_instance_id,
-        worker_count: workers.len() as u64,
+        worker_count,
         busy_workers,
         target: required_string_map(object.get("target"), "target")?,
         versions: required_string_map(object.get("versions"), "versions")?,
@@ -566,15 +559,10 @@ mod tests {
         let health = parse_health(serde_json::json!({
             "status": "ok",
             "instance_id": "server-1",
-            "active_requests": 2,
-            "queue_length": 1,
-            "gpu_count": 1,
+            "worker_count": 2,
+            "busy_workers": 1,
             "target": {"arch": "sm_100a"},
             "versions": {"cuda": "13.0"},
-            "workers": [
-                {"status": "busy"},
-                {"status": "idle"}
-            ]
         }))
         .unwrap();
         assert!(health.server_healthy);

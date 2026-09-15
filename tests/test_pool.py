@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from support.programs import harness_call
@@ -345,6 +346,69 @@ def test_health_reports_idle_workers(pool):
     assert health["workers"][0]["uptime_seconds"] >= 0
     # the pool serves one target; versions are reported separately
     assert health["target"] == {"arch": "fake"} and health["versions"] == {}
+
+
+def test_load_tracks_assigned_and_waiting_requests(pool, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    original_run = pool._workers[0].run
+
+    def blocked_run(*args, **kwargs):
+        entered.set()
+        assert release.wait(10)
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(pool._workers[0], "run", blocked_run)
+    with ThreadPoolExecutor(2) as executor:
+        first = executor.submit(pool.submit, successful_program(), 10)
+        try:
+            assert entered.wait(5)
+            second = executor.submit(pool.submit, successful_program(), 10, 10)
+            deadline = time.monotonic() + 5
+            while pool.load()["requests_waiting"] != 1:
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            assert pool.load() == {
+                "request_capacity": 1,
+                "requests_in_progress": 1,
+                "requests_waiting": 1,
+            }
+        finally:
+            release.set()
+        assert first.result(timeout=10).execution.status == "COMPLETED"
+        assert second.result(timeout=10).execution.status == "COMPLETED"
+    assert pool.load() == {"request_capacity": 1, "requests_in_progress": 0, "requests_waiting": 0}
+
+
+def test_load_during_background_worker_replacement(monkeypatch):
+    pool = WorkerPool([], fake_runtime_factory, cpu_workers=1, max_requests_per_worker=1)
+    entered, release = threading.Event(), threading.Event()
+    worker = pool._workers[0]
+    original_replace = worker.replace
+
+    def blocked_replace(*args):
+        entered.set()
+        assert release.wait(10)
+        original_replace(*args)
+
+    monkeypatch.setattr(worker, "replace", blocked_replace)
+    try:
+        assert pool.submit(Program(instructions=[]), 10).execution.status == "COMPLETED"
+        assert entered.wait(5)
+        assert pool.load() == {
+            "request_capacity": 0,
+            "requests_in_progress": 0,
+            "requests_waiting": 0,
+        }
+        assert pool.worker_status() == {"worker_count": 1, "busy_workers": 1}
+        release.set()
+        deadline = time.monotonic() + 5
+        while pool.load()["request_capacity"] != 1:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert pool.worker_status() == {"worker_count": 1, "busy_workers": 0}
+    finally:
+        release.set()
+        pool.shutdown()
 
 
 def test_backpressure_when_all_workers_busy(pool):

@@ -16,7 +16,7 @@ disagree, that file wins.
 
 ## Model
 
-- The server exposes `POST /execute` and `GET /health`, nothing else.
+- The client endpoints are `POST /execute` and `GET /health`.
 - A request body is a **program**: an ordered list of instructions executed
   top to bottom on a GPU worker.
 - There is no session state. Handles (`id`s) live for one request; a second
@@ -26,8 +26,10 @@ disagree, that file wins.
   what `return` selects.
 - A reference has the exact form `{"$ref": "<id>"}` and must point to an
   earlier instruction.
-- `GET /health` reports the GPU `target` (e.g. `{"arch": "sm_100a"}`) and the
-  installed `versions` (torch, cuda, tvm, tvm_ffi, triton, cutlass).
+- The `GET /health` response includes the GPU `target` (e.g. `{"arch": "sm_100a"}`),
+  installed `versions`, and `load`: `request_capacity` (occupied + free capacity),
+  `requests_in_progress` (assigned requests), and `requests_waiting`
+  (requests awaiting assignment).
 
 ## Python client
 

@@ -34,7 +34,7 @@ the server does not require a compiler.
 
 Run the router and each node supervisor as separate systemd services or
 container processes. The supervisor launches the Python server child, probes
-its loopback `/health` endpoint, and restarts it independently of the router.
+its loopback-only `/internal/worker-status` endpoint, and restarts it independently of the router.
 It passes `KCORAL_ROUTER_ENDPOINT`, `KCORAL_NODE_ID`, and the optional
 `KCORAL_NODE_TOKEN` to the child so the child's data slots use the same identity
 as its control stream. The host and port from `--server-url` become the child's

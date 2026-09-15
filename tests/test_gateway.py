@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import uuid
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
@@ -19,6 +20,7 @@ from kcoral import kcoral_gateway_pb2 as pb
 from kcoral import kcoral_gateway_pb2_grpc as rpc
 from kcoral.app import create_app
 from kcoral.config import ServerConfig
+from kcoral.health import HealthResponse
 from kcoral.testing import fake_runtime_factory
 from kcoral.tunnel import TunnelManager
 
@@ -133,12 +135,7 @@ async def ready_nodes(url, count):
 
         async def ready():
             state = (await client.get(url + "/health")).json()
-            return (
-                sum(
-                    n["status"] == "ready" and n["available_capacity"] > 0 for n in state["workers"]
-                )
-                == count
-            )
+            return state["status"] == "ok" and state["load"]["request_capacity"] == count
 
         await wait_until(ready)
 
@@ -318,7 +315,7 @@ async def _errors_and_cancel(tmp_path):
                     await asyncio.wait_for(cancelled.wait(), 2)
                     await ready_nodes(url, 1)
                     health = (await client.get(url + "/health")).json()
-                    assert health["active_requests"] == 0
+                    assert health["load"]["requests_in_progress"] == 0
             finally:
                 await manager.close()
 
@@ -477,3 +474,83 @@ async def _cancel_reason(tmp_path, failure):
                 assert f'finish_reason="{failure}"' in lines[0]
             finally:
                 await manager.close()
+
+
+def test_supervisor_reports_python_worker_status(tmp_path):
+    asyncio.run(_supervisor_reports_python_worker_status(tmp_path))
+
+
+async def _supervisor_reports_python_worker_status(tmp_path):
+    node_binary = router_binary().with_name("kcoral-node")
+    if not node_binary.is_file():
+        pytest.fail(f"required supervisor binary is missing: {node_binary}")
+    child_script = tmp_path / "server.py"
+    child_script.write_text(
+        "import os\n"
+        "import uvicorn\n"
+        "from kcoral.app import create_app\n"
+        "from kcoral.config import ServerConfig\n"
+        "from kcoral.testing import fake_runtime_factory\n"
+        "if __name__ == '__main__':\n"
+        "    config = ServerConfig(device='cpu', num_workers=2, max_requests_per_worker=0,\n"
+        "        log_console=False, router_endpoint=os.environ['KCORAL_ROUTER_ENDPOINT'],\n"
+        "        node_id=os.environ['KCORAL_NODE_ID'])\n"
+        "    uvicorn.run(create_app(config, runtime_factory=fake_runtime_factory),\n"
+        "        host=os.environ['KCORAL_SERVER_HOST'],\n"
+        "        port=int(os.environ['KCORAL_SERVER_PORT']))\n"
+    )
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        server_port = reservation.getsockname()[1]
+    server_url = f"http://127.0.0.1:{server_port}"
+    async with running_router(tmp_path / "router") as router_url:
+        async with httpx.AsyncClient() as client:
+            initial = await client.get(router_url + "/health")
+            assert initial.status_code == 503
+            HealthResponse.model_validate(initial.json())
+            assert initial.json()["load"]["request_capacity"] == 0
+        with (tmp_path / "node.log").open("w") as log:
+            process = subprocess.Popen(
+                [
+                    str(node_binary),
+                    "--router-endpoint",
+                    router_url,
+                    "--node-id",
+                    "cpu-node",
+                    "--server-url",
+                    server_url,
+                    "--health-interval-seconds",
+                    "0.1",
+                    "--",
+                    sys.executable,
+                    str(child_script),
+                ],
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "python"),
+                },
+                stdout=log,
+                stderr=log,
+            )
+            try:
+                await ready_nodes(router_url, 2)
+                async with httpx.AsyncClient() as client:
+                    direct = (await client.get(server_url + "/health")).json()
+                    routed = (await client.get(router_url + "/health")).json()
+                    HealthResponse.model_validate(direct)
+                    HealthResponse.model_validate(routed)
+                    assert set(direct) == set(routed)
+                    assert direct["gpu_count"] == 0
+                    assert routed["gpu_count"] is None
+                    assert (
+                        direct["load"]
+                        == routed["load"]
+                        == {"request_capacity": 2, "requests_in_progress": 0, "requests_waiting": 0}
+                    )
+            finally:
+                process.terminate()
+                try:
+                    await asyncio.to_thread(process.wait, timeout=15)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    await asyncio.to_thread(process.wait)

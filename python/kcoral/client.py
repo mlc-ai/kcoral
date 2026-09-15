@@ -525,7 +525,10 @@ class Client:
         return _parse_program_result(body, binary_parts)
 
     def health(self) -> dict[str, Any]:
-        """Read readiness, target, installed versions and worker state.
+        """Read endpoint status, load, and compilation environment.
+
+        ``load`` reports capacity (occupied + free), assigned requests (including
+        GPU waiting), and requests awaiting assignment.
 
         :returns: The server's health response with ``status == "ok"``.
         :raises KCoralError: If the server returns an HTTP error.

@@ -84,11 +84,22 @@ def scalar_program():
 def test_health():
     with make_client() as client:
         data = client.get("/health").json()
-    assert data["status"] == "ok" and data["gpu_count"] == 1 and data["queue_length"] == 0
-    assert data["workers"][0]["status"] == "idle"
+    assert set(data) == {
+        "status",
+        "instance_id",
+        "started_at",
+        "gpu_count",
+        "load",
+        "target",
+        "versions",
+    }
+    assert data["status"] == "ok" and data["gpu_count"] == 1
+    assert data["load"] == {
+        "request_capacity": ServerConfig().workers_per_gpu,
+        "requests_in_progress": 0,
+        "requests_waiting": 0,
+    }
     assert data["instance_id"]
-    assert data["uptime_seconds"] >= 0
-    assert data["active_requests"] == 0
 
 
 def test_instance_id_changes_with_server_lifecycle():
@@ -108,8 +119,11 @@ def test_cpu_health_and_execution_have_no_gpu_lease():
 
     assert health["status"] == "ok"
     assert health["gpu_count"] == 0
-    assert health["gpus"] == []
-    assert len(health["workers"]) == 2
+    assert health["load"] == {
+        "request_capacity": 2,
+        "requests_in_progress": 0,
+        "requests_waiting": 0,
+    }
     assert result["status"] == "COMPLETED"
     assert result["lease_wait_ms"] == 0
     assert result["lease_held_ms"] == 0
@@ -122,7 +136,7 @@ def test_cpu_app_selects_cpu_runtime_by_default():
 
     assert health["gpu_count"] == 0
     assert health["target"] == {}
-    assert health["workers"][0]["gpu_id"] is None
+    assert health["load"]["request_capacity"] == 1
 
 
 def _cuda_toolchain_available() -> bool:

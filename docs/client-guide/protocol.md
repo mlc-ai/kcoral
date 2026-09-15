@@ -2,7 +2,7 @@
 
 # KCoral Protocol
 
-KCoral exposes two HTTP endpoints. HTTP is the request-and-response transport;
+KCoral exposes two client HTTP endpoints. HTTP is the request-and-response transport;
 JSON is the text format used for structured fields. A program is an ordered list
 of instructions, executed in one request with no persistent session handles.
 This page describes a direct server. The [Router](../server-guide/router.md) preserves
@@ -12,71 +12,70 @@ the execution protocol while adding node selection and routing metadata.
 
 ### GET /health
 
-Read server readiness, worker capacity and the compilation target. This endpoint
-has no request body or query fields.
+Read endpoint health, request load, and the compilation environment.
 
 ```http
 GET /health HTTP/1.1
 Host: localhost:8000
 ```
 
-Example response:
+Example response from a GPU server with two workers:
 
 ```json
 {
   "status": "ok",
   "instance_id": "09dc4eaa-a8b1-46cf-b5fb-a3448dcd7ca6",
   "started_at": "2026-08-29T18:42:11.019012Z",
-  "uptime_seconds": 12.4,
-  "active_requests": 0,
   "gpu_count": 1,
-  "queue_length": 0,
+  "load": {
+    "request_capacity": 2,
+    "requests_in_progress": 2,
+    "requests_waiting": 3
+  },
   "target": {"arch": "sm_100a"},
-  "versions": {"torch": "2.14.0+cu132", "cuda": "13.2", "tvm_ffi": "0.1.13.post2"},
-  "gpus": [{"gpu_id": 0, "lease_depth": 0}],
-  "workers": [{"worker_id": "gpu0/w0", "gpu_id": 0, "status": "idle", "uptime_seconds": 12.4}]
+  "versions": {"torch": "2.14.0+cu132", "cuda": "13.2", "tvm_ffi": "0.1.13.post2"}
 }
 ```
 
 Version strings above are illustrative; use the values returned by your server.
 
-`instance_id` changes whenever the server process starts, including when a new
-process reuses the same address. `active_requests` is the count of requests
-registered with the worker pool, including requests waiting for a worker.
-SIGTERM or Ctrl+C starts graceful shutdown; there is no administrative HTTP
-endpoint.
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `status` | string | Direct server: `ok` when the handler responds. Router: `ok` when a ready node has connected execution resources, otherwise `unavailable` with HTTP 503 |
+| `instance_id` | string | Changes on each endpoint restart |
+| `started_at` | string | Endpoint startup time in UTC (RFC 3339) |
+| `gpu_count` | integer or null | Configured GPUs; `0` on CPU servers; `null` on routers |
+| `load.request_capacity` | integer | Serviceable request capacity, occupied and free |
+| `load.requests_in_progress` | integer | Assigned requests, including compilation, GPU waiting, and cleanup |
+| `load.requests_waiting` | integer | Requests awaiting assignment at this endpoint |
+| `target` | object | Compilation target, including `arch` on a GPU server; empty on a CPU server |
+| `versions` | object | Runtime and toolchain version strings |
+
+Direct-server capacity counts workers, excluding background replacements, and
+becomes zero during shutdown. Router capacity counts execution connections on
+eligible nodes; its request counts cover submissions through that router.
+
+Counts can change before submission. During recovery or cleanup, in-progress
+requests may exceed capacity. Assigned requests can wait for GPU access even
+when `requests_waiting` is zero.
+
+On the router, `instance_id` and `started_at` describe the router process.
+SIGTERM or Ctrl+C starts graceful shutdown.
+
+A CPU compilation server has an empty compilation target. Read the target from
+the GPU server and supply it when compiling on a CPU server. Workers on one GPU
+server must agree on the target; the server rejects a mixed-target pool.
 
 Through the Rust router, `/execute` uses the same program and response format.
 `X-KCoral-Node` identifies the selected node and serves as a cache-retry
 preference. A missing or unavailable preference falls back to another eligible
-node. Router `/health` describes nodes in its `workers` array and carries
-router-local `active_requests` and `queue_length`; it does not aggregate
-`gpu_count`. The standalone Python health schema above remains unchanged.
+node.
 
 Each HTTP attempt has an `X-Request-ID` header matching the result/error
 `request_id` and the server events. The router generates a UUID before admission
 and forwards it to Python. A direct Python request may supply exactly one
 canonical lowercase UUID; absent, duplicate, or invalid IDs are replaced.
 Retries after `CACHE_MISS` are separate HTTP attempts with separate IDs.
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `status` | string | `ok` when the running server responds |
-| `instance_id` | string | Unique identifier for this server lifecycle |
-| `started_at` | string | Server start time in UTC |
-| `uptime_seconds` | number | Elapsed time since startup |
-| `active_requests` | integer | Requests registered with the worker pool, including worker waiters |
-| `gpu_count` | integer | Number of configured graphics processing units (GPUs); zero for a CPU compilation server |
-| `queue_length` | integer | Requests waiting for a worker |
-| `target` | object | Compilation target, including `arch` on a GPU server; empty on a CPU server |
-| `versions` | object | Installed runtime and toolchain version strings |
-| `gpus` | array | Per-device objects with `gpu_id` and `lease_depth`, the number holding or waiting for exclusive device access |
-| `workers` | array | Per-worker `worker_id`, `gpu_id`, `status` (`idle` or `busy`) and `uptime_seconds` |
-
-A CPU (central processing unit) compilation worker has `gpu_id: null`, no GPU
-list and no compilation target of its own. Read the target from the GPU server
-and supply it when compiling on a CPU server. Workers on one GPU server must
-agree on the target; the server rejects a mixed-target pool.
 
 ### POST /execute
 

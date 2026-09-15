@@ -35,7 +35,7 @@ pub fn app(pool: NodePool) -> Router {
 }
 
 async fn health_handler(State(pool): State<NodePool>) -> Response {
-    let snapshot = pool.snapshot().await;
+    let snapshot = pool.health().await;
     let status = if snapshot.get("status").and_then(Value::as_str) == Some("ok") {
         StatusCode::OK
     } else {

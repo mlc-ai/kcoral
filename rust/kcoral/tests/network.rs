@@ -531,12 +531,10 @@ async fn health(State(state): State<HealthState>) -> Json<Value> {
     Json(json!({
         "status": "ok",
         "instance_id": state.instance_id.as_ref(),
-        "active_requests": 0,
-        "gpu_count": 1,
-        "queue_length": 0,
+        "worker_count": 1,
+        "busy_workers": 0,
         "target": {"arch": "sm_100a"},
         "versions": {"cuda": "13.0"},
-        "workers": [{"status": "idle"}],
     }))
 }
 
@@ -547,7 +545,7 @@ async fn start_health_server(_healthy: bool) -> (HealthState, reqwest::Url) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let app = Router::new()
-        .route("/health", get(health))
+        .route("/internal/worker-status", get(health))
         .with_state(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (

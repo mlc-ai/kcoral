@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 import traceback
 import uuid
 from collections import Counter
@@ -12,15 +11,17 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
+from ipaddress import ip_address
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 from .cache import ByteCache, DiskFileCache
 from .config import ServerConfig
 from .errors import ValidationError
 from .events import EventLogger
+from .health import HealthResponse
 from .keys import is_blob_hash, verify_blob
 from .multipart import MultipartPart, encode_multipart, parse_multipart
 from .pool import PoolBusy, SubmitOutcome, WorkerPool
@@ -100,7 +101,6 @@ def create_app(
         app.state.events = events
         app.state.instance_id = str(uuid.uuid4())
         app.state.started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        app.state.started_monotonic = time.monotonic()
         events.emit(
             "server_started",
             run_dir=str(events.run_dir) if events.run_dir else None,
@@ -187,17 +187,36 @@ def create_app(
 
     app = FastAPI(title="KCoral", version="0.1.0", lifespan=lifespan)
 
-    @app.get("/health")
+    @app.get("/health", response_model=HealthResponse)
     async def health(request: Request) -> dict[str, object]:
-        pool_health = request.app.state.pool.health()
+        """Read endpoint status, load, and compilation environment."""
+        pool = request.app.state.pool
         return {
             "status": "ok",
             "instance_id": request.app.state.instance_id,
             "started_at": request.app.state.started_at,
-            "uptime_seconds": max(0.0, time.monotonic() - request.app.state.started_monotonic),
-            "active_requests": request.app.state.pool.active_requests,
-            "gpu_count": len(pool_health["gpus"]),
-            **pool_health,
+            "gpu_count": len(set(worker_gpus)),
+            "load": pool.load(),
+            "target": pool.target(),
+            "versions": pool.versions(),
+        }
+
+    @app.get("/internal/worker-status", include_in_schema=False)
+    async def worker_status(request: Request) -> dict[str, object]:
+        """Report worker occupancy to the local supervisor."""
+        try:
+            local = request.client is not None and ip_address(request.client.host).is_loopback
+        except ValueError:
+            local = False
+        if not local:
+            raise HTTPException(status_code=404)
+        pool = request.app.state.pool
+        return {
+            "status": "ok",
+            "instance_id": request.app.state.instance_id,
+            "target": pool.target(),
+            "versions": pool.versions(),
+            **pool.worker_status(),
         }
 
     @app.exception_handler(Exception)

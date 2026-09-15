@@ -173,7 +173,7 @@ class WorkerPool:
         self._gpus = list(dict.fromkeys(gpus))
         self._idle = IdleWorkers(self._workers)
         self._leases = NoopLeases() if cpu_workers is not None else GPULeases(self._gpus)
-        self._replacing: set[threading.Thread] = set()
+        self._replacing: dict[threading.Thread, Worker] = {}
         self._replacing_lock = threading.Lock()  # so shutdown can copy it mid-flight
         self._require_one_target()
 
@@ -265,13 +265,13 @@ class WorkerPool:
                 target=self._replace, args=(worker, finish_reason), daemon=True
             )
             with self._replacing_lock:
-                self._replacing.add(thread)
+                self._replacing[thread] = worker
             try:
                 thread.start()
                 return
             except RuntimeError:
                 with self._replacing_lock:
-                    self._replacing.discard(thread)
+                    self._replacing.pop(thread, None)
         # This fallback remains tracked by the active submit.
         self._replace(worker, finish_reason)
 
@@ -296,7 +296,7 @@ class WorkerPool:
         finally:
             self._idle.release(worker)
             with self._replacing_lock:
-                self._replacing.discard(threading.current_thread())
+                self._replacing.pop(threading.current_thread(), None)
 
     def _require_one_target(self) -> None:
         """One pool serves one target, so a client builds one library that any
@@ -329,6 +329,27 @@ class WorkerPool:
                 }
                 for w in self._workers
             ],
+        }
+
+    def load(self) -> dict[str, int]:
+        """Read capacity and assigned/waiting request counts."""
+        with self._condition:
+            idle_ids, waiting = self._idle.snapshot()
+            with self._replacing_lock:
+                replacing = {id(worker) for worker in self._replacing.values()} - idle_ids
+                capacity = len(self._workers) - len(replacing)
+            return {
+                "request_capacity": 0 if self._closing.is_set() else capacity,
+                "requests_in_progress": self._active,
+                "requests_waiting": waiting,
+            }
+
+    def worker_status(self) -> dict[str, int]:
+        """Read worker occupancy for the supervisor."""
+        idle_ids, _ = self._idle.snapshot()
+        return {
+            "worker_count": len(self._workers),
+            "busy_workers": len(self._workers) - len(idle_ids),
         }
 
     def target(self) -> dict[str, str]:
