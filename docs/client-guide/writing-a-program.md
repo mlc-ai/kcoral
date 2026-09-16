@@ -27,9 +27,6 @@ with Client("http://localhost:8000", connect_timeout_seconds=10) as client:
 `target()` reads the GPU architecture an uploaded compiled library must match; ask the GPU
 server for it, not a CPU compilation server. Optional `headers` are sent with
 every request. If you do not use `with`, call `client.close()` explicitly.
-For a reverse proxy, the base URL may include a path prefix; `execute_path` and
-`health_path` customize the routes appended to that prefix (defaults: `/execute`
-and `/health`). These options configure the client, not the server's routes.
 
 `connect_timeout_seconds` limits connection establishment. It does not limit
 execution. Pass `timeout_seconds` to `execute()` for a server-side execution

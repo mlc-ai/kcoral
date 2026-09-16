@@ -11,10 +11,9 @@ from kcoral import Client
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", default=os.environ.get("KCORAL_URL", "http://localhost:8000"))
-    parser.add_argument("--execute-path", default="/execute")
     args = parser.parse_args()
 
-    with Client(args.endpoint, execute_path=args.execute_path) as client:
+    with Client(args.endpoint) as client:
 
         @client.function(timeout=30)
         def add_one(x):

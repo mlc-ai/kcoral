@@ -82,8 +82,7 @@ Program.return_(key=..., value=...) -> None
 Program.return_file(key=..., path=...) -> None    # str or Register resolving to str
 Program.return_folder(key=..., path=...) -> None  # str or Register resolving to str
 
-Client(base_url, *, headers=None, connect_timeout_seconds=10,
-       execute_path="/execute", health_path="/health")
+Client(base_url, *, headers=None, connect_timeout_seconds=10)
 Client.execute(program, *, timeout_seconds=None, output_limit_bytes=None) -> ProgramResult
 Client.health() -> dict
 Client.target() -> dict   # e.g. {"arch": "sm_100a"}

@@ -16,8 +16,8 @@ import numpy as np
 
 from .client import Client, Program, ProgramResult, ProtocolError
 
-_P = ParamSpec("_P")
-_R = TypeVar("_R")
+_Parameters = ParamSpec("_Parameters")
+_ReturnType = TypeVar("_ReturnType")
 
 
 class RemoteExecutionError(RuntimeError):
@@ -38,7 +38,7 @@ class RemoteExecutionError(RuntimeError):
         )
 
 
-class RemoteFunction(Generic[_P, _R]):
+class RemoteFunction(Generic[_Parameters, _ReturnType]):
     """A Python function with explicit remote execution methods.
 
     Construct with :meth:`Client.function`.
@@ -49,7 +49,7 @@ class RemoteFunction(Generic[_P, _R]):
 
     def __init__(
         self,
-        fn: Callable[_P, _R],
+        fn: Callable[_Parameters, _ReturnType],
         *,
         client: Client,
         timeout: float | None = None,
@@ -67,11 +67,11 @@ class RemoteFunction(Generic[_P, _R]):
         self._cpu_only = cpu_only
         update_wrapper(self, fn, updated=())
 
-    def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _R:
+    def __call__(self, *args: _Parameters.args, **kwargs: _Parameters.kwargs) -> _ReturnType:
         """Call the original function locally, without contacting the server."""
         return self._fn(*args, **kwargs)
 
-    def build_program(self, *args: _P.args, **kwargs: _P.kwargs) -> Program:
+    def build_program(self, *args: _Parameters.args, **kwargs: _Parameters.kwargs) -> Program:
         """Bind arguments and build a program without contacting the server.
 
         :param args: Positional function arguments.
@@ -115,7 +115,7 @@ class RemoteFunction(Generic[_P, _R]):
         program.return_(key="output", value=output)
         return program
 
-    def execute(self, *args: _P.args, **kwargs: _P.kwargs) -> ProgramResult:
+    def execute(self, *args: _Parameters.args, **kwargs: _Parameters.kwargs) -> ProgramResult:
         """Run remotely and return the full execution outcome, including logs.
 
         :param args: Positional function arguments.
@@ -132,7 +132,7 @@ class RemoteFunction(Generic[_P, _R]):
             output_limit_bytes=self._output_limit_bytes,
         )
 
-    def remote(self, *args: _P.args, **kwargs: _P.kwargs) -> Any:
+    def remote(self, *args: _Parameters.args, **kwargs: _Parameters.kwargs) -> Any:
         """Run remotely and return the decoded function value.
 
         :param args: Positional function arguments.

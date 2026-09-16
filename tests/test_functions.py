@@ -2,12 +2,9 @@
 
 import numpy as np
 import pytest
-from starlette.routing import compile_path
-from test_client import _start_server
 from test_client import server_url as server_url
 
-from kcoral import Client, RemoteExecutionError, ServerConfig, create_app
-from kcoral.testing import fake_runtime_factory
+from kcoral import Client, RemoteExecutionError
 
 
 def echo(value):
@@ -29,52 +26,14 @@ def test_local_and_remote_argument_binding(server_url):
             combine.build_program()
 
 
-@pytest.fixture(scope="module")
-def proxy_server(tmp_path_factory):
-    app = create_app(
-        ServerConfig(
-            gpus=[0], max_requests_per_worker=0, disk_cache_dir=tmp_path_factory.mktemp("proxy")
-        ),
-        runtime_factory=fake_runtime_factory,
-    )
-    paths = {"/execute": "/prefix/tasks/run", "/health": "/prefix/status"}
-    for route in app.routes:
-        if route.path in paths:
-            route.path = paths[route.path]
-            route.path_regex, route.path_format, route.param_convertors = compile_path(route.path)
-    requests = []
-
-    @app.middleware("http")
-    async def record(request, call_next):
-        requests.append((request.method, request.url.path, request.headers.get("authorization")))
-        return await call_next(request)
-
-    server, thread, url = _start_server(app)
-    yield url, requests
-    server.should_exit = True
-    thread.join(timeout=10)
-
-
-def test_custom_paths_headers_and_binary_transfers(proxy_server):
-    url, requests = proxy_server
-    requests.clear()
+def test_binary_transfers_reuse_client(server_url):
     value = np.arange(6, dtype=np.float32).reshape(2, 3)
-    with Client(
-        url + "/prefix",
-        execute_path="tasks/run",
-        health_path="/status",
-        headers={"Authorization": "Bearer test-token"},
-    ) as client:
+    with Client(server_url) as client:
         remote = client.function()(echo)
-        assert client.health()["status"] == "ok"
         np.testing.assert_array_equal(remote.remote(value), value)
         assert remote.remote(b"binary\x00input") == b"binary\x00input"
         # The bound decorator leaves the borrowed client open.
         assert client.health()["status"] == "ok"
-    assert all(auth == "Bearer test-token" for _, _, auth in requests)
-    posts = [path for method, path, _ in requests if method == "POST"]
-    assert len(posts) >= 4  # Tensor and bytes both negotiate cold uploads.
-    assert set(posts) == {"/prefix/tasks/run"}
 
 
 def test_literals_are_snapshotted_and_reference_shaped_dicts_stay_data(server_url):

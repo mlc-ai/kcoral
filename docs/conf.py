@@ -22,7 +22,9 @@ intersphinx_mapping = {"python": ("https://docs.python.org/3", None)}
 nitpick_ignore = [("py:class", "fastapi.applications.FastAPI")]
 # Callable decorators use private ParamSpec/TypeVar placeholders. These describe
 # signatures rather than public objects with documentation cross-reference targets.
-nitpick_ignore_regex = [(r"py:(class|obj)", r"(?:typing\.|kcoral\.functions\.)?~?_[PR]")]
+nitpick_ignore_regex = [
+    (r"py:(class|obj)", r"(?:typing\.|kcoral\.functions\.)?~?_(?:Parameters|ReturnType)")
+]
 
 html_theme = "furo"
 html_title = "KCoral documentation"
