@@ -6,8 +6,6 @@
 Building a program does not execute it: `Client.execute()` submits the ordered
 instructions and decodes the selected results. The
 [first GPU program](../getting-started/quickstart.md) shows a complete runnable example.
-For a self-contained Python function, the
-[function decorator](remote-functions.md) constructs these instructions for you.
 
 ## Create and close a client
 
@@ -30,12 +28,44 @@ with Client("http://localhost:8000", connect_timeout_seconds=10) as client:
 server for it, not a CPU compilation server. Optional `headers` are sent with
 every request. If you do not use `with`, call `client.close()` explicitly.
 For a reverse proxy, the base URL may include a path prefix; `execute_path` and
-`health_path` customize the routes appended to that prefix. See
-[endpoint configuration](remote-functions.md#configure-the-endpoint-in-python).
+`health_path` customize the routes appended to that prefix (defaults: `/execute`
+and `/health`). These options configure the client, not the server's routes.
 
 `connect_timeout_seconds` limits connection establishment. It does not limit
 execution. Pass `timeout_seconds` to `execute()` for a server-side execution
 deadline, and `output_limit_bytes` to limit captured output per stream.
+
+## Remote functions
+
+Use `@client.function()` for a self-contained Python function. Configure the server
+address on `Client`; decorated functions reuse its connections and headers:
+
+```python
+from kcoral import Client
+
+with Client("http://localhost:8000") as client:
+
+    @client.function(timeout=30)
+    def gpu_sum(n):
+        import torch
+
+        return torch.arange(n, device="cuda").sum().item()
+
+    print(gpu_sum.remote(4))  # 6
+```
+
+Save the function in a Python file, import dependencies inside it, and install
+them on the server. Closures, external globals, additional decorators, async
+functions and generators are unsupported. Arguments accept JSON values, bytes
+and tensors; bytes and tensors must be whole arguments, not nested in containers.
+Returned tensors are local NumPy arrays. Each remote call has no retained state.
+See `examples/remote_function.py` for a tensor upload/run/download example.
+
+Ordinary calls such as `gpu_sum(4)` execute locally. `.remote()` raises
+`RemoteExecutionError` on an instruction failure; its `.result` retains the error,
+traceback and captured output. `.execute()` returns the full `ProgramResult`,
+including failed outcomes. `.build_program()` builds the equivalent `Program`
+without executing it. Keep the client open for remote calls.
 
 ## Build instructions with Program
 

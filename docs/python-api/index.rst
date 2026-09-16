@@ -17,8 +17,6 @@ Client
 Remote functions
 ----------------
 
-.. autofunction:: function
-
 .. autoclass:: RemoteFunction
    :members: remote, execute, build_program
    :special-members: __call__

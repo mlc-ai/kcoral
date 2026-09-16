@@ -6,7 +6,6 @@ import ast
 import builtins
 import inspect
 import json
-import os
 import symtable
 import textwrap
 from collections.abc import Callable
@@ -15,7 +14,7 @@ from typing import Any, Generic, ParamSpec, TypeVar
 
 import numpy as np
 
-from .client import Client, Program, ProgramResult, ProtocolError, _endpoint_path
+from .client import Client, Program, ProgramResult, ProtocolError
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -42,7 +41,7 @@ class RemoteExecutionError(RuntimeError):
 class RemoteFunction(Generic[_P, _R]):
     """A Python function with explicit remote execution methods.
 
-    Construct with :func:`kcoral.function` or :meth:`Client.function`.
+    Construct with :meth:`Client.function`.
     Calling the decorated function normally still executes the original locally.
     Each remote invocation builds a self-contained program; no remote state
     survives between invocations. The function's source is captured at decoration.
@@ -52,9 +51,7 @@ class RemoteFunction(Generic[_P, _R]):
         self,
         fn: Callable[_P, _R],
         *,
-        client: Client | None = None,
-        endpoint: str | None = None,
-        execute_path: str = "/execute",
+        client: Client,
         timeout: float | None = None,
         output_limit_bytes: int | None = None,
         cpu_only: bool = False,
@@ -63,10 +60,6 @@ class RemoteFunction(Generic[_P, _R]):
         self._signature = inspect.signature(fn)
         self._fn = fn
         self._client = client
-        if endpoint is not None and (not isinstance(endpoint, str) or not endpoint.strip()):
-            raise ValueError("endpoint must be a non-empty server base URL")
-        self._endpoint = endpoint
-        self._execute_path = _endpoint_path(execute_path)
         self._timeout = timeout
         self._output_limit_bytes = output_limit_bytes
         if not isinstance(cpu_only, bool):
@@ -130,19 +123,14 @@ class RemoteFunction(Generic[_P, _R]):
         :returns: A :class:`ProgramResult`; instruction failures remain data.
 
         Uses the same cache negotiation and error handling as ``Client.execute``.
-        A client supplied by ``Client.function`` is reused and not closed here.
-        Otherwise, a temporary client is opened and closed for this invocation.
+        Reuses the client supplied by ``Client.function`` without closing it.
         """
         program = self.build_program(*args, **kwargs)
-        options = {
-            "timeout_seconds": self._timeout,
-            "output_limit_bytes": self._output_limit_bytes,
-        }
-        if self._client is not None:
-            return self._client.execute(program, **options)
-        endpoint = self._endpoint or os.environ.get("KCORAL_URL", "http://localhost:8000")
-        with Client(endpoint, execute_path=self._execute_path) as client:
-            return client.execute(program, **options)
+        return self._client.execute(
+            program,
+            timeout_seconds=self._timeout,
+            output_limit_bytes=self._output_limit_bytes,
+        )
 
     def remote(self, *args: _P.args, **kwargs: _P.kwargs) -> Any:
         """Run remotely and return the decoded function value.
@@ -162,47 +150,6 @@ class RemoteFunction(Generic[_P, _R]):
         if "output" not in result.results:
             raise ProtocolError("remote function response is missing its output")
         return result.results["output"]
-
-
-def function(
-    *,
-    endpoint: str | None = None,
-    execute_path: str = "/execute",
-    timeout: float | None = None,
-    output_limit_bytes: int | None = None,
-    cpu_only: bool = False,
-) -> Callable[[Callable[_P, _R]], RemoteFunction[_P, _R]]:
-    """Decorate a self-contained function for remote execution.
-
-    :param endpoint: Server base URL, including any proxy prefix. If omitted,
-        read ``KCORAL_URL`` at invocation, defaulting to ``http://localhost:8000``.
-    :param execute_path: Execution path appended to the base URL; defaults to
-        ``/execute``. This configures the client, not server routes.
-    :param timeout: Requested server execution limit in seconds.
-    :param output_limit_bytes: Captured output limit per stream.
-    :param cpu_only: Whether the function touches no GPU.
-    :returns: A decorator producing a :class:`RemoteFunction`.
-    :raises TypeError: If the function is asynchronous, a generator, or not a
-        Python function.
-    :raises ValueError: If source is unavailable or the function needs captured
-        variables, external globals or other decorators.
-
-    Import dependencies inside the function and install them on the server.
-    Only this function's source is uploaded; its module and environment are
-    not copied. For shared connections or custom headers, use ``Client.function``.
-    """
-
-    def decorate(fn: Callable[_P, _R]) -> RemoteFunction[_P, _R]:
-        return RemoteFunction(
-            fn,
-            endpoint=endpoint,
-            execute_path=execute_path,
-            timeout=timeout,
-            output_limit_bytes=output_limit_bytes,
-            cpu_only=cpu_only,
-        )
-
-    return decorate
 
 
 def _function_source(fn: Callable) -> tuple[str, str]:

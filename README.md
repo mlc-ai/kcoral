@@ -56,25 +56,8 @@ Follow requests and worker events using the [logging guide](docs/server-guide/lo
 
 ## Python client
 
-Decorate a Python function and call `.remote()` to run it on the server:
-
-```python
-import kcoral
-
-@kcoral.function(endpoint="http://localhost:8000", timeout=30)
-def gpu_sum(n):
-    import torch
-
-    return torch.arange(n, device="cuda").sum().item()
-
-print(gpu_sum.remote(4))  # 6
-```
-
-Save the function in a Python file and install its dependencies on the server.
-Use `endpoint` and `execute_path` to configure the address and route in your
-program, or `@client.function()` to reuse a configured `Client`. See
-[Remote Python Functions](docs/client-guide/remote-functions.md) for supported
-arguments, errors, and execution boundaries.
+For simple tasks, use [`@client.function()`](docs/client-guide/writing-a-program.md#remote-functions)
+and call `.remote()` to run a Python function on the server.
 
 With a running GPU server, the first program uploads a tensor, adds one on the
 GPU, returns it and checks the values:

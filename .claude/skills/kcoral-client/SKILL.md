@@ -33,19 +33,12 @@ disagree, that file wins.
 
 ## Python client
 
-For a self-contained function, `@kcoral.function(endpoint="http://localhost:8000",
-execute_path="/execute", timeout=30)` provides `.remote(*args, **kwargs)` returning
-the decoded value. `endpoint` is a base URL, including an optional proxy prefix;
-`execute_path` is appended to it. Omit `endpoint` to read `KCORAL_URL` at invocation.
-Use `@client.function(timeout=30)` to reuse a `Client` and its custom paths/headers.
-Define the function in a file, import dependencies inside it, and pass inputs
-explicitly: module globals, closures and other decorators are unsupported.
-JSON arguments are supported; bytes and tensors must be whole arguments rather
-than nested inside containers. Each call is stateless. `.remote()` raises
-`RemoteExecutionError` on an instruction failure; its `.result` preserves the
-full outcome. `.execute()` returns that outcome without raising for `FAILED`,
-and `.build_program()` returns an ordinary `Program` selecting `output`.
-See [Remote Python Functions](../../../docs/client-guide/remote-functions.md).
+For simple tasks, use `@client.function(timeout=30)` and call `.remote()` for the
+decoded value, or `.execute()` for the full `ProgramResult`. Define the function
+in a file, import dependencies inside it, and pass inputs explicitly. Configure
+the server on `Client` and keep it open for remote calls. See
+[Remote functions](../../../docs/client-guide/writing-a-program.md#remote-functions)
+for supported inputs and execution boundaries.
 
 Upload a harness, select its entry point, run it and return what you want to inspect:
 
