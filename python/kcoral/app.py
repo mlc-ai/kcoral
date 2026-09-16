@@ -10,15 +10,18 @@ from collections import Counter
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import datetime, timezone
+from ipaddress import ip_address
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 from .cache import ByteCache, DiskFileCache
 from .config import ServerConfig
 from .errors import ValidationError
 from .events import EventLogger
+from .health import HealthResponse
 from .keys import is_blob_hash, verify_blob
 from .multipart import MultipartPart, encode_multipart, parse_multipart
 from .pool import PoolBusy, SubmitOutcome, WorkerPool
@@ -26,7 +29,6 @@ from .schemas import (
     FileUpload,
     Program,
     ProgramOutcome,
-    Run,
     Upload,
     expected_tensor_nbytes,
     parse_program,
@@ -58,7 +60,19 @@ def create_app(
     *,
     runtime_factory: Callable | None = None,
 ) -> FastAPI:
-    """Build an application, optionally overriding its mode-specific runtime."""
+    """Build a FastAPI application serving execution and health requests.
+
+    :param config: Worker and request settings; ``None`` uses ``ServerConfig()``.
+    :param runtime_factory: Optional callable that builds a worker runtime,
+        primarily for custom integration and testing. By default the selected
+        CPU or GPU mode determines the runtime.
+    :returns: An application to run with an HTTP server such as uvicorn.
+    :raises ValueError: If the device mode or disk cache capacity is invalid.
+
+    FastAPI is the web application framework used by the server. Worker
+    processes start during the application's serving lifecycle, not when
+    this function is imported. Install the ``server`` extra to use it.
+    """
     config = config or ServerConfig()
     if config.device not in ("cpu", "gpu"):
         raise ValueError(f"device must be 'cpu' or 'gpu', got {config.device!r}")
@@ -85,6 +99,8 @@ def create_app(
         # fails first, and a log opened afterwards would never record it.
         events = EventLogger(config.log_dir, console=config.log_console)
         app.state.events = events
+        app.state.instance_id = str(uuid.uuid4())
+        app.state.started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         events.emit(
             "server_started",
             run_dir=str(events.run_dir) if events.run_dir else None,
@@ -120,10 +136,41 @@ def create_app(
             versions=app.state.pool.versions(),
             workers=worker_count,
         )
+        tunnel = None
+        app.state.tunnel = None
+
+        async def close_resources():
+            try:
+                if tunnel is not None:
+                    await tunnel.close()
+            finally:
+                await app.state.pool.shutdown_async()
+
         try:
+            if config.router_endpoint is not None:
+                from .tunnel import TunnelManager
+
+                assert config.node_id is not None
+                tunnel = TunnelManager(
+                    app,
+                    endpoint=config.router_endpoint,
+                    node_id=config.node_id,
+                    node_token=config.node_token,
+                    server_instance_id=app.state.instance_id,
+                    slots=worker_count,
+                    events=events,
+                )
+                await tunnel.start()
+                events.emit(
+                    "tunnel_started",
+                    router_endpoint=config.router_endpoint,
+                    node_id=config.node_id,
+                    slots=worker_count,
+                )
+            app.state.tunnel = tunnel
             yield
         finally:
-            cleanup = asyncio.create_task(app.state.pool.shutdown_async())
+            cleanup = asyncio.create_task(close_resources())
             cancelled = False
             try:
                 while not cleanup.done():
@@ -140,10 +187,37 @@ def create_app(
 
     app = FastAPI(title="KCoral", version="0.1.0", lifespan=lifespan)
 
-    @app.get("/health")
+    @app.get("/health", response_model=HealthResponse)
     async def health(request: Request) -> dict[str, object]:
-        pool_health = request.app.state.pool.health()
-        return {"status": "ok", "gpu_count": len(pool_health["gpus"]), **pool_health}
+        """Read endpoint status, load, and compilation environment."""
+        pool = request.app.state.pool
+        return {
+            "status": "ok",
+            "instance_id": request.app.state.instance_id,
+            "started_at": request.app.state.started_at,
+            "gpu_count": len(set(worker_gpus)),
+            "load": pool.load(),
+            "target": pool.target(),
+            "versions": pool.versions(),
+        }
+
+    @app.get("/internal/worker-status", include_in_schema=False)
+    async def worker_status(request: Request) -> dict[str, object]:
+        """Report worker occupancy to the local supervisor."""
+        try:
+            local = request.client is not None and ip_address(request.client.host).is_loopback
+        except ValueError:
+            local = False
+        if not local:
+            raise HTTPException(status_code=404)
+        pool = request.app.state.pool
+        return {
+            "status": "ok",
+            "instance_id": request.app.state.instance_id,
+            "target": pool.target(),
+            "versions": pool.versions(),
+            **pool.worker_status(),
+        }
 
     @app.exception_handler(Exception)
     async def unhandled_error(request: Request, exc: Exception):
@@ -164,7 +238,7 @@ def create_app(
 
     @app.post("/execute")
     async def execute_request(request: Request):
-        request_id = str(uuid.uuid4())
+        request_id = _request_id(request)
         request.state.request_id = request_id  # so unhandled_error can name it
         headers = {"X-Request-ID": request_id}
         events: EventLogger = request.app.state.events
@@ -223,6 +297,7 @@ def create_app(
                 headers=headers,
             )
 
+        program.max_return_bytes = config.max_response_bytes
         timeout = _resolve_timeout(program, config)
         program.options["output_limit_bytes"] = _resolve_output_limit(program, config)
         if events.enabled:  # describing the workload is the one cost worth a branch
@@ -470,7 +545,13 @@ def _parse_execute_request(
 def _describe(config: ServerConfig) -> dict[str, object]:
     """The settings a run was started with, so a log explains its own behaviour."""
     return {
-        key: str(value) if isinstance(value, Path) else value
+        key: (
+            "<redacted>"
+            if key == "node_token" and value is not None
+            else str(value)
+            if isinstance(value, Path)
+            else value
+        )
         for key, value in asdict(config).items()
     }
 
@@ -480,19 +561,15 @@ def _program_shape(program: Program) -> dict[str, object]:
     program it describes."""
     ops: Counter[str] = Counter()
     uploads: Counter[str] = Counter()
-    builtins: set[str] = set()
     for instruction in program.instructions:
         ops[instruction.op] += 1
         if isinstance(instruction, (Upload, FileUpload)):
             kind = instruction.kind
             uploads[f"{kind}:{instruction.language}" if kind == "module" else kind] += 1
-        elif isinstance(instruction, Run) and isinstance(instruction.fn, str):
-            builtins.add(instruction.fn)
     return {
         "instructions": len(program.instructions),
         "ops": dict(ops),
         "uploads": dict(uploads) or None,
-        "builtins": sorted(builtins) or None,
         "blob_bytes": sum(len(data) for data in program.blob_bytes.values()) or None,
     }
 
@@ -555,3 +632,16 @@ def _error_response(status: int, kind: str, message: str, request_id: str) -> JS
         status_code=status,
         headers={"X-Request-ID": request_id},
     )
+
+
+def _request_id(request: Request) -> str:
+    """Accept one canonical UUID, never arbitrary filename or header content."""
+    values = request.headers.getlist("x-request-id")
+    if len(values) == 1:
+        value = values[0]
+        try:
+            if str(uuid.UUID(value)) == value:
+                return value
+        except ValueError:
+            pass
+    return str(uuid.uuid4())

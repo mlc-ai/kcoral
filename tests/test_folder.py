@@ -3,6 +3,7 @@ import stat
 import sys
 
 import pytest
+from support.programs import harness_function
 
 from kcoral import Program
 from kcoral.keys import compute_blob_hash
@@ -16,18 +17,21 @@ def test_folder_expands_to_fixed_file_uploads_and_deduplicates(tmp_path):
     (tmp_path / "sub" / "b").write_bytes(b"shared")
     (tmp_path / ".hidden").write_bytes(b"")
     program = Program()
-    program.run(id="before", fn="builtin.zeros")
+    program.run(id="before", fn=harness_function(program, "structural", "before"))
     assert program.upload_folder(tmp_path, path="./assets//") is None
-    program.run(id="after", fn="builtin.zeros")
-    items = program.instructions
+    program.run(id="after", fn=harness_function(program, "structural", "after"))
+    original = program.instructions
+    items = [
+        item for item in program.instructions if item["op"] in {"run"} or item.get("kind") == "file"
+    ]
     assert items[0]["id"] == "before" and items[-1]["id"] == "after"
     assert [item["path"] for item in items[1:-1]] == ["assets/.hidden", "assets/a", "assets/sub/b"]
     assert all(set(item) == {"op", "kind", "blob", "path"} for item in items[1:-1])
     assert all(item["op"] == "upload" and item["kind"] == "file" for item in items[1:-1])
     assert program._blobs == {compute_blob_hash(b"shared"): b"shared", compute_blob_hash(b""): b""}
-    parse_program({"instructions": items})
+    parse_program({"instructions": program.instructions})
     (tmp_path / "a").write_bytes(b"changed")
-    assert program.instructions == items
+    assert program.instructions == original
     assert program._blobs[compute_blob_hash(b"shared")] == b"shared"
 
 

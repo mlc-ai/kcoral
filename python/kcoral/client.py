@@ -16,6 +16,7 @@ import httpx
 import ml_dtypes
 import numpy as np
 
+from .artifacts import ReturnedFile, ReturnedFolder, validate_manifest
 from .keys import compute_blob_hash, is_blob_hash, verify_blob
 from .multipart import parse_multipart
 from .schemas import (
@@ -29,7 +30,16 @@ from .schemas import (
 
 
 class KCoralError(Exception):
-    """A non-200 response from the server."""
+    """A server response with an HTTP status other than 200.
+
+    :param status_code: HTTP response status, such as 503 for a busy server.
+    :param message: The server's error message.
+    :param kind: Structured error kind, when provided by the server.
+    :param request_id: Request identifier, when provided by the server.
+
+    These parameters are also available as attributes. An instruction failure
+    with HTTP 200 is instead represented by :class:`ProgramResult`.
+    """
 
     def __init__(
         self,
@@ -56,11 +66,28 @@ class ProtocolError(Exception):
 
 @dataclass(frozen=True)
 class Register:
+    """Reference to a value produced by an earlier instruction in one request.
+
+    :param id: The producing instruction's unique identifier.
+
+    Pass the register to later instructions in the same :class:`Program`.
+    Registers do not refer to persistent server-side objects.
+    """
+
     id: str
 
 
 @dataclass
 class Program:
+    """Build an ordered, self-contained sequence of remote instructions.
+
+    Construction does not contact a server or compile a kernel. Uploads
+    snapshot local input, and :meth:`Client.execute` sends the instructions
+    and required binary data. Each instruction identifier and return key must
+    be unique within this program. Only values selected by :meth:`return_`
+    appear in the response.
+    """
+
     _instructions: list[dict[str, Any]] = field(default_factory=list, init=False)
     _blobs: dict[str, bytes] = field(default_factory=dict, init=False)
     _ids: set[str] = field(default_factory=set, init=False)
@@ -69,6 +96,11 @@ class Program:
 
     @property
     def instructions(self) -> list[dict[str, Any]]:
+        """Return a shallow copy of the ordered wire instruction list.
+
+        The contained dictionaries are shared with this program. Treat them
+        as read-only; use the builder methods to add instructions.
+        """
         return list(self._instructions)
 
     def upload_file(self, *, blob: Any, path: str) -> None:
@@ -76,6 +108,14 @@ class Program:
 
         The destination must be a relative POSIX path without ``..`` components
         and cannot conflict with another file upload. Returns no register.
+
+        :param blob: Bytes-like content, copied when this method is called.
+        :param path: Destination relative to the request's working directory.
+        :raises TypeError: If the content is not bytes-like.
+        :raises ValueError: If the destination is invalid or conflicts with a file.
+
+        Add this instruction before any code that reads the destination.
+        Files are removed when execution ends; cached content may persist.
         """
         normalized_path = normalize_file_path(path)
         try:
@@ -95,6 +135,14 @@ class Program:
         Includes hidden files; empty directories and original file metadata are
         not uploaded. Symbolic links, special files, and repeated directories
         are rejected. Failed calls leave the program unchanged.
+
+        :param folder: Local directory whose contents should be uploaded.
+        :param path: Relative destination directory in the request workspace.
+        :raises ValueError: If traversal or destination validation fails.
+        :raises OSError: If the local directory cannot be read.
+
+        For example, uploading ``assets`` with ``path="inputs"`` maps
+        ``assets/a.bin`` to ``inputs/a.bin``. An empty folder adds no instructions.
         """
         destination = normalize_file_path(path)
         instructions = []
@@ -121,6 +169,25 @@ class Program:
         dtype: str | None = None,
         shape: list[int] | None = None,
     ) -> Register:
+        """Upload source or binary content and return its request-local register.
+
+        :param id: Unique, nonempty instruction identifier.
+        :param kind: One of ``module``, ``tensor``, ``bytes`` or ``library``.
+        :param source: Source text for a module upload.
+        :param language: Module language, ``python`` or ``cuda``.
+        :param value: Tensor input or bytes-like data for a binary upload.
+            Tensors accept NumPy arrays, PyTorch tensors, objects implementing
+            the DLPack tensor exchange protocol, or raw bytes.
+        :param dtype: Element type for a tensor supplied as raw bytes.
+        :param shape: Dimensions for a tensor supplied as raw bytes.
+        :returns: A register usable by later instructions.
+        :raises TypeError: If the input does not match the upload kind.
+        :raises ValueError: If the kind, identifier or tensor metadata is invalid.
+
+        A library is a compiled shared object; a module contains source.
+        Use :meth:`upload_file` or :meth:`upload_folder` for filesystem uploads.
+        ``kind="file"`` is a wire-protocol option, not accepted by this method.
+        """
         if kind == "module":
             if not isinstance(source, str):
                 raise TypeError("module upload requires string 'source'")
@@ -194,6 +261,20 @@ class Program:
         name: str,
         cpu_only: bool = False,
     ) -> Register:
+        """Select a named function from an earlier module or library upload.
+
+        :param id: Unique identifier for the selected function.
+        :param module: An earlier upload register or ``{"$ref": "id"}`` reference.
+        :param name: Nonempty function name exported by the module or library.
+        :param cpu_only: Declare that the function does not access the GPU.
+        :returns: A function register for a later :meth:`run` instruction.
+        :raises TypeError: If the reference or flag has an invalid type.
+        :raises ValueError: If an identifier, reference or function name is invalid.
+
+        Running a ``cpu_only`` function as its own instruction releases the
+        exclusive GPU lease while it executes. This declaration is checked
+        on a best-effort basis; it does not make GPU operations safe to call.
+        """
         reference = _reference(module) if isinstance(module, Register) else module
         if not (
             isinstance(reference, dict)
@@ -214,11 +295,25 @@ class Program:
         self._instructions.append(instruction)
         return Register(id)
 
-    def run(
-        self, *, id: str, fn: str | Register | dict[str, str], args: list[Any] | None = None
-    ) -> Register:
+    def run(self, *, id: str, fn: Register, args: list[Any] | None = None) -> Register:
+        """Append a function call and return a register for its result.
+
+        :param id: Unique identifier for the computed result.
+        :param fn: The :class:`Register` returned by :meth:`get_function`,
+            or by an earlier :meth:`run` that returned a callable.
+        :param args: Positional arguments; omitted or ``None`` means no arguments.
+            Top-level registers are encoded automatically. Nested lists and
+            dictionaries remain JSON literals, including reference-shaped objects.
+        :returns: A register, without automatically returning the value to the client.
+        :raises TypeError: If ``fn`` is not a :class:`Register`.
+        :raises ValueError: If an identifier is invalid or a reference is unknown.
+        """
+        if not isinstance(fn, Register):
+            raise TypeError("fn must be a Register")
+        if fn.id not in self._ids:
+            raise ValueError(f"run {id!r} references unknown handle {fn.id!r}")
+        wire_fn = _reference(fn)
         self._add_id(id)
-        wire_fn: Any = _reference(fn) if isinstance(fn, Register) else fn
         wire_args = [
             _reference(argument) if isinstance(argument, Register) else argument
             for argument in (args or [])
@@ -226,11 +321,44 @@ class Program:
         self._instructions.append({"op": "run", "id": id, "fn": wire_fn, "args": wire_args})
         return Register(id)
 
-    def return_(self, *, key: str, value: Register | dict[str, str]) -> None:
+    def return_file(self, *, key: str, path: str | Register) -> None:
+        """Select a regular file at this instruction, relative to the request workspace."""
+        self._return_path(key=key, path=path, kind="file")
+
+    def return_folder(self, *, key: str, path: str | Register) -> None:
+        """Select a complete folder, including hidden files and empty directories."""
+        self._return_path(key=key, path=path, kind="folder")
+
+    def _return_path(self, *, key: str, path: str | Register, kind: str) -> None:
+        self._check_return_key(key)
+        if isinstance(path, Register):
+            if path.id not in self._ids:
+                raise ValueError(f"return {key!r} references unknown handle {path.id!r}")
+            wire_path = _reference(path)
+        else:
+            wire_path = normalize_file_path(path)
+        self._instructions.append({"op": "return", "key": key, "kind": kind, "path": wire_path})
+        self._return_keys.add(key)
+
+    def _check_return_key(self, key: str) -> None:
         if not isinstance(key, str) or not key:
             raise ValueError("return key must be a non-empty string")
         if key in self._return_keys:
             raise ValueError(f"duplicate return key: {key!r}")
+
+    def return_(self, *, key: str, value: Register | dict[str, str]) -> None:
+        """Select an earlier value for the response's results mapping.
+
+        :param key: Unique, nonempty response key.
+        :param value: An earlier register or ``{"$ref": "id"}`` reference.
+        :raises TypeError: If the value is not a valid reference.
+        :raises ValueError: If the key or referenced identifier is invalid.
+
+        A return instruction that runs before a later failure preserves its
+        entry in the partial result. Only serializable values can be returned;
+        compiled modules and function handles cannot be sent back.
+        """
+        self._check_return_key(key)
         reference = _reference(value) if isinstance(value, Register) else value
         if not (
             isinstance(reference, dict)
@@ -253,6 +381,27 @@ class Program:
 
 @dataclass
 class ProgramResult:
+    """Decoded execution outcome, including any results returned before failure.
+
+    :param status: ``COMPLETED`` or ``FAILED``. The client handles cache misses
+        internally before producing an outcome.
+    :param request_id: Server-generated request identifier for log correlation.
+    :param queue_ms: Milliseconds waiting for a worker.
+    :param elapsed_ms: Execution elapsed time in milliseconds.
+    :param lease_wait_ms: Execution time spent waiting for the exclusive GPU lease.
+    :param lease_held_ms: Execution time holding the exclusive GPU lease.
+    :param results: Explicitly returned values, keyed by the program's return keys.
+        Binary values decode to bytes and tensors to CPU NumPy arrays.
+    :param stdout: Captured standard output.
+    :param stderr: Captured standard error.
+    :param stdout_truncated: Whether standard output exceeded the capture limit.
+    :param stderr_truncated: Whether standard error exceeded the capture limit.
+    :param error: Structured instruction failure, or ``None`` on success.
+
+    All parameters are available as attributes. When present, ``error`` includes
+    the kind, message, instruction index and identifier, and traceback.
+    """
+
     status: str
     request_id: str
     queue_ms: float
@@ -269,13 +418,21 @@ class ProgramResult:
 
     @property
     def completed(self) -> bool:
+        """Whether every instruction completed successfully."""
         return self.status == "COMPLETED"
 
     def __getitem__(self, key: str) -> Any:
+        """Read an explicitly returned value by key; raise KeyError if absent."""
         return self.results[key]
 
 
 class Client:
+    """Synchronous HTTP client for a running KCoral server.
+
+    Use as a context manager to close connections automatically. The client
+    requires no GPU libraries; computation happens on the remote worker.
+    """
+
     def __init__(
         self,
         base_url: str,
@@ -283,16 +440,28 @@ class Client:
         headers: dict[str, str] | None = None,
         connect_timeout_seconds: float = 10.0,
     ) -> None:
+        """Create a client without contacting the server.
+
+        :param base_url: Server address, such as ``http://localhost:8000``.
+        :param headers: Optional HTTP headers sent with every request.
+        :param connect_timeout_seconds: Limit for establishing a connection.
+
+        Response reading has no client-side timeout. Pass ``timeout_seconds``
+        to :meth:`execute` to request a server-side execution limit.
+        """
         timeout = httpx.Timeout(None, connect=connect_timeout_seconds)
         self._http = httpx.Client(base_url=base_url.rstrip("/"), headers=headers, timeout=timeout)
 
     def __enter__(self) -> Client:
+        """Return this client for use in a ``with`` block."""
         return self
 
     def __exit__(self, *args: Any) -> None:
+        """Close connections when leaving a ``with`` block."""
         self.close()
 
     def close(self) -> None:
+        """Release the underlying HTTP client's connections."""
         self._http.close()
 
     def execute(
@@ -302,6 +471,25 @@ class Client:
         timeout_seconds: float | None = None,
         output_limit_bytes: int | None = None,
     ) -> ProgramResult:
+        """Submit a program and decode the values it explicitly returns.
+
+        :param program: Program built with the client-side :class:`Program`.
+        :param timeout_seconds: Requested execution limit in seconds; ``None``
+            uses the server default. The server clamps it to its configured maximum.
+        :param output_limit_bytes: Requested captured output limit per stream;
+            ``None`` uses the server default, subject to the server maximum.
+        :returns: A completed or failed program outcome. Instruction failures do
+            not raise an exception; inspect ``status`` and ``error``.
+        :raises TypeError: If ``program`` is not a client-side program.
+        :raises KCoralError: If the server returns an HTTP request error.
+        :raises TransportError: If no HTTP response can be obtained.
+        :raises ProtocolError: If the response is malformed or cache recovery fails.
+
+        The first submission omits binary blobs. A cache miss retries with
+        the requested blobs; a second miss triggers one final submission with
+        every local blob. Returned tensors are CPU NumPy arrays, including
+        extended element types provided by ``ml_dtypes``.
+        """
         if not isinstance(program, Program):
             raise TypeError("execute expects a Program")
         options: dict[str, Any] = {}
@@ -310,7 +498,9 @@ class Client:
         if output_limit_bytes is not None:
             options["output_limit_bytes"] = output_limit_bytes
 
-        body, binary_parts = self._post_program(program, options, include_blobs=set())
+        body, binary_parts, route = self._post_program(
+            program, options, include_blobs=set(), route=None
+        )
         if body.get("status") == "CACHE_MISS":
             if binary_parts:
                 raise ProtocolError("CACHE_MISS response must not contain binary parts")
@@ -320,16 +510,31 @@ class Client:
                 raise ProtocolError(
                     f"server misses blobs with no local bytes to send: {sorted(unavailable)}"
                 )
-            body, binary_parts = self._post_program(program, options, include_blobs=missing)
+            body, binary_parts, route = self._post_program(
+                program, options, include_blobs=missing, route=route
+            )
             if body.get("status") == "CACHE_MISS":
-                body, binary_parts = self._post_program(
-                    program, options, include_blobs=set(program._blobs)
+                body, binary_parts, route = self._post_program(
+                    program,
+                    options,
+                    include_blobs=set(program._blobs),
+                    route=route,
                 )
             if body.get("status") == "CACHE_MISS":
                 raise ProtocolError("server still reports CACHE_MISS after a complete blob resend")
         return _parse_program_result(body, binary_parts)
 
     def health(self) -> dict[str, Any]:
+        """Read endpoint status, load, and compilation environment.
+
+        ``load`` reports capacity (occupied + free), assigned requests (including
+        GPU waiting), and requests awaiting assignment.
+
+        :returns: The server's health response with ``status == "ok"``.
+        :raises KCoralError: If the server returns an HTTP error.
+        :raises TransportError: If no response can be obtained.
+        :raises ProtocolError: If readiness or the response format is invalid.
+        """
         response = self._request("GET", "/health")
         if response.status_code != 200:
             raise _server_error(response)
@@ -339,15 +544,26 @@ class Client:
         return body
 
     def target(self) -> dict[str, str]:
-        """What an uploaded library must be built for, e.g. ``{"arch": "sm_100a"}``."""
+        """Read the GPU architecture an uploaded library must be built for.
+
+        :returns: Target metadata, for example ``{"arch": "sm_100a"}``.
+        :raises ProtocolError: If the health response has no compilation target.
+
+        Query the GPU server, not a CPU compilation server. This calls
+        :meth:`health` and can raise the same request and transport exceptions.
+        """
         target = self.health().get("target")
         if not isinstance(target, dict) or "arch" not in target:
             raise ProtocolError("the server reported no compilation target")
         return target
 
     def _post_program(
-        self, program: Program, options: dict[str, Any], include_blobs: set[str]
-    ) -> tuple[dict[str, Any], dict[str, bytes]]:
+        self,
+        program: Program,
+        options: dict[str, Any],
+        include_blobs: set[str],
+        route: str | None,
+    ) -> tuple[dict[str, Any], dict[str, bytes], str | None]:
         payload: dict[str, Any] = {"instructions": program.instructions}
         if options:
             payload["options"] = options
@@ -371,10 +587,15 @@ class Client:
             for blob_hash, data in program._blobs.items()
             if blob_hash in include_blobs
         )
-        response = self._request("POST", "/execute", files=files)
+        headers = {"X-KCoral-Node": route} if route else None
+        response = self._request("POST", "/execute", files=files, headers=headers)
         if response.status_code != 200:
             raise _server_error(response)
-        return _response_body(response)
+        next_route = response.headers.get("X-KCoral-Node")
+        if next_route is not None and not (0 < len(next_route) <= 512):
+            next_route = None
+        body, binary_parts = _response_body(response)
+        return body, binary_parts, next_route
 
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         try:
@@ -732,6 +953,29 @@ def _decode_value(encoded: Any, binary_parts: dict[str, bytes], used_parts: set[
     if value_type == "bytes":
         _expect_fields(encoded, {"type", "part", "sha256"})
         return _binary_part(encoded, binary_parts, used_parts)
+    if value_type == "file":
+        _expect_fields(encoded, {"type", "size", "part", "sha256"})
+        size = encoded["size"]
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise ValueError("file size must be a non-negative integer")
+        data = _binary_part(encoded, binary_parts, used_parts)
+        if len(data) != size:
+            raise ValueError("file binary length does not match size")
+        return ReturnedFile(data)
+    if value_type == "folder":
+        _expect_fields(encoded, {"type", "files", "directories"})
+        files, directories = encoded["files"], encoded["directories"]
+        if not isinstance(files, dict) or not isinstance(directories, list):
+            raise ValueError("folder files/directories have the wrong type")
+        validate_manifest(files, directories)
+        if any(
+            not isinstance(child, dict) or child.get("type") != "file" for child in files.values()
+        ):
+            raise ValueError("folder files must contain file values")
+        return ReturnedFolder(
+            {path: _decode_value(child, binary_parts, used_parts) for path, child in files.items()},
+            tuple(directories),
+        )
     if value_type == "tensor":
         _expect_fields(encoded, {"type", "dtype", "shape", "part", "sha256"})
         dtype = encoded["dtype"]

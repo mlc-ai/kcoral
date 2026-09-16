@@ -1,0 +1,3 @@
+[workspace]
+members = ["rust/kcoral"]
+resolver = "3"

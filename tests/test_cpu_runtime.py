@@ -2,8 +2,8 @@ import sys
 
 import pytest
 
-from kcoral.builtin_ops.cuda import CUDAModule, compile_cuda_binary
 from kcoral.cpu_runtime import CPURuntime
+from kcoral.cuda_source import CUDAModule
 from kcoral.errors import ExecutionError
 
 
@@ -16,8 +16,6 @@ def test_cpu_runtime_binds_cuda_source_without_importing_torch(monkeypatch):
 
     assert module == CUDAModule(source="void add() {}")
     assert source == CUDAModule(source="void add() {}", name="add")
-    assert runtime.builtin("builtin.compile_cuda_binary") is compile_cuda_binary
-    assert runtime.cpu_only_builtins() == frozenset({"builtin.compile_cuda_binary"})
     assert runtime.target() == {}
     assert runtime.device_uuid() is None
     assert runtime.take_last_error() is None
@@ -27,10 +25,8 @@ def test_cpu_runtime_binds_cuda_source_without_importing_torch(monkeypatch):
 @pytest.mark.parametrize(
     "operation",
     [
-        lambda runtime: runtime.load_module("def main(): pass"),
         lambda runtime: runtime.load_library(b"library"),
         lambda runtime: runtime.load_tensor(b"", "float32", [0]),
-        lambda runtime: runtime.builtin("builtin.empty"),
     ],
 )
 def test_cpu_runtime_rejects_gpu_operations(operation):
@@ -45,3 +41,21 @@ def test_cpu_runtime_rejects_invalid_cuda_function_names(name):
     with pytest.raises(ExecutionError) as exc:
         CPURuntime().get_function(module, name)
     assert exc.value.kind == "parse"
+
+
+def test_cpu_runtime_restores_environment_and_releases_module_cycles(monkeypatch):
+    import os
+    import weakref
+
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setenv("KCORAL_TEST_CPU_STATE", "original")
+    runtime = CPURuntime()
+    module = runtime.load_module(
+        "import os\nos.environ['KCORAL_TEST_CPU_STATE'] = 'changed'\n"
+        "class Value: pass\nvalue = Value()\ndef main(): return value\n"
+    )
+    value = weakref.ref(module.namespace["value"])
+    del module
+    runtime.reset()
+    assert value() is None
+    assert os.environ["KCORAL_TEST_CPU_STATE"] == "original"

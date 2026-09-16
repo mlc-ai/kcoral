@@ -92,8 +92,6 @@ def worker_main(
         described = {
             "target": runtime.target(),
             "versions": runtime.versions(),
-            # Read before an upload can edit it, so none can talk its worker off the lease.
-            "cpu_only": sorted(runtime.cpu_only_builtins()),
             "device_uuid": runtime.device_uuid(),
         }
     except Exception as exc:  # runtime init failed — report and exit
@@ -110,7 +108,7 @@ def worker_main(
             return
         if message is None:  # shutdown signal
             return
-        program, cpu_only, workspace_dir = message
+        program, workspace_dir = message
         cleanup_error: BaseException | None = None
 
         def mark_cleanup_failed(exc: BaseException) -> None:
@@ -122,7 +120,6 @@ def worker_main(
             program,
             runtime,
             lease=lease,
-            cpu_only=cpu_only,
             progress=lambda index: conn.send({"__instruction__": index}),
             cleanup_failed=mark_cleanup_failed,
             capture_dir=capture_dir,
@@ -170,8 +167,6 @@ class WorkerTimeout(Exception):
 class Worker:
     """Parent-side handle to one CPU or GPU worker process."""
 
-    # Replaced from the worker's ready message; empty means nothing runs off-lease.
-    cpu_only: frozenset[str] = frozenset()
     request_id: str | None = None  # set by the pool while a request is served
 
     # Identity for the log. ``worker_id`` names a seat on a GPU and outlives the
@@ -268,7 +263,6 @@ class Worker:
         described = msg["__ready__"]
         self.target: dict[str, str] = described["target"]
         self.versions: dict[str, str] = described["versions"]
-        self.cpu_only = frozenset(described["cpu_only"])
         self.device_uuid: str | None = described.get("device_uuid")
         self._require_expected_device()
         with self._lifecycle_lock:
@@ -348,7 +342,7 @@ class Worker:
         held_since: float | None = None
         instruction_index: int | None = None
         try:
-            self._conn.send((program, self.cpu_only, workspace_dir))
+            self._conn.send((program, workspace_dir))
             while True:
                 waited_from = time.monotonic()
                 if not self._conn.poll(remaining):  # no answer by the deadline -> hung

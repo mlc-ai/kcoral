@@ -11,9 +11,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
+from support.programs import harness_call, harness_instructions
 
 from kcoral.pool import PoolBusy, WorkerPool
-from kcoral.schemas import Program, Run
+from kcoral.schemas import Program
 from kcoral.testing import fake_runtime_factory
 from kcoral.worker import WorkerTimeout
 
@@ -41,12 +42,13 @@ def test_shutdown_drains_active_job_and_rejects_waiter():
     with ThreadPoolExecutor(2) as executor:
         try:
             active = executor.submit(
-                pool.submit, Program(instructions=[Run("sleep", "builtin.sleep", [0.3])]), 10
+                pool.submit, Program(instructions=[*harness_call("sleep", "sleep", [0.3])]), 10
             )
             wait_until(lambda: pool.active_requests == 1)
             queued = executor.submit(pool.submit, Program(instructions=[]), 10, 30)
             wait_until(lambda: pool._idle.snapshot()[1] == 1)
             pool.begin_shutdown()
+            assert pool.load()["request_capacity"] == 0
             with pytest.raises(PoolBusy):
                 queued.result(timeout=1)
             with pytest.raises(PoolBusy, match="shutting down"):
@@ -91,7 +93,7 @@ def test_cancelled_future_still_drains_with_a_saturated_executor():
     async def exercise():
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
         future = asyncio.get_running_loop().run_in_executor(
-            None, pool.submit, Program(instructions=[Run("sleep", "builtin.sleep", [0.4])]), 10
+            None, pool.submit, Program(instructions=[*harness_call("sleep", "sleep", [0.4])]), 10
         )
         while not pool.active_requests:
             await asyncio.sleep(0.01)
@@ -114,7 +116,7 @@ def test_shutdown_respects_request_timeouts_and_gpu_lease_waiters():
         try:
             jobs = [
                 executor.submit(
-                    pool.submit, Program(instructions=[Run("sleep", "builtin.sleep", [30])]), 0.3
+                    pool.submit, Program(instructions=[*harness_call("sleep", "sleep", [30])]), 0.3
                 )
                 for _ in range(2)
             ]
@@ -179,8 +181,8 @@ ShutdownServer(uvicorn.Config(app, host="127.0.0.1", port={port}), app).run()
         pids = [row["pid"] for row in events() if row["event"] == "worker_ready"]
 
         def post_sleep(duration):
-            instruction = {"op": "run", "id": "sleep", "fn": "builtin.sleep", "args": [duration]}
-            program = json.dumps({"instructions": [instruction]})
+            instructions = harness_instructions("sleep", "sleep", [duration])
+            program = json.dumps({"instructions": instructions})
             return httpx.post(
                 f"http://127.0.0.1:{port}/execute",
                 files={"program": (None, program, "application/json")},

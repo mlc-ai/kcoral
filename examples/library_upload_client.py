@@ -1,12 +1,8 @@
-"""Build a kernel on the client and upload the shared object.
+"""Build a kernel locally, upload the library, check its output, and time it.
 
-A prebuilt library is the path for a build the server's compile builtins cannot
-express — several translation units, a code generator, flags beyond the
-``extra_cuda_cflags`` that ``compile_cuda`` exposes. The client builds for the
-arch ``GET /health`` reports, uploads the bytes once, and every later request
-costs only their hash.
-
-This needs a CUDA toolchain here; `remote_compile_client.py` needs none.
+The client owns the compiler flags and builds for the architecture reported by
+GET /health. Allocation, comparison and CUPTI measurement run on the server.
+The client needs a CUDA toolchain.
 """
 
 from __future__ import annotations
@@ -20,8 +16,7 @@ from kcoral import Client, Program
 N = 1 << 20
 
 # The export macro is what makes the object loadable: it emits the
-# `__tvm_ffi_add_one` symbol the server looks up by function name. A server-side
-# compile needs neither it nor the include — `compile_cuda` supplies both.
+# `__tvm_ffi_add_one` symbol the server looks up by function name.
 SOURCE = r"""
 #include <tvm/ffi/container/tensor.h>
 
@@ -40,6 +35,34 @@ TVM_FFI_DLL_EXPORT_TYPED_FUNC(add_one, add_one);
 """
 
 REFERENCE = "def main(a):\n    return a + 1.0\n"
+
+
+# These functions and imports are uploaded to the server.
+OPERATIONS = r"""
+from kcoral.builtins import benchmark
+
+
+def empty(spec):
+    import torch
+
+    return torch.empty(spec["shape"], dtype=getattr(torch, spec["dtype"]), device="cuda")
+
+
+def randn(spec):
+    import torch
+
+    generator = torch.Generator(device="cuda").manual_seed(spec.get("seed", 0))
+    return torch.randn(
+        spec["shape"], dtype=getattr(torch, spec["dtype"]), device="cuda", generator=generator
+    )
+
+
+def assert_close(actual, expected):
+    import torch
+
+    torch.testing.assert_close(actual.cpu(), expected.cpu(), rtol=1e-2, atol=1e-3)
+    return {"ok": True}
+"""
 
 
 def build_library(arch: str, directory: str) -> bytes:
@@ -65,24 +88,27 @@ def build_library(arch: str, directory: str) -> bytes:
 
 def build_program(library: bytes) -> Program:
     program = Program()
+    operations = program.upload(id="operations", kind="module", source=OPERATIONS)
+    empty = program.get_function(id="empty", module=operations, name="empty")
+    randn = program.get_function(id="randn", module=operations, name="randn")
+    assert_close = program.get_function(id="assert_close", module=operations, name="assert_close")
+    benchmark = program.get_function(id="benchmark", module=operations, name="benchmark")
     # No compile instruction follows: get_function binds the precompiled callable.
     module = program.upload(id="kernel_module", kind="library", value=library)
     kernel = program.get_function(id="kernel", module=module, name="add_one")
     reference_module = program.upload(id="reference_module", kind="module", source=REFERENCE)
     reference = program.get_function(id="reference", module=reference_module, name="main")
 
-    src = program.run(
-        id="src", fn="builtin.randn", args=[{"shape": [N], "dtype": "float32", "seed": 0}]
-    )
-    dst = program.run(id="dst", fn="builtin.empty", args=[{"shape": [N], "dtype": "float32"}])
+    src = program.run(id="src", fn=randn, args=[{"shape": [N], "dtype": "float32", "seed": 0}])
+    dst = program.run(id="dst", fn=empty, args=[{"shape": [N], "dtype": "float32"}])
     program.run(id="invoke", fn=kernel, args=[src, dst])
 
     # Compared on the server against a plain-Python reference, so the output
     # tensor never travels; assert_close stops the program before timing a
     # kernel that is wrong.
     expected = program.run(id="expected", fn=reference, args=[src])
-    check = program.run(id="check", fn="builtin.assert_close", args=[dst, expected])
-    timing = program.run(id="timing", fn="builtin.benchmark", args=[kernel, src, dst])
+    check = program.run(id="check", fn=assert_close, args=[dst, expected])
+    timing = program.run(id="timing", fn=benchmark, args=[kernel, src, dst])
     program.return_(key="check", value=check)
     program.return_(key="timing", value=timing)
     return program

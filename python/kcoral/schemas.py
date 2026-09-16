@@ -59,7 +59,7 @@ class Ref:
 @dataclass
 class Run:
     id: str
-    fn: str | Ref
+    fn: Ref
     args: list[Any] = field(default_factory=list)  # ``Ref`` or a JSON literal
     op: Literal["run"] = "run"
 
@@ -80,7 +80,15 @@ class Return:
     op: Literal["return"] = "return"
 
 
-Instruction = Upload | FileUpload | GetFunction | Run | Return
+@dataclass
+class FileReturn:
+    key: str
+    kind: Literal["file", "folder"]
+    path: str | Ref
+    op: Literal["return"] = "return"
+
+
+Instruction = Upload | FileUpload | GetFunction | Run | Return | FileReturn
 
 
 @dataclass
@@ -89,6 +97,9 @@ class Program:
     options: dict[str, Any] = field(default_factory=dict)
     # Filled by the HTTP front-end after multipart validation and cache lookup.
     blob_bytes: dict[str, bytes] = field(default_factory=dict)
+
+    # Trusted limits supplied by the front-end; never accepted in wire options.
+    max_return_bytes: int = 256 * 1024**2
 
     def blob_uploads(self) -> list[Upload | FileUpload]:
         """Uploads whose payload comes from the content-addressed blob cache."""
@@ -153,6 +164,17 @@ def strict_json_loads(data: bytes | str) -> Any:
 
 
 def parse_program(body: Any) -> Program:
+    """Validate decoded protocol data and build a server-side program.
+
+    :param body: A decoded JSON object with ``instructions`` and optional ``options``.
+    :returns: A :class:`kcoral.schemas.Program` containing validated instructions
+        and parsed options, not the client-side :class:`kcoral.Program` builder.
+    :raises ValidationError: If fields, instruction order, references or paths
+        violate the protocol. References must name earlier instructions.
+
+    This function does not execute instructions, resolve cached blobs or
+    initialize a worker. It is intended for server integration.
+    """
     if not isinstance(body, dict):
         raise ValidationError("program must be a JSON object")
     _check_fields(body, {"instructions", "options"}, {"instructions"}, "program")
@@ -207,26 +229,26 @@ def normalize_file_path(value: Any) -> str:
     rather than silently turned into a path that appears safe afterwards.
     """
     if not isinstance(value, str) or not value:
-        raise ValidationError("file upload 'path' must be a non-empty string")
+        raise ValidationError("filesystem 'path' must be a non-empty string")
     if "\x00" in value:
-        raise ValidationError("file upload 'path' must not contain NUL")
+        raise ValidationError("filesystem 'path' must not contain NUL")
     if "\\" in value:
-        raise ValidationError("file upload 'path' must use POSIX '/' separators")
+        raise ValidationError("filesystem 'path' must use POSIX '/' separators")
     if value.startswith("/"):
-        raise ValidationError("file upload 'path' must be relative")
+        raise ValidationError("filesystem 'path' must be relative")
 
     raw_parts = value.split("/")
     if ".." in raw_parts:
-        raise ValidationError("file upload 'path' must not contain a '..' component")
+        raise ValidationError("filesystem 'path' must not contain a '..' component")
     parts = [part for part in raw_parts if part not in ("", ".")]
     if not parts:
-        raise ValidationError("file upload 'path' must name a file")
+        raise ValidationError("filesystem 'path' must name a file or folder")
     for part in parts:
         if len(part.encode("utf-8")) > 255:
-            raise ValidationError("file upload 'path' contains a component longer than 255 bytes")
+            raise ValidationError("filesystem 'path' contains a component longer than 255 bytes")
     normalized = "/".join(parts)
     if len(normalized.encode("utf-8")) > 4096:
-        raise ValidationError("file upload 'path' is longer than 4096 bytes")
+        raise ValidationError("filesystem 'path' is longer than 4096 bytes")
     return normalized
 
 
@@ -397,15 +419,9 @@ def _parse_get_function(item: dict[str, Any], index: int, handles: set[str]) -> 
 def _parse_run(item: dict[str, Any], index: int, handles: set[str]) -> Run:
     _check_fields(item, {"op", "id", "fn", "args"}, {"op", "id", "fn"}, f"instruction {index}")
     raw_fn = item["fn"]
-    fn: str | Ref
-    if isinstance(raw_fn, str):
-        if not raw_fn:
-            raise ValidationError(f"run {item['id']!r}: 'fn' must not be empty")
-        fn = raw_fn
-    elif is_ref(raw_fn):
-        fn = _resolve_ref(raw_fn, handles, item["id"])
-    else:
-        raise ValidationError(f"run {item['id']!r}: 'fn' must be a name or {{'$ref': id}}")
+    if not is_ref(raw_fn):
+        raise ValidationError(f"run {item['id']!r}: 'fn' must be {{'$ref': id}}")
+    fn = _resolve_ref(raw_fn, handles, item["id"])
 
     raw_args = item.get("args", [])
     if not isinstance(raw_args, list):
@@ -424,13 +440,25 @@ def _parse_run(item: dict[str, Any], index: int, handles: set[str]) -> Run:
 
 def _parse_return(
     item: dict[str, Any], index: int, handles: set[str], return_keys: set[str]
-) -> Return:
-    _check_fields(item, {"op", "key", "value"}, {"op", "key", "value"}, f"instruction {index}")
+) -> Return | FileReturn:
+    fields = {"op", "key", "kind", "path"} if "kind" in item else {"op", "key", "value"}
+    _check_fields(item, fields, fields, f"instruction {index}")
     key = item["key"]
     if not isinstance(key, str) or not key:
         raise ValidationError(f"return instruction {index} needs a non-empty string 'key'")
     if key in return_keys:
         raise ValidationError(f"duplicate return key: {key!r}")
+    if "kind" in item:
+        kind = item["kind"]
+        if kind not in ("file", "folder"):
+            raise ValidationError(f"return {key!r}: unknown kind {kind!r}")
+        raw_path = item["path"]
+        path = (
+            _resolve_ref(raw_path, handles, f"return {key!r}")
+            if is_ref(raw_path)
+            else normalize_file_path(raw_path)
+        )
+        return FileReturn(key=key, kind=kind, path=path)
     value = item["value"]
     if not is_ref(value):
         raise ValidationError(f"return {key!r}: 'value' must be {{'$ref': id}}")

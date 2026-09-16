@@ -12,12 +12,14 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import IO, Any, Protocol
 
-from .deferred import DeferredGPUResult
+from .artifacts import ReturnedFile, ReturnedFolder
 from .errors import ExecutionError, GPUAccessViolation
+from .file_transfer import collect
 from .keys import compute_blob_hash
 from .lease import Lease
 from .schemas import (
     DTYPE_ITEM_SIZES,
+    FileReturn,
     FileUpload,
     GetFunction,
     Instruction,
@@ -41,8 +43,6 @@ class Runtime(Protocol):
     def get_function(self, module: Any, name: str) -> Any: ...
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any: ...
     def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None: ...
-    def builtin(self, name: str) -> Callable: ...
-    def cpu_only_builtins(self) -> frozenset[str]: ...
     def forbid_gpu(self) -> AbstractContextManager[None]: ...
     def synchronize(self) -> None: ...
     def take_last_error(self) -> str | None: ...
@@ -53,7 +53,6 @@ def execute(
     program: Program,
     runtime: Runtime,
     lease: Lease,
-    cpu_only: frozenset[str] = frozenset(),
     *,
     workspace_dir: str,
     progress: Callable[[int], None] | None = None,
@@ -63,9 +62,8 @@ def execute(
     """Run a program and serialize only values selected by return instructions.
 
     The GPU is claimed on the first instruction that needs it and given up around
-    each call that runs off it: a builtin the caller names in ``cpu_only``, or a
-    function the program declared ``cpu_only`` at ``get_function``, which is also
-    watched for CUDA calls.
+    each function declared ``cpu_only`` at ``get_function``. Those calls are
+    watched for CUDA access.
 
     The caller owns creation and cleanup of ``workspace_dir``. Production
     workers use a parent-owned directory so it can be removed if the child dies.
@@ -76,7 +74,6 @@ def execute(
             program,
             runtime,
             lease,
-            cpu_only,
             progress=progress,
             cleanup_failed=cleanup_failed,
             capture_dir=capture_dir,
@@ -88,7 +85,6 @@ def _execute_in_workspace(
     program: Program,
     runtime: Runtime,
     lease: Lease,
-    cpu_only: frozenset[str],
     *,
     progress: Callable[[int], None] | None,
     cleanup_failed: Callable[[BaseException], None] | None,
@@ -98,11 +94,11 @@ def _execute_in_workspace(
     env: dict[str, Any] = {}
     results: dict[str, dict[str, Any]] = {}
     encoder = _ValueEncoder(runtime)
-    off_gpu: frozenset[str | Ref] = cpu_only | {
+    off_gpu = frozenset(
         Ref(instruction.id)
         for instruction in program.instructions
         if isinstance(instruction, GetFunction) and instruction.cpu_only
-    }
+    )
     error: dict[str, Any] | None = None
     current_index: int | None = None
     current: Instruction | None = None
@@ -152,15 +148,28 @@ def _execute_in_workspace(
                             env[instruction.module.id], instruction.name
                         )
                     elif isinstance(instruction, Run):
-                        value = _invoke(instruction, env, runtime, off_gpu)
-                        if isinstance(value, DeferredGPUResult):
-                            # The builtin completed its host-only phase without the
-                            # lease.  Driver/module loading must be serialized with
-                            # every other use of this GPU before the instruction is
-                            # considered complete.
-                            lease.acquire()
-                            value = value.resolve()
-                        env[instruction.id] = value
+                        env[instruction.id] = _invoke(instruction, env, runtime, off_gpu)
+                    elif isinstance(instruction, FileReturn):
+                        checkpoint = encoder.checkpoint()
+                        try:
+                            path = (
+                                env[instruction.path.id]
+                                if isinstance(instruction.path, Ref)
+                                else instruction.path
+                            )
+                            snapshot = collect(
+                                workspace_dir,
+                                path,
+                                instruction.kind,
+                                max_bytes=program.max_return_bytes - encoder.binary_size,
+                            )
+                            results[instruction.key] = encoder.encode_artifact(snapshot)
+                        except Exception as exc:
+                            encoder.rollback(checkpoint)
+                            raise ExecutionError(
+                                "serialization",
+                                f"cannot return {instruction.kind}: {type(exc).__name__}: {exc}",
+                            ) from exc
                     elif isinstance(instruction, Return):
                         # A return that fails mid-encode must leave nothing behind: it
                         # adds no results entry, so a binary part it already registered
@@ -241,15 +250,14 @@ def _execute_in_workspace(
 
 
 def _invoke(
-    instruction: Run, env: dict[str, Any], runtime: Runtime, off_gpu: frozenset[str | Ref]
+    instruction: Run, env: dict[str, Any], runtime: Runtime, off_gpu: frozenset[Ref]
 ) -> Any:
     """Call one ``Run``'s target, in its own frame so the handle and arguments die
     with the instruction. Left in ``execute``'s locals they keep an uploaded
     module's namespace alive past the ``runtime.reset()`` meant to free it."""
-    fn = _resolve_fn(instruction.fn, env, runtime)
+    fn = _resolve_fn(instruction.fn, env)
     args = [env[arg.id] if isinstance(arg, Ref) else arg for arg in instruction.args]
-    # The program's declaration is checked; a builtin's registration is trusted.
-    watched = isinstance(instruction.fn, Ref) and instruction.fn in off_gpu
+    watched = instruction.fn in off_gpu
     with runtime.forbid_gpu() if watched else nullcontext():
         return fn(*args)
 
@@ -300,10 +308,10 @@ def _materialize_file(workspace_dir: str, path: str, data: bytes) -> None:
 
 
 def _place(
-    instruction: Instruction, off_gpu: frozenset[str | Ref], runtime: Runtime, lease: Lease
+    instruction: Instruction, off_gpu: frozenset[Ref], runtime: Runtime, lease: Lease
 ) -> None:
     """Hold or drop the GPU for the instruction about to run."""
-    if isinstance(instruction, FileUpload):
+    if isinstance(instruction, (FileUpload, FileReturn)):
         _drop_gpu(runtime, lease)
         return
     if isinstance(instruction, Run) and instruction.fn in off_gpu:
@@ -347,6 +355,7 @@ class _ValueEncoder:
     def __init__(self, runtime: Runtime) -> None:
         self._runtime = runtime
         self.binary_parts: dict[str, bytes] = {}
+        self.binary_size = 0
 
     def encode(self, value: Any) -> dict[str, Any]:
         if value is None:
@@ -401,17 +410,28 @@ class _ValueEncoder:
             return encoded
         raise ExecutionError("serialization", f"cannot return value of type {type(value).__name__}")
 
+    def encode_artifact(self, value: ReturnedFile | ReturnedFolder) -> dict[str, Any]:
+        if isinstance(value, ReturnedFile):
+            data = value.read_bytes()
+            return {**self._binary_value("file", data), "size": len(data)}
+        return {
+            "type": "folder",
+            "files": {path: self.encode_artifact(file) for path, file in value.files.items()},
+            "directories": list(value.directories),
+        }
+
     def checkpoint(self) -> int:
         return len(self.binary_parts)
 
     def rollback(self, checkpoint: int) -> None:
         """Drop parts registered since ``checkpoint``, keeping numbering contiguous."""
         for name in list(self.binary_parts)[checkpoint:]:
-            del self.binary_parts[name]
+            self.binary_size -= len(self.binary_parts.pop(name))
 
     def _binary_value(self, value_type: str, data: bytes) -> dict[str, Any]:
         part_name = f"return:{len(self.binary_parts)}"
         self.binary_parts[part_name] = data
+        self.binary_size += len(data)
         return {
             "type": value_type,
             "part": part_name,
@@ -526,10 +546,8 @@ def _read_captured(file: IO[bytes], limit_bytes: int) -> tuple[str, bool]:
     return data[:limit_bytes].decode("utf-8", errors="replace"), len(data) > limit_bytes
 
 
-def _resolve_fn(fn: str | Ref, env: dict[str, Any], runtime: Runtime) -> Callable:
-    if isinstance(fn, Ref):
-        obj = env[fn.id]
-        if not callable(obj):
-            raise ExecutionError("runtime", f"handle {fn.id!r} is not callable")
-        return obj
-    return runtime.builtin(fn)
+def _resolve_fn(fn: Ref, env: dict[str, Any]) -> Callable:
+    obj = env[fn.id]
+    if not callable(obj):
+        raise ExecutionError("runtime", f"handle {fn.id!r} is not callable")
+    return obj

@@ -10,13 +10,13 @@ description: >-
 
 # KCoral client
 
-Facts needed to write a protocol-conformant client. `docs/protocol.md` is the
+Facts needed to write a protocol-conformant client. `docs/client-guide/protocol.md` is the
 authoritative field-level specification; where this page and that file
 disagree, that file wins.
 
 ## Model
 
-- The server exposes `POST /execute` and `GET /health`, nothing else.
+- The client endpoints are `POST /execute` and `GET /health`.
 - A request body is a **program**: an ordered list of instructions executed
   top to bottom on a GPU worker.
 - There is no session state. Handles (`id`s) live for one request; a second
@@ -26,54 +26,39 @@ disagree, that file wins.
   what `return` selects.
 - A reference has the exact form `{"$ref": "<id>"}` and must point to an
   earlier instruction.
-- `GET /health` reports the GPU `target` (e.g. `{"arch": "sm_100a"}`) and the
-  installed `versions` (torch, cuda, tvm, tvm_ffi, triton, cutlass).
+- The `GET /health` response includes the GPU `target` (e.g. `{"arch": "sm_100a"}`),
+  installed `versions`, and `load`: `request_capacity` (occupied + free capacity),
+  `requests_in_progress` (assigned requests), and `requests_waiting`
+  (requests awaiting assignment).
 
 ## Python client
 
-The canonical program shape — upload the kernel, make the tensors, compile,
-check correctness, time it, return the results:
+Upload a harness, select its entry point, run it and return what you want to inspect:
 
 ```python
-import numpy as np
 from kcoral import Client, Program
 
-KERNEL = r"""
-from __future__ import annotations
-from tvm.script import tirx as T
-
-@T.jit
-def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):
-    T.device_entry()
-    i = T.cta_id([N])
-    t = T.thread_id([1])
-    B[i] = A[i] + 1.0
-"""
-REFERENCE = "def main(a):\n    return a + 1.0\n"
-
 program = Program()
-kernel_module = program.upload(id="kernel_module", kind="module", source=KERNEL)
-kernel = program.get_function(id="kernel", module=kernel_module, name="main")
-reference_module = program.upload(id="reference_module", kind="module", source=REFERENCE)
-reference = program.get_function(id="reference", module=reference_module, name="main")
+module = program.upload(id="harness", kind="module", source="""
+import torch
 
-src = program.upload(id="src", kind="tensor", value=np.arange(256, dtype=np.float32))
-dst = program.run(id="dst", fn="builtin.empty", args=[{"shape": [256], "dtype": "float32"}])
-
-compiled = program.run(id="compiled", fn="builtin.compile_tirx", args=[kernel, {"N": 256}])
-program.run(id="invoke", fn=compiled, args=[src, dst])
-
-expected = program.run(id="expected", fn=reference, args=[src])
-check = program.run(id="check", fn="builtin.assert_close", args=[dst, expected])
-timing = program.run(id="timing", fn="builtin.benchmark", args=[compiled, src, dst])
-
-program.return_(key="check", value=check)
-program.return_(key="timing", value=timing)
-
+def main(n):
+    x = torch.arange(n, dtype=torch.float32, device="cuda")
+    y = x + 1
+    torch.testing.assert_close(y, x + 1)
+    return {"ok": True, "output": y}
+""")
+main = program.get_function(id="main", module=module, name="main")
+report = program.run(id="report", fn=main, args=[256])
+program.return_(key="report", value=report)
 with Client("http://localhost:8000") as client:
     result = client.execute(program, timeout_seconds=120)
-print(result.results["timing"]["latency_ms_median"])
+print(result.results)
 ```
+
+Uploaded Python can perform tasks such as compilation, tensor allocation,
+validation, measurement, or invoking scripts and CLI tools. `run.fn` references
+an earlier callable; a callable returned by a `run` can be used by a later call.
 
 API surface:
 
@@ -87,6 +72,8 @@ Program.upload_folder(folder, *, path=...) -> None
 Program.get_function(id=..., module=..., name=..., cpu_only=False) -> Register
 Program.run(id=..., fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
+Program.return_file(key=..., path=...) -> None    # str or Register resolving to str
+Program.return_folder(key=..., path=...) -> None  # str or Register resolving to str
 
 Client(base_url, *, headers=None, connect_timeout_seconds=10)
 Client.execute(program, *, timeout_seconds=None, output_limit_bytes=None) -> ProgramResult
@@ -106,6 +93,16 @@ instructions; retries send the same instructions with different blob parts.
 It includes hidden files, rejects links, special files and repeated directories,
 and omits empty directories and original permissions/timestamps. A failed call
 leaves the program unchanged. Caching is automatic and best-effort.
+
+`return_file` and `return_folder` capture workspace-relative paths at that
+instruction; `path` may be an earlier register containing a path string.
+Use `result[key].save(destination)` to save locally. File results also provide
+`read_bytes()`; folder results provide `files` and `directories`. Folders include
+hidden files and empty directories. Missing paths, symlinks, and special files
+fail collection. Earlier returns survive later ordinary instruction failures.
+Saves require an existing parent; file replacement needs `overwrite=True`, and
+folder destinations must be new. Transfers are buffered and subject to server
+limits. See [client usage](../../../docs/client-guide/writing-a-program.md#returning-files-and-folders).
 
 ## Instructions
 
@@ -129,11 +126,6 @@ named Python object or CUDA source function. Uploaded Python is ordinary code
 executed on the worker (torch included), so a plain function works as a
 reference baseline.
 
-`get_function(..., cpu_only=True)` declares a function that touches no GPU: a
-`run` of it releases the GPU lease, and a CUDA call from it (reading a GPU
-tensor counts) fails with a `gpu_access` error naming the call and source line.
-The check is best effort.
-
 A `bytes` upload binds the blob's bytes unchanged. They stay in CPU memory and
 can be passed to uploaded Python code, which suits files and other binary
 formats the server should parse.
@@ -147,12 +139,24 @@ the wire field holds its SHA-256. The server copies it into the request's privat
 working directory with mode `0600` and removes that directory after execution.
 Its content can remain in the disk cache across requests and server restarts.
 
+### `get_function`
+
+Select an object from an uploaded module with `get_function(id=..., module=..., name=...)`.
+The returned `Register` stores its instruction ID and can be passed as `fn` to `run`.
+
+`get_function(..., cpu_only=True)` declares that later calls to this function
+use no GPU. Before its `run`, a GPU worker synchronizes and releases the lease.
+A detected CUDA call fails with `gpu_access`. This is a best-effort check.
+The flag applies to the selected function's calls; the Python module upload
+executes top-level code under the GPU lease.
+
 ### `run`
 
-`{"op": "run", "id": ..., "fn": ..., "args": [...]}` — `fn` is a builtin name
-string or a `{"$ref": id}` callable handle (a `Register` in the Python
-client). Arguments equal to `{"$ref": "<id>"}` resolve to handles; other JSON
-values pass as literals.
+`{"op": "run", "id": ..., "fn": {"$ref": "function_id"}, "args": [...]}`
+calls an earlier callable. In Python, pass the `Register` returned by
+`get_function` (or a `run` that returned a callable); the client encodes its ID
+as `{"$ref": "function_id"}`. Top-level argument references resolve to values;
+other JSON values pass as literals.
 
 ### `return`
 
@@ -161,49 +165,22 @@ the response `results` object. A `return` that already ran keeps its entry
 even if a later instruction fails, so returning early checkpoints partial
 work.
 
-## Builtins
+## Compilation and measurement helpers
 
-| `fn` | Arguments | Returns |
-|---|---|---|
-| `builtin.randn` | `spec = {shape, dtype, seed?}` | a random tensor (floating dtypes only) |
-| `builtin.empty` | `spec = {shape, dtype}` | an uninitialized tensor |
-| `builtin.zeros` | `spec = {shape, dtype}` | a zero tensor |
-| `builtin.compile_tirx` | `(kernel, bindings?)` — `bindings` binds `T.constexpr` dimensions | a compiled module |
-| `builtin.compile_cuda` | `(source, cfg?)` — `cfg = {extra_cuda_cflags?}` | the module's exported function |
-| `builtin.compile_cutedsl` | `(kernel, *tensors, cfg?)` — the tensors it specializes on; `cfg = {options?}` | a compiled kernel |
-| `builtin.compile_triton` | `(kernel, *args, cfg)` — the args it specializes on; `cfg = {grid, **launch keywords}` | a callable bound to that grid |
-| `builtin.benchmark` | `(mod, *tensors, cfg?)` — `cfg = {warmup_ms?, repeat_ms?, warmup?, repeat?, flush_l2?}` | timing statistics |
-| `builtin.check_close` | `(actual, expected, cfg?)` — `cfg = {atol?, rtol?}` | comparison statistics |
-| `builtin.assert_close` | same as `check_close` | comparison statistics; fails on mismatch |
-
-Uploaded code can call builtins directly via
-`from kcoral import builtin` — same registry, same behaviour. The
-`compile_*` builtins release the GPU lease only when run as their own
-instruction, so compiles belong at the instruction level.
-
-## Languages
-
-All four follow the same upload-then-compile shape:
-
-| Language | Upload | Compile call | Facts |
-|---|---|---|---|
-| TIRx | `source`, then `get_function(name)` | `compile_tirx(kernel, bindings?)` | Source must open with `from __future__ import annotations`, or `T.Buffer((N,), ...)` raises `NameError: N` at `def` time. `bindings` is for `@T.jit` constexprs; a `@T.prim_func` rejects them |
-| CUDA C | `source`, `language="cuda"`, then `get_function(name)` | `compile_cuda(kernel, cfg?)` | Function is `void f(tvm::ffi::TensorView, ...)`; `main` is rejected; includes and export macro come from the server; builds are disk-cached |
-| CuTeDSL | `source`, then `get_function(name)` | `compile_cutedsl(kernel, *tensors, cfg?)` | Specializes on the tensors passed, which must be the ones it will run on; nothing is cached |
-| Triton | `source`, then `get_function(name)` | `compile_triton(kernel, *args, cfg)` | `cfg["grid"]` (1–3 positive ints) is required; scalars and constexprs pass positionally; other `cfg` keys are launch keywords (`num_warps`, `num_stages`, constexprs by name) |
-
-A missing toolchain fails that builtin with an `unavailable` error;
-`GET /health` lists installed `versions`.
+For convenience, uploaded Python can import `compile_tirx` and `benchmark` from
+`kcoral.builtins`. You can also use your own compilation and measurement harness.
+See the [API reference](../../../docs/python-api/index.rst#gpu-utilities)
+for signatures and options, and the
+[compilation tutorial](../../../docs/tutorials/benchmark-kernel.md#where-to-compile)
+for GPU-server, CPU-server and local compilation examples.
 
 ## Tensors
 
-- Created on the server (`randn`/`zeros`/`empty`) unless the exact values
-  matter — uploading pays generation, hashing, and transfer.
-- Upload when values matter: a locally computed reference, a reproducible
-  fixed input, or content the kernel's work depends on (e.g. indptr arrays).
+Two ways to provide tensors are to upload Python that initializes them remotely,
+or to upload local tensors with `kind="tensor"`.
+
 - `kind="tensor"` accepts a NumPy array, a torch tensor, any DLPack object,
   or raw bytes with `dtype` and `shape`.
-- `randn`, `empty`, and `zeros` default to `float16` when `dtype` is omitted.
 - Accepted dtypes: `bool`, `uint8`, `int8`, `int16`, `int32`, `int64`,
   `float16`, `float32`, `float64`, `bfloat16`, `float8_e4m3fn`,
   `float8_e5m2`.
@@ -212,26 +189,23 @@ A missing toolchain fails that builtin with an `unavailable` error;
 
 ## Correctness and timing
 
-- Comparison runs on the server against an uploaded reference module; that
-  avoids shipping outputs back. Defaults are `rtol=1e-2`, `atol=1e-3`.
-  `check_close` reports a mismatch as data; `assert_close` stops the program
-  with a `correctness` failure.
-- `builtin.benchmark` reports the per-iteration GPU activity span measured by
-  CUPTI, not wall time: from the start of the first kernel, copy, or memset a
-  call launches to the end of the last. The L2 flush and host work outside those
-  endpoints stay out, but host time *between* two activities does not. Defaults:
-  `warmup_ms=25`, `repeat_ms=100`, `flush_l2=true`. The millisecond budgets
-  adapt the iteration count to the kernel; explicit `warmup`/`repeat` counts are
-  for runs that must be comparable.
-- `flush_l2=true` gives each call a cold cache; off, a small kernel reads its
-  input from L2 and reports an unrealistic latency.
-- Returns `latency_ms_median`, `latency_ms_mean`, `latency_ms_min`,
-  `latency_ms_max`, `activities_stable`, plus the `flush_l2`, `warmup`, `repeat`
-  used. `activities_stable` is `false` when the timed iterations did not all
-  launch the same activities, so the stats describe a mixture rather than one
-  kernel.
-- The request's GPU time is `lease_held_ms`, not `elapsed_ms`; the remainder
-  is queueing (`queue_ms`, `lease_wait_ms`) and off-GPU work such as compiles.
+Your uploaded code can configure, for example, tolerances, assertions, profiler
+invocation, warmup, and measurement methodology. Return reports and relevant
+artifacts explicitly. Synchronize and wait for GPU subprocesses before
+returning or releasing a lease.
+
+## Request timing
+
+The execution response contains top-level `queue_ms`, `elapsed_ms`,
+`lease_wait_ms`, and `lease_held_ms` fields. The Python client exposes them as
+attributes of the `ProgramResult` returned by `Client.execute`, for example
+`result.lease_held_ms`.
+
+`queue_ms` measures the wait for a worker. `elapsed_ms` starts once a worker is
+assigned and includes waiting for the GPU lease (`lease_wait_ms`), holding it
+(`lease_held_ms`), and other worker work. Holding the lease reserves the GPU;
+it does not imply continuous GPU activity. Kernel latency is measured separately
+by `benchmark` or your own measurement code.
 
 ## Outcomes
 
@@ -259,17 +233,19 @@ hash: on `status: CACHE_MISS`, resend the program with the parts listed in
 `missing_blobs`, and resend every blob if that retry misses again. Responses
 containing tensors or bytes are multipart with a `result` JSON part and
 `return:<index>` binary parts. The typed value encoding, blob-cache rules, and
-full error table are in `docs/protocol.md`.
+full error table are in `docs/client-guide/protocol.md`.
 
 ## References
 
-- `docs/protocol.md` — field-level wire specification: request envelope,
+- `docs/client-guide/protocol.md` — field-level wire specification: request envelope,
   value encoding, library upload build routes (TVM FFI, TIRx
   `export_library`, CuTeDSL `--enable-tvm-ffi`) and their link flags, full
   HTTP error table.
-- `docs/client_guide.md` — narrative guide: server-side compile vs prebuilt
+- `docs/client-guide/writing-a-program.md` — narrative guide: server-side compile vs prebuilt
   library trade-offs, measurement guidance.
-- `examples/remote_compile_client.py` — runnable: all four languages compiled
-  on the server.
-- `examples/library_upload_client.py` — runnable: build on the client, upload
-  the shared object.
+- `examples/first_program.py` — runnable: upload a function and tensor, then
+  execute and return the result.
+- `examples/benchmark_kernel.py` — TIRx compilation and measurement.
+- `examples/remote_compile_client.py` — remote compilation in four languages.
+- `examples/library_upload_client.py` — client build and library upload.
+- `examples/cpu_compile_gpu_execute.py` — CPU build and GPU execution.

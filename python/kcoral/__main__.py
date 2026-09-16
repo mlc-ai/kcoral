@@ -16,6 +16,10 @@ flags default from the environment, so env-only deployments keep working:
   KCORAL_SERVER_HOST    bind host (default 127.0.0.1)
   KCORAL_SERVER_PORT    bind port (default 8000)
   KCORAL_LOG_DIR        directory for structured event logs (default "logs"; empty disables)
+  KCORAL_ROUTER_ENDPOINT
+                        Router origin for outbound gRPC data slots (default disabled)
+  KCORAL_NODE_ID        stable node identifier required with a Router endpoint
+  KCORAL_NODE_TOKEN     bearer token used to authenticate outbound node connections
 
 The log is one JSONL stream per run under ``<log dir>/runs/``, uncapped, and it
 is mirrored to stderr unless ``--no-log-console`` says otherwise. Its first line
@@ -43,6 +47,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default=os.environ.get("KCORAL_SERVER_HOST", "127.0.0.1"))
     parser.add_argument(
         "--port", type=int, default=int(os.environ.get("KCORAL_SERVER_PORT", "8000"))
+    )
+    parser.add_argument(
+        "--router-endpoint",
+        default=os.environ.get("KCORAL_ROUTER_ENDPOINT") or None,
+        help="Router HTTP(S) origin for outbound gRPC data slots",
+    )
+    parser.add_argument(
+        "--node-id",
+        default=os.environ.get("KCORAL_NODE_ID") or None,
+        help="stable node identifier used to register outbound data slots",
+    )
+    parser.add_argument(
+        "--node-token",
+        default=os.environ.get("KCORAL_NODE_TOKEN") or None,
+        help="node bearer token; prefer KCORAL_NODE_TOKEN over this command-line flag",
     )
     parser.add_argument(
         "--device",
@@ -149,6 +168,8 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         raise SystemExit("--max-requests-per-worker must be non-negative")
     if args.disk_cache_capacity_mbytes < 0:
         raise SystemExit("--disk-cache-capacity-mbytes must be non-negative")
+    if bool(args.router_endpoint) != bool(args.node_id):
+        raise SystemExit("--router-endpoint and --node-id must be configured together")
     return ServerConfig(
         device=args.device,
         gpus=gpus,
@@ -169,6 +190,9 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         max_response_bytes=args.max_response_bytes,
         output_limit_bytes=args.output_limit_bytes,
         max_output_limit_bytes=args.max_output_limit_bytes,
+        router_endpoint=args.router_endpoint,
+        node_id=args.node_id,
+        node_token=args.node_token,
     )
 
 

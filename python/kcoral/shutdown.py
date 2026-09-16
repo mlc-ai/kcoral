@@ -21,6 +21,9 @@ class ShutdownServer(uvicorn.Server):
         asyncio.get_running_loop().call_soon(self._begin_shutdown)
 
     def _begin_shutdown(self) -> None:
+        tunnel = getattr(self.app.state, "tunnel", None)
+        if tunnel is not None:
+            tunnel.begin_shutdown()
         pool = getattr(self.app.state, "pool", None)
         if pool is not None:
             pool.begin_shutdown()

@@ -1,10 +1,11 @@
-"""GPU integration tests for the runtime and the TIRx and CUDA C builtins."""
+"""GPU integration tests for the runtime with uploaded TIRx and CUDA C harnesses."""
 
 import importlib.util
 import os
 import pathlib
 
 import pytest
+from support.programs import harness_call, python_call
 
 from kcoral.keys import compute_blob_hash
 from kcoral.schemas import GetFunction, Program, Ref, Return, Run, Upload
@@ -100,9 +101,8 @@ void tmem_roundtrip(tvm::ffi::TensorView out) {
 def build_library(source, entry, tmp_path):
     """Compile CUDA C the way a client would, off the server, and return the bytes."""
     import tvm_ffi.cpp
+    from support.cuda import _cuda_arch_list
     from tvm_ffi.cpp import extension
-
-    from kcoral.builtin_ops.cuda import _cuda_arch_list
 
     os.environ.setdefault("TVM_FFI_CUDA_ARCH_LIST", _cuda_arch_list())
     cu = tmp_path / f"{entry}.cu"
@@ -113,9 +113,8 @@ def build_library(source, entry, tmp_path):
 def build_multi_entry_library(source, entries, tmp_path):
     """Build one TVM-FFI library that exports every name in ``entries``."""
     import tvm_ffi.cpp
+    from support.cuda import _cuda_arch_list
     from tvm_ffi.cpp import extension
-
-    from kcoral.builtin_ops.cuda import _cuda_arch_list
 
     os.environ.setdefault("TVM_FFI_CUDA_ARCH_LIST", _cuda_arch_list())
     name = "multi_entry_" + "_".join(entries)
@@ -248,15 +247,30 @@ def tirx_benchmark_program():
             GetFunction("kernel", ref("kernel_module"), "main"),
             Upload("reference_module", "module", source=REF),
             GetFunction("reference", ref("reference_module"), "main"),
-            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-            Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"N": 256}]),
+            *python_call(
+                "input",
+                """import torch
+def main(shape):
+    generator = torch.Generator(device="cuda").manual_seed(0)
+    return torch.randn(shape, dtype=torch.float32, device="cuda", generator=generator)
+""",
+                [[256]],
+            ),
+            *python_call(
+                "output",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
+            *harness_call("compiled", "compile_tirx", [ref("kernel"), {"N": 256}]),
             Run("invoke", ref("compiled"), [ref("input"), ref("output")]),
             Run("expected", ref("reference"), [ref("input")]),
-            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
-            Run(
+            *harness_call("check", "check_close", [ref("output"), ref("expected")]),
+            *harness_call(
                 "timing",
-                "builtin.benchmark",
+                "benchmark",
                 [ref("compiled"), ref("input"), ref("output"), {"warmup": 5, "repeat": 20}],
             ),
             Return("check", ref("check")),
@@ -314,7 +328,7 @@ def test_a_cpu_only_function_is_checked_against_the_cuda_api():
     assert error["location"].startswith("<uploaded:") and error["location"].endswith(" in main")
     assert "torch.zeros" in error["traceback"]
 
-    # CUPTI is shared with the benchmark builtin: each leaves it usable by the other.
+    # CUPTI is shared with the test harness: each leaves it usable by the other.
     timed = execute_for_test(tirx_benchmark_program(), gpu_runtime, UNSHARED_GPU)
     assert timed.status == "COMPLETED", timed.error
     assert cpu_only_call(CUDA_IN_CPU_ONLY, gpu_runtime).error["kind"] == "gpu_access"
@@ -353,8 +367,15 @@ def test_a_cpu_reference_compares_against_a_gpu_tensor_as_is():
                 Upload("module", "module", source=source),
                 GetFunction("reference", ref("module"), "main", cpu_only=True),
                 Run("expected", ref("reference"), [256]),
-                Run("actual", "builtin.zeros", [{"shape": [256], "dtype": "float32"}]),
-                Run("check", "builtin.check_close", [ref("actual"), ref("expected")]),
+                *python_call(
+                    "actual",
+                    """import torch
+def main(shape):
+    return torch.zeros(shape, dtype=torch.float32, device="cuda")
+""",
+                    [[256]],
+                ),
+                *harness_call("check", "check_close", [ref("actual"), ref("expected")]),
                 Return("check", ref("check")),
             ]
         ),
@@ -372,15 +393,30 @@ def test_cuda_c_compile_correctness_and_benchmark():
             GetFunction("kernel", ref("kernel_module"), "add_one"),
             Upload("reference_module", "module", source=REF),
             GetFunction("reference", ref("reference_module"), "main"),
-            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-            Run("compiled", "builtin.compile_cuda", [ref("kernel")]),
+            *python_call(
+                "input",
+                """import torch
+def main(shape):
+    generator = torch.Generator(device="cuda").manual_seed(0)
+    return torch.randn(shape, dtype=torch.float32, device="cuda", generator=generator)
+""",
+                [[256]],
+            ),
+            *python_call(
+                "output",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
+            *harness_call("compiled", "compile_cuda", [ref("kernel")]),
             Run("invoke", ref("compiled"), [ref("input"), ref("output")]),
             Run("expected", ref("reference"), [ref("input")]),
-            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
-            Run(
+            *harness_call("check", "check_close", [ref("output"), ref("expected")]),
+            *harness_call(
                 "timing",
-                "builtin.benchmark",
+                "benchmark",
                 [ref("compiled"), ref("input"), ref("output"), {"warmup": 5, "repeat": 20}],
             ),
             Return("check", ref("check")),
@@ -402,7 +438,7 @@ def test_cuda_c_nvcc_error_is_compile_failure_and_names_the_mistake():
             [
                 Upload("kernel_module", "module", source=bad, language="cuda"),
                 GetFunction("kernel", ref("kernel_module"), "add_one"),
-                Run("compiled", "builtin.compile_cuda", [ref("kernel")]),
+                *harness_call("compiled", "compile_cuda", [ref("kernel")]),
             ]
         ),
         runtime(),
@@ -425,8 +461,15 @@ def test_cuda_c_runs_on_the_arch_specific_target():
             [
                 Upload("kernel_module", "module", source=TMEM_KERNEL, language="cuda"),
                 GetFunction("kernel", ref("kernel_module"), "tmem_roundtrip"),
-                Run("out", "builtin.zeros", [{"shape": [32], "dtype": "int32"}]),
-                Run("compiled", "builtin.compile_cuda", [ref("kernel")]),
+                *python_call(
+                    "out",
+                    """import torch
+def main(shape):
+    return torch.zeros(shape, dtype=torch.int32, device="cuda")
+""",
+                    [[32]],
+                ),
+                *harness_call("compiled", "compile_cuda", [ref("kernel")]),
                 Run("invoke", ref("compiled"), [ref("out")]),
                 Return("out", ref("out")),
             ]
@@ -450,14 +493,29 @@ def test_prebuilt_library_runs_and_benchmarks(tmp_path):
             GetFunction("kernel", ref("kernel_module"), "add_one"),
             Upload("reference_module", "module", source=REF),
             GetFunction("reference", ref("reference_module"), "main"),
-            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            *python_call(
+                "input",
+                """import torch
+def main(shape):
+    generator = torch.Generator(device="cuda").manual_seed(0)
+    return torch.randn(shape, dtype=torch.float32, device="cuda", generator=generator)
+""",
+                [[256]],
+            ),
+            *python_call(
+                "output",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
             Run("invoke", ref("kernel"), [ref("input"), ref("output")]),
             Run("expected", ref("reference"), [ref("input")]),
-            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
-            Run(
+            *harness_call("check", "check_close", [ref("output"), ref("expected")]),
+            *harness_call(
                 "timing",
-                "builtin.benchmark",
+                "benchmark",
                 [ref("kernel"), ref("input"), ref("output"), {"warmup": 5, "repeat": 20}],
             ),
             Return("check", ref("check")),
@@ -487,18 +545,40 @@ def test_prebuilt_library_module_binds_and_runs_multiple_functions(tmp_path):
             Upload("reference", "module", source=reference),
             GetFunction("one", ref("reference"), "one"),
             GetFunction("two", ref("reference"), "two"),
-            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-            Run("output_one", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-            Run("output_two", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            *python_call(
+                "input",
+                """import torch
+def main(shape):
+    generator = torch.Generator(device="cuda").manual_seed(0)
+    return torch.randn(shape, dtype=torch.float32, device="cuda", generator=generator)
+""",
+                [[256]],
+            ),
+            *python_call(
+                "output_one",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
+            *python_call(
+                "output_two",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
             Run("invoke_one", ref("add_one"), [ref("input"), ref("output_one")]),
             Run("invoke_two", ref("add_two"), [ref("input"), ref("output_two")]),
             Run("expected_one", ref("one"), [ref("input")]),
             Run("expected_two", ref("two"), [ref("input")]),
-            Run("check_one", "builtin.check_close", [ref("output_one"), ref("expected_one")]),
-            Run("check_two", "builtin.check_close", [ref("output_two"), ref("expected_two")]),
-            Run(
+            *harness_call("check_one", "check_close", [ref("output_one"), ref("expected_one")]),
+            *harness_call("check_two", "check_close", [ref("output_two"), ref("expected_two")]),
+            *harness_call(
                 "timing",
-                "builtin.benchmark",
+                "benchmark",
                 [
                     ref("add_two"),
                     ref("input"),
@@ -531,11 +611,26 @@ def test_prebuilt_tirx_library_runs(tmp_path):
             GetFunction("kernel", ref("kernel_module"), "add_one"),
             Upload("reference_module", "module", source=REF),
             GetFunction("reference", ref("reference_module"), "main"),
-            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            *python_call(
+                "input",
+                """import torch
+def main(shape):
+    generator = torch.Generator(device="cuda").manual_seed(0)
+    return torch.randn(shape, dtype=torch.float32, device="cuda", generator=generator)
+""",
+                [[256]],
+            ),
+            *python_call(
+                "output",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
             Run("invoke", ref("kernel"), [ref("input"), ref("output")]),
             Run("expected", ref("reference"), [ref("input")]),
-            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
+            *harness_call("check", "check_close", [ref("output"), ref("expected")]),
             Return("check", ref("check")),
         ],
         blob_bytes={digest: data},
@@ -558,11 +653,26 @@ def test_prebuilt_cutedsl_library_runs(tmp_path):
             GetFunction("kernel", ref("kernel_module"), "add_one"),
             Upload("reference_module", "module", source=REF),
             GetFunction("reference", ref("reference_module"), "main"),
-            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            *python_call(
+                "input",
+                """import torch
+def main(shape):
+    generator = torch.Generator(device="cuda").manual_seed(0)
+    return torch.randn(shape, dtype=torch.float32, device="cuda", generator=generator)
+""",
+                [[256]],
+            ),
+            *python_call(
+                "output",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
             Run("invoke", ref("kernel"), [ref("input"), ref("output")]),
             Run("expected", ref("reference"), [ref("input")]),
-            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
+            *harness_call("check", "check_close", [ref("output"), ref("expected")]),
             Return("check", ref("check")),
         ],
         blob_bytes={digest: data},
@@ -583,45 +693,36 @@ def test_cutedsl_source_compiles_on_the_server():
             GetFunction("kernel", ref("kernel_module"), "add_one"),
             Upload("reference_module", "module", source=REF),
             GetFunction("reference", ref("reference_module"), "main"),
-            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+            *python_call(
+                "input",
+                """import torch
+def main(shape):
+    generator = torch.Generator(device="cuda").manual_seed(0)
+    return torch.randn(shape, dtype=torch.float32, device="cuda", generator=generator)
+""",
+                [[256]],
+            ),
+            *python_call(
+                "output",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
             # Compiling specializes on these tensors; the result takes torch ones.
-            Run(
-                "compiled",
-                "builtin.compile_cutedsl",
-                [ref("kernel"), ref("input"), ref("output")],
+            *harness_call(
+                "compiled", "compile_cutedsl", [ref("kernel"), ref("input"), ref("output")]
             ),
             Run("invoke", ref("compiled"), [ref("input"), ref("output")]),
             Run("expected", ref("reference"), [ref("input")]),
-            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
+            *harness_call("check", "check_close", [ref("output"), ref("expected")]),
             Return("check", ref("check")),
         ]
     )
     outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
     assert decode_structural(outcome.results["check"])["max_abs_err"] == 0
-
-
-def test_compile_cutedsl_reports_an_undecorated_kernel():
-    """CuTeDSL writes colour into its diagnostics; the client gets it stripped."""
-    if importlib.util.find_spec("cutlass") is None:
-        pytest.skip("CuTeDSL compilation requires cutlass")
-    outcome = execute_for_test(
-        Program(
-            [
-                Upload("kernel_module", "module", source="def main(src, dst):\n    pass\n"),
-                GetFunction("kernel", ref("kernel_module"), "main"),
-                Run("input", "builtin.randn", [{"shape": [8], "dtype": "float32"}]),
-                Run("compiled", "builtin.compile_cutedsl", [ref("kernel"), ref("input")]),
-            ]
-        ),
-        runtime(),
-        UNSHARED_GPU,
-    )
-    assert outcome.status == "FAILED"
-    assert outcome.error["kind"] == "compile"
-    assert "@cute.jit" in outcome.error["message"]
-    assert "\x1b[" not in outcome.error["message"]
 
 
 def test_triton_source_compiles_on_the_server():
@@ -636,19 +737,34 @@ def test_triton_source_compiles_on_the_server():
             GetFunction("kernel", ref("kernel_module"), "add_one"),
             Upload("reference_module", "module", source=REF),
             GetFunction("reference", ref("reference_module"), "main"),
-            Run("input", "builtin.randn", [{"shape": [n], "dtype": "float32", "seed": 0}]),
-            Run("output", "builtin.empty", [{"shape": [n], "dtype": "float32"}]),
-            Run(
+            *python_call(
+                "input",
+                """import torch
+def main(shape):
+    generator = torch.Generator(device="cuda").manual_seed(0)
+    return torch.randn(shape, dtype=torch.float32, device="cuda", generator=generator)
+""",
+                [[n]],
+            ),
+            *python_call(
+                "output",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[n]],
+            ),
+            *harness_call(
                 "compiled",
-                "builtin.compile_triton",
+                "compile_triton",
                 [ref("kernel"), ref("input"), ref("output"), n, 256, {"grid": [n // 256]}],
             ),
             Run("invoke", ref("compiled"), [ref("input"), ref("output"), n, 256]),
             Run("expected", ref("reference"), [ref("input")]),
-            Run("check", "builtin.check_close", [ref("output"), ref("expected")]),
-            Run(
+            *harness_call("check", "check_close", [ref("output"), ref("expected")]),
+            *harness_call(
                 "timing",
-                "builtin.benchmark",
+                "benchmark",
                 [ref("compiled"), ref("input"), ref("output"), n, 256, {"repeat": 20}],
             ),
             Return("check", ref("check")),
@@ -692,8 +808,23 @@ def test_library_cache_is_only_a_memoization(tmp_path):
             [
                 Upload("kernel_module", "library", blob=digest),
                 GetFunction("kernel", ref("kernel_module"), "add_one"),
-                Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-                Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
+                *python_call(
+                    "input",
+                    """import torch
+def main(shape):
+    generator = torch.Generator(device="cuda").manual_seed(0)
+    return torch.randn(shape, dtype=torch.float32, device="cuda", generator=generator)
+""",
+                    [[256]],
+                ),
+                *python_call(
+                    "output",
+                    """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                    [[256]],
+                ),
                 Run("invoke", ref("kernel"), [ref("input"), ref("output")]),
                 Return("output", ref("output")),
             ],
@@ -709,120 +840,6 @@ def test_library_cache_is_only_a_memoization(tmp_path):
     for outcome in (cold, warm, cold_again):
         assert outcome.status == "COMPLETED", outcome.error
     assert cold.binary_parts == warm.binary_parts == cold_again.binary_parts
-
-
-def test_compile_tirx_reuses_an_already_compiled_kernel():
-    from kcoral.builtin_ops import tirx
-
-    tirx._COMPILED.clear()
-    rt = runtime()
-    module = rt.load_module(KERNEL)
-    kernel = rt.get_function(module, "main")
-    first = tirx.compile_tirx(kernel, {"N": 256})
-    second = tirx.compile_tirx(kernel, {"N": 256})
-    assert first is second  # same Executable, so codegen ran once
-    assert tirx.compile_tirx(kernel, {"N": 512}) is not first  # a new shape still compiles
-
-
-def test_benchmark_budget_counts_and_no_flush():
-    program = Program(
-        [
-            Upload("kernel_module", "module", source=KERNEL),
-            GetFunction("kernel", ref("kernel_module"), "main"),
-            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-            Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"N": 256}]),
-            Run(
-                "timing",
-                "builtin.benchmark",
-                [
-                    ref("compiled"),
-                    ref("input"),
-                    ref("output"),
-                    {"warmup_ms": 5, "repeat_ms": 20, "flush_l2": False},
-                ],
-            ),
-            Return("timing", ref("timing")),
-        ]
-    )
-    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
-    assert outcome.status == "COMPLETED"
-    timing = decode_structural(outcome.results["timing"])
-    assert timing["latency_ms_median"] > 0 and timing["flush_l2"] is False
-    assert timing["warmup"] >= 1 and timing["repeat"] > 10
-
-
-def test_direct_cupti_benchmarks_multiple_gpu_activities_twice():
-    import torch
-
-    from kcoral.builtin_ops import resolve
-
-    source = torch.randn(4096, dtype=torch.float32, device="cuda")
-    output = torch.empty_like(source)
-
-    def two_operations(source, output):
-        torch.add(source, 1.0, out=output)
-        torch.mul(output, 2.0, out=output)
-
-    measure = resolve("builtin.benchmark")
-    config = {"warmup": 1, "repeat": 3, "flush_l2": False}
-    first = measure(two_operations, source, output, config)
-    second = measure(two_operations, source, output, config)
-    assert first["latency_ms_median"] > 0 and first["repeat"] == 3
-    assert second["latency_ms_median"] > 0 and second["repeat"] == 3
-    assert first["activities_stable"] and second["activities_stable"]
-
-
-def test_data_dependent_work_is_measured_and_flagged_unstable():
-    import torch
-
-    from kcoral.builtin_ops import resolve
-
-    source = torch.randn(4096, dtype=torch.float32, device="cuda")
-    output = torch.empty_like(source)
-    calls = 0
-
-    def sometimes_two_operations(source, output):
-        nonlocal calls
-        calls += 1
-        torch.add(source, 1.0, out=output)
-        if calls % 3 == 0:
-            torch.mul(output, 2.0, out=output)
-
-    measure = resolve("builtin.benchmark")
-    timing = measure(sometimes_two_operations, source, output, {"warmup": 1, "repeat": 9})
-    assert timing["latency_ms_median"] > 0
-    assert timing["activities_stable"] is False
-
-
-def test_direct_cupti_cleans_up_after_the_callable_fails():
-    import torch
-
-    from kcoral.builtin_ops import resolve
-    from kcoral.errors import ExecutionError
-
-    source = torch.randn(4096, dtype=torch.float32, device="cuda")
-    output = torch.empty_like(source)
-    calls = 0
-
-    def fail_during_measurement(source, output):
-        nonlocal calls
-        calls += 1
-        torch.add(source, 1.0, out=output)
-        if calls == 2:  # one warmup call, then fail inside the CUPTI session
-            raise RuntimeError("intentional benchmark failure")
-
-    measure = resolve("builtin.benchmark")
-    config = {"warmup": 1, "repeat": 2, "flush_l2": False}
-    with pytest.raises(ExecutionError) as error:
-        measure(fail_during_measurement, source, output, config)
-    assert error.value.kind == "runtime"
-
-    def add_one(source, output):
-        torch.add(source, 1.0, out=output)
-
-    recovered = measure(add_one, source, output, config)
-    assert recovered["latency_ms_median"] > 0 and recovered["repeat"] == 2
 
 
 def test_python_syntax_error_is_parse_failure():
@@ -842,29 +859,14 @@ def test_tirx_error_is_parse_failure():
             [
                 Upload("kernel_module", "module", source=bad_kernel),
                 GetFunction("kernel", ref("kernel_module"), "main"),
-                Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"N": 16}]),
+                *harness_call("compiled", "compile_tirx", [ref("kernel"), {"N": 16}]),
             ]
         ),
         runtime(),
         UNSHARED_GPU,
     )
     assert outcome.status == "FAILED" and outcome.error["kind"] == "parse"
-    assert outcome.error["instruction_index"] == 2
-
-
-def test_compile_on_non_kernel_is_compile_failure():
-    outcome = execute_for_test(
-        Program(
-            [
-                Run("input", "builtin.randn", [{"shape": [4], "dtype": "float32"}]),
-                Run("compiled", "builtin.compile_tirx", [ref("input")]),
-            ]
-        ),
-        runtime(),
-        UNSHARED_GPU,
-    )
-    assert outcome.status == "FAILED" and outcome.error["kind"] == "compile"
-    assert outcome.error["instruction_index"] == 1
+    assert outcome.error["instruction_index"] == 4
 
 
 def test_prim_func_kernel_compiles_directly():
@@ -873,9 +875,23 @@ def test_prim_func_kernel_compiles_directly():
             [
                 Upload("kernel_module", "module", source=PRIM_KERNEL),
                 GetFunction("kernel", ref("kernel_module"), "main"),
-                Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32"}]),
-                Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-                Run("compiled", "builtin.compile_tirx", [ref("kernel")]),
+                *python_call(
+                    "input",
+                    """import torch
+def main(shape):
+    return torch.randn(shape, dtype=torch.float32, device="cuda")
+""",
+                    [[256]],
+                ),
+                *python_call(
+                    "output",
+                    """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                    [[256]],
+                ),
+                *harness_call("compiled", "compile_tirx", [ref("kernel")]),
                 Run("invoke", ref("compiled"), [ref("input"), ref("output")]),
             ]
         ),
@@ -883,61 +899,6 @@ def test_prim_func_kernel_compiles_directly():
         UNSHARED_GPU,
     )
     assert outcome.status == "COMPLETED"
-
-
-def test_prim_func_with_bindings_is_compile_failure():
-    outcome = execute_for_test(
-        Program(
-            [
-                Upload("kernel_module", "module", source=PRIM_KERNEL),
-                GetFunction("kernel", ref("kernel_module"), "main"),
-                Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"N": 256}]),
-            ]
-        ),
-        runtime(),
-        UNSHARED_GPU,
-    )
-    assert outcome.status == "FAILED" and outcome.error["kind"] == "compile"
-    assert outcome.error["instruction_index"] == 2
-
-
-def test_bad_binding_name_is_compile_failure():
-    outcome = execute_for_test(
-        Program(
-            [
-                Upload("kernel_module", "module", source=KERNEL),
-                GetFunction("kernel", ref("kernel_module"), "main"),
-                Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"WRONG": 1}]),
-            ]
-        ),
-        runtime(),
-        UNSHARED_GPU,
-    )
-    assert outcome.status == "FAILED" and outcome.error["kind"] == "compile"
-    assert outcome.error["instruction_index"] == 2
-
-
-def test_assert_close_failure_stops_without_results():
-    wrong = KERNEL.replace("A[i] + 1.0", "A[i] + 2.0")
-    program = Program(
-        [
-            Upload("kernel_module", "module", source=wrong),
-            GetFunction("kernel", ref("kernel_module"), "main"),
-            Upload("reference_module", "module", source=REF),
-            GetFunction("reference", ref("reference_module"), "main"),
-            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32"}]),
-            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-            Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"N": 256}]),
-            Run("invoke", ref("compiled"), [ref("input"), ref("output")]),
-            Run("expected", ref("reference"), [ref("input")]),
-            Run("check", "builtin.assert_close", [ref("output"), ref("expected")]),
-            Return("output", ref("output")),
-        ]
-    )
-    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
-    assert outcome.status == "FAILED" and outcome.results == {}
-    assert outcome.error["kind"] == "correctness" and outcome.error["instruction_index"] == 9
-    assert outcome.error["instruction_op"] == "run" and outcome.error["instruction_id"] == "check"
 
 
 def test_timing_returned_before_a_correctness_failure_is_kept():
@@ -949,17 +910,31 @@ def test_timing_returned_before_a_correctness_failure_is_kept():
             GetFunction("kernel", ref("kernel_module"), "main"),
             Upload("reference_module", "module", source=REF),
             GetFunction("reference", ref("reference_module"), "main"),
-            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32"}]),
-            Run("output", "builtin.empty", [{"shape": [256], "dtype": "float32"}]),
-            Run("compiled", "builtin.compile_tirx", [ref("kernel"), {"N": 256}]),
-            Run(
+            *python_call(
+                "input",
+                """import torch
+def main(shape):
+    return torch.randn(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
+            *python_call(
+                "output",
+                """import torch
+def main(shape):
+    return torch.empty(shape, dtype=torch.float32, device="cuda")
+""",
+                [[256]],
+            ),
+            *harness_call("compiled", "compile_tirx", [ref("kernel"), {"N": 256}]),
+            *harness_call(
                 "timing",
-                "builtin.benchmark",
+                "benchmark",
                 [ref("compiled"), ref("input"), ref("output"), {"warmup": 5, "repeat": 20}],
             ),
             Return("timing", ref("timing")),
             Run("expected", ref("reference"), [ref("input")]),
-            Run("check", "builtin.assert_close", [ref("output"), ref("expected")]),
+            *harness_call("check", "assert_close", [ref("output"), ref("expected")]),
             Return("output", ref("output")),
         ]
     )
@@ -988,54 +963,6 @@ def test_uploaded_and_returned_tensor_bytes():
     np.testing.assert_array_equal(
         np.frombuffer(outcome.binary_parts["return:0"], dtype=np.float32), array
     )
-
-
-BUILTIN_CALLER = """from kcoral import builtin
-
-def main(x):
-    y = builtin.randn({"shape": [256], "dtype": "float32", "seed": 0})
-    return builtin.check_close(x, y)
-"""
-
-
-def test_uploaded_code_calls_builtins_directly():
-    """The same seed on both sides must produce identical tensors, which proves
-    ``kcoral.builtin`` hands uploaded code the very functions the run
-    instructions name."""
-    program = Program(
-        [
-            Upload("caller_module", "module", source=BUILTIN_CALLER),
-            GetFunction("caller", ref("caller_module"), "main"),
-            Run("input", "builtin.randn", [{"shape": [256], "dtype": "float32", "seed": 0}]),
-            Run("check", ref("caller"), [ref("input")]),
-            Return("check", ref("check")),
-        ]
-    )
-    outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
-    assert outcome.status == "COMPLETED", outcome.error
-    check = decode_structural(outcome.results["check"])
-    assert check["passed"] and check["max_abs_err"] == 0
-
-
-def test_benchmark_budgets_survive_the_l2_flush():
-    """The iteration estimate must not include the first touch of the flush
-    buffer: freshly allocated and 2x L2, it costs ~16x a warm one and would
-    silently shrink both budgets by that factor."""
-    import torch
-
-    from kcoral.builtin_ops import resolve
-
-    x = torch.randn(4096, dtype=torch.float32, device="cuda")
-    y = torch.empty_like(x)
-
-    def add_one(src, dst):
-        torch.add(src, 1.0, out=dst)
-
-    result = resolve("builtin.benchmark")(add_one, x, y, {})
-    # A microsecond kernel against a 25/100 ms budget: hundreds and thousands,
-    # not the tens an inflated estimate produced.
-    assert result["latency_ms_median"] < 0.1
-    assert result["warmup"] > 100 and result["repeat"] > 500
 
 
 MODULE_SCOPE_ALLOCATION = """import torch
@@ -1131,3 +1058,110 @@ def test_popped_candidate_modules_do_not_survive_the_request():
         assert outcome.status == "COMPLETED", outcome.error
     leaked = baseline - torch.cuda.mem_get_info()[0]
     assert leaked < 512 * 1024**2, f"{leaked / 1024**2:.0f} MiB not reclaimed across 4 candidates"
+
+
+def test_compile_tirx_reuses_an_already_compiled_kernel():
+    from kcoral import builtins as tirx
+
+    tirx._COMPILED.clear()
+    rt = runtime()
+    module = rt.load_module(KERNEL)
+    kernel = rt.get_function(module, "main")
+    first = tirx.compile_tirx(kernel, {"N": 256})
+    second = tirx.compile_tirx(kernel, {"N": 256})
+    assert first is second  # same Executable, so codegen ran once
+    assert tirx.compile_tirx(kernel, {"N": 512}) is not first
+
+
+def test_direct_cupti_benchmarks_multiple_gpu_activities_twice():
+    import torch
+
+    from kcoral.builtins import benchmark
+
+    source = torch.randn(4096, dtype=torch.float32, device="cuda")
+    output = torch.empty_like(source)
+
+    def two_operations(source, output):
+        torch.add(source, 1.0, out=output)
+        torch.mul(output, 2.0, out=output)
+
+    measure = benchmark
+    config = {"warmup": 1, "repeat": 3, "flush_l2": False}
+    first = measure(two_operations, source, output, config)
+    second = measure(two_operations, source, output, config)
+    assert first["latency_ms_median"] > 0 and first["repeat"] == 3
+    assert second["latency_ms_median"] > 0 and second["repeat"] == 3
+    assert first["activities_stable"] and second["activities_stable"]
+
+
+def test_data_dependent_work_is_measured_and_flagged_unstable():
+    import torch
+
+    from kcoral.builtins import benchmark
+
+    source = torch.randn(4096, dtype=torch.float32, device="cuda")
+    output = torch.empty_like(source)
+    calls = 0
+
+    def sometimes_two_operations(source, output):
+        nonlocal calls
+        calls += 1
+        torch.add(source, 1.0, out=output)
+        if calls % 3 == 0:
+            torch.mul(output, 2.0, out=output)
+
+    measure = benchmark
+    timing = measure(sometimes_two_operations, source, output, {"warmup": 1, "repeat": 9})
+    assert timing["latency_ms_median"] > 0
+    assert timing["activities_stable"] is False
+
+
+def test_direct_cupti_cleans_up_after_the_callable_fails():
+    import torch
+
+    from kcoral.builtins import benchmark
+    from kcoral.errors import ExecutionError
+
+    source = torch.randn(4096, dtype=torch.float32, device="cuda")
+    output = torch.empty_like(source)
+    calls = 0
+
+    def fail_during_measurement(source, output):
+        nonlocal calls
+        calls += 1
+        torch.add(source, 1.0, out=output)
+        if calls == 2:  # one warmup call, then fail inside the CUPTI session
+            raise RuntimeError("intentional benchmark failure")
+
+    measure = benchmark
+    config = {"warmup": 1, "repeat": 2, "flush_l2": False}
+    with pytest.raises(ExecutionError) as error:
+        measure(fail_during_measurement, source, output, config)
+    assert error.value.kind == "runtime"
+
+    def add_one(source, output):
+        torch.add(source, 1.0, out=output)
+
+    recovered = measure(add_one, source, output, config)
+    assert recovered["latency_ms_median"] > 0 and recovered["repeat"] == 2
+
+
+def test_benchmark_budgets_survive_the_l2_flush():
+    """The iteration estimate must not include the first touch of the flush
+    buffer: freshly allocated and 2x L2, it costs ~16x a warm one and would
+    silently shrink both budgets by that factor."""
+    import torch
+
+    from kcoral.builtins import benchmark
+
+    x = torch.randn(4096, dtype=torch.float32, device="cuda")
+    y = torch.empty_like(x)
+
+    def add_one(src, dst):
+        torch.add(src, 1.0, out=dst)
+
+    result = benchmark(add_one, x, y, {})
+    # A microsecond kernel against a 25/100 ms budget: hundreds and thousands,
+    # not the tens an inflated estimate produced.
+    assert result["latency_ms_median"] < 0.1
+    assert result["warmup"] > 100 and result["repeat"] > 500

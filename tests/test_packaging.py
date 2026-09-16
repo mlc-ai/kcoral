@@ -9,7 +9,17 @@ PYTHON_DIR = Path(__file__).resolve().parent.parent / "python"
 
 # Everything the `server`, `gpu` and `compiler` installs add. A client install
 # has none of them, so importing the client must not reach for any.
-SERVER_ONLY = ("fastapi", "starlette", "pydantic", "uvicorn", "torch", "tvm", "tvm_ffi")
+SERVER_ONLY = (
+    "fastapi",
+    "starlette",
+    "pydantic",
+    "uvicorn",
+    "torch",
+    "tvm",
+    "tvm_ffi",
+    "grpc",
+    "google.protobuf",
+)
 
 CHECK_CLIENT_IS_THIN = f"""
 import sys

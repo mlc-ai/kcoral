@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package kcoral.gateway.v1;
+
+// Service: both streams are initiated by a node, never by the router.
+service RouterGateway {
+  // Report local health; the router acknowledges registration once.
+  rpc ConnectSupervisor(stream SupervisorStatus) returns (stream SupervisorAck);
+  // Register one execution slot, then exchange one request at a time.
+  rpc ConnectSlot(stream SlotFrame) returns (stream SlotFrame);
+}
+
+// Supervisor stream: a fresh, validated report of the local Python server.
+message SupervisorStatus {
+  string node_id = 1; // Stable node name, independent of process restarts.
+  bool server_healthy = 2;
+  string supervisor_instance_id = 3; // Changes on node-manager restart.
+  string server_instance_id = 4; // Changes on Python-server restart.
+  reserved 5, 6, 7, 10;
+  reserved "accepting_requests", "active_requests", "queue_length", "gpu_count";
+  uint64 worker_count = 8;
+  uint64 busy_workers = 9;
+  map<string, string> target = 11; // Compilation target shared by eligible nodes.
+  map<string, string> versions = 12; // Runtime versions used for compatibility.
+  string last_error = 13;
+  uint64 health_age_millis = 14; // Age of the local probe, not router receipt time.
+}
+
+// Successful supervisor registration; failures use a gRPC error status.
+message SupervisorAck {
+  reserved 1, 2, 3;
+  reserved "router_instance_id", "accepted", "message";
+}
+
+// Slot stream: the first node-to-router frame, with an empty request_id.
+message SlotHello {
+  string node_id = 1;
+  string server_instance_id = 2;
+  string slot_id = 3;
+  uint32 protocol_version = 4;
+}
+
+// The router has authenticated and registered this slot; no request_id.
+message SlotAck {}
+
+// One HTTP header. Bytes preserve values; repeated entries remain distinct.
+message HttpHeader {
+  bytes name = 1;
+  bytes value = 2;
+}
+
+// Start a POST /execute request. Body data follows in bounded frames.
+message RequestHead {
+  repeated HttpHeader headers = 1;
+  optional uint64 content_length = 2;
+}
+
+// Start the response; it may arrive before the request body is complete.
+message ResponseHead {
+  uint32 status = 1;
+  repeated HttpHeader headers = 2;
+}
+
+// End of the current direction's body, not the entire reusable slot stream.
+message EndOfBody {}
+
+// Stop this request and discard the slot. This does not promise computation stopped.
+message Cancel {
+  string reason = 1; // Stable diagnostic reason, also recorded in node logs.
+}
+
+// A registered slot carries one request at a time. Both directions may progress
+// concurrently. Every request/response frame carries the same request_id.
+// Data frames are at most 256 KiB. Reuse requires both body ends; early
+// cancellation discards the connection so old data cannot reach a new request.
+message SlotFrame {
+  string request_id = 1;
+  oneof payload {
+    SlotHello hello = 2;
+    RequestHead request_head = 3;
+    bytes data = 4;
+    EndOfBody end = 5;
+    ResponseHead response_head = 6;
+    Cancel cancel = 7;
+    SlotAck ack = 8;
+  }
+}

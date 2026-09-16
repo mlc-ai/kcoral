@@ -10,6 +10,7 @@ import ml_dtypes
 import numpy as np
 import pytest
 import uvicorn
+from support.programs import harness_function
 
 from kcoral import Client, Program, Register
 from kcoral.app import create_app
@@ -250,6 +251,46 @@ def test_folder_upload_reuses_identical_wire_program_for_every_attempt(
         thread.join(timeout=10)
 
 
+def test_cache_miss_retry_returns_the_router_affinity_header():
+    program = Program()
+    program.upload(id="file", kind="bytes", value=b"contents")
+    blob_hash = program.instructions[0]["blob"]
+    seen_routes = []
+
+    def handler(request):
+        seen_routes.append(request.headers.get("x-kcoral-node"))
+        if len(seen_routes) == 1:
+            return httpx.Response(
+                200,
+                json={"status": "CACHE_MISS", "missing_blobs": [blob_hash]},
+                headers={"X-KCoral-Node": "node-affinity"},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "status": "COMPLETED",
+                "request_id": "request",
+                "queue_ms": 0,
+                "elapsed_ms": 1,
+                "lease_wait_ms": 0,
+                "lease_held_ms": 1,
+                "stdout": "",
+                "stderr": "",
+                "results": {},
+            },
+        )
+
+    with Client("http://router") as client:
+        client._http.close()
+        client._http = httpx.Client(
+            base_url="http://router", transport=httpx.MockTransport(handler)
+        )
+        outcome = client.execute(program)
+
+    assert outcome.completed
+    assert seen_routes == [None, "node-affinity"]
+
+
 def test_cache_churn_falls_back_to_all_blobs():
     app = create_app(
         ServerConfig(gpus=[0], workers_per_gpu=1, cache_capacity_bytes=16),
@@ -311,7 +352,7 @@ def test_nested_binary_results_are_decoded(server_url):
 
 def test_failed_instruction_is_data(server_url):
     program = Program()
-    program.run(id="bad", fn="builtin.nope")
+    program.run(id="bad", fn=harness_function(program, "nope", "bad"))
     with Client(server_url) as client:
         outcome = client.execute(program)
     assert outcome.status == "FAILED" and outcome.results == {}
@@ -346,7 +387,7 @@ def test_interleaved_return_survives_a_later_failure(server_url):
     fn = program.get_function(id="fn", module=module, name="main")
     early = program.run(id="early", fn=fn)
     program.return_(key="early", value=early)  # checkpointed before the failure
-    program.run(id="bad", fn="builtin.nope")
+    program.run(id="bad", fn=harness_function(program, "nope", "bad"))
     with Client(server_url) as client:
         outcome = client.execute(program)
     assert outcome.status == "FAILED"
@@ -357,7 +398,7 @@ def test_interleaved_return_survives_a_later_failure(server_url):
 
 def test_timeout_raises_server_error(server_url):
     program = Program()
-    program.run(id="sleep", fn="builtin.sleep", args=[5])
+    program.run(id="sleep", fn=harness_function(program, "sleep", "sleep"), args=[5])
     with Client(server_url) as client:
         with pytest.raises(KCoralError) as exc_info:
             client.execute(program, timeout_seconds=0.5)
@@ -395,9 +436,9 @@ def test_program_builder_allows_interleaved_returns():
     program = Program()
     register = program.upload(id="module", kind="module", source="def main(): pass\n")
     program.return_(key="module", value=register)
-    program.run(id="later", fn="builtin.structural")
+    program.run(id="later", fn=harness_function(program, "structural", "later"))
     program.return_(key="later", value=Register("later"))
-    assert len(program.instructions) == 4
+    assert len(program.instructions) == 6
 
     with pytest.raises(ValueError, match="unknown handle"):
         Program().return_(key="missing", value=Register("nope"))
@@ -694,3 +735,47 @@ def test_tensor_round_trip_on_gpu():
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+
+
+@pytest.mark.parametrize("fail_after_return", [None, "return", "run"])
+def test_file_folder_returns_survive_workspace_cleanup(server_url, tmp_path, fail_after_return):
+    from pathlib import Path
+
+    p = Program()
+    p.upload_file(blob=b"input", path="input.txt")
+    module = p.upload(
+        id="module",
+        kind="module",
+        source="""
+from pathlib import Path
+import os
+def make():
+    Path("out/nested/empty").mkdir(parents=True)
+    Path("out/.hidden").write_bytes(b"")
+    Path("out/nested/report").write_bytes(Path("input.txt").read_bytes() + b" report")
+    return os.getcwd()
+def report_path():
+    return "out/nested/report"
+""",
+    )
+    make = p.get_function(id="make", module=module, name="make", cpu_only=True)
+    get_path = p.get_function(id="get_path", module=module, name="report_path", cpu_only=True)
+    workspace = p.run(id="workspace", fn=make)
+    path = p.run(id="path", fn=get_path)
+    p.return_(key="workspace", value=workspace)
+    p.return_file(key="report", path=path)
+    p.return_folder(key="outputs", path="out")
+    if fail_after_return == "return":
+        p.return_file(key="missing", path="missing")
+    elif fail_after_return == "run":
+        p.run(id="fail", fn=harness_function(p, "missing", "fail"))
+    with Client(server_url) as client:
+        result = client.execute(p)
+    assert result.completed == (fail_after_return is None)
+    assert not Path(result["workspace"]).exists()
+    result["report"].save(tmp_path / "report")
+    result["outputs"].save(tmp_path / "outputs")
+    assert (tmp_path / "report").read_bytes() == b"input report"
+    assert (tmp_path / "outputs/nested/report").read_bytes() == b"input report"
+    assert (tmp_path / "outputs/nested/empty").is_dir()
+    assert (tmp_path / "outputs/.hidden").read_bytes() == b""
