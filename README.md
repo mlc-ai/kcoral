@@ -1,8 +1,10 @@
 # KCoral
 
 <p align="center">
-  <img src="docs/assets/kcoral-icon.png" alt="KCoral icon" width="96" align="middle" />
-  <img src="docs/assets/kcoral-logo.png" alt="KCoral logo" width="480" align="middle" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/_static/brand/kcoral-logo-dark.png" />
+    <img src="docs/_static/brand/kcoral-logo-light.png" alt="KCoral" width="480" />
+  </picture>
 </p>
 
 KCoral executes GPU benchmark programs over HTTP. It can also run as a CPU

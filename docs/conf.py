@@ -23,7 +23,10 @@ nitpick_ignore = [("py:class", "fastapi.applications.FastAPI")]
 
 html_theme = "furo"
 html_title = "KCoral documentation"
+html_favicon = "_static/brand/kcoral-icon.png"
 html_theme_options = {
+    "light_logo": "brand/kcoral-logo-light.png",
+    "dark_logo": "brand/kcoral-logo-dark.png",
     "source_repository": "https://github.com/mlc-ai/kcoral/",
     "source_branch": "main",
     "source_directory": "docs/",

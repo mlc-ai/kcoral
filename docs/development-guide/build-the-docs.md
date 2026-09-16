@@ -69,6 +69,24 @@ dependency files and shared static assets stay at the documentation root.
 - The documentation workflow builds every page and uploads the website for
   review. Public deployment can be added after a hosting destination is chosen.
 
+## Brand assets
+
+The original PNG images are stored in `docs/_static/brand/`. Their transparent
+backgrounds allow them to blend into the surrounding page. The logo filenames
+refer to the intended background, not the text color:
+
+| Asset | Use |
+| --- | --- |
+| `kcoral-logo-light.png` | Dark lettering for light backgrounds. |
+| `kcoral-logo-dark.png` | White lettering for dark backgrounds. |
+| `kcoral-icon.png` | Standalone icon for either background; also the documentation favicon (browser tab icon). |
+
+The GitHub README uses a `picture` element to select the logo for the viewer's
+color scheme, with the light version as the fallback. The documentation sidebar
+uses Furo's `light_logo` and `dark_logo` settings so it also follows the site's
+theme switch. Both locations reference the same assets; preserve the original
+images and their aspect ratios when reusing them.
+
 ## Run project checks
 
 `--group test` adds pytest to either environment from [installation](../getting-started/installation.md):
