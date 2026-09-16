@@ -83,7 +83,7 @@ Program.return_file(key=..., path=...) -> None    # str or Register resolving to
 Program.return_folder(key=..., path=...) -> None  # str or Register resolving to str
 
 Client(base_url, *, headers=None, connect_timeout_seconds=10)
-Client.execute(program, *, timeout_seconds=None, output_limit_bytes=None) -> ProgramResult
+Client.execute(program, *, timeout_seconds=None, output_limit_bytes=None, gpu_count=None) -> ProgramResult
 Client.health() -> dict
 Client.target() -> dict   # e.g. {"arch": "sm_100a"}
 Client.close() -> None
@@ -173,6 +173,24 @@ other JSON values pass as literals.
 the response `results` object. A `return` that already ran keeps its entry
 even if a later instruction fails, so returning early checkpoints partial
 work.
+
+## Whole-program GPU jobs
+
+Pass `Client.execute(program, gpu_count=N)` for 1-8 GPUs on one direct server.
+The program executes once in a fresh interpreter with the entire GPU set
+visible. The script can use several devices or launch `torchrun`; KCoral does
+not inject rank variables or initialize communication groups. Upload code with
+`upload_folder`, call a launcher with `subprocess.run(..., check=True)`, and
+return logs or files. Preinstall dependencies and keep large model weights on
+the server. See `examples/multi_gpu_inference/`.
+
+An explicit count of 1 also reserves the device for the complete program.
+Omitting the option preserves existing single-GPU instruction-level leasing.
+A job holds all GPUs across CPU-only and file operations until the interpreter
+and every descendant exit. Do not mark a GPU subprocess launcher CPU-only.
+Background descendants are terminated and fail the request; timeouts clean the
+complete tree. `result.gpu_ids` reports physical devices. The current router
+does not select by GPU count. There is no cross-request model state.
 
 ## Compilation and measurement helpers
 

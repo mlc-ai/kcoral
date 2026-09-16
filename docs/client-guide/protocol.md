@@ -46,6 +46,7 @@ Both `options` fields are optional. Values above either maximum are clamped to i
 
 | Field | Type | Default | Meaning and limit |
 | --- | --- | --- | --- |
+| `gpu_count` | integer | no | omitted | Reserve 1–8 GPUs for the whole program; omission retains ordinary single-GPU execution |
 | `timeout_seconds` | number | `300` | Worker execution deadline; maximum `900` |
 | `output_limit_bytes` | integer | `1048576` | Maximum bytes returned for each of stdout and stderr; maximum `16777216`; `0` disables capture |
 
@@ -420,6 +421,51 @@ To return a folder whose path is held in an earlier register:
 | Failures | Missing paths, wrong types, invalid runtime paths, read failures, and collection limits fail that return with `serialization`. Failed returns add no result or binary parts; earlier returns survive ordinary instruction failures. |
 | Size limit | Contents are buffered in the response and count against `max_response_bytes` (default 256 MiB). `output_limit_bytes` controls only stdout/stderr. |
 
+## Whole-program GPU reservations
+
+Set `options.gpu_count` to an integer from 1 through 8 to reserve that many
+GPUs on one server for the complete program. The program executes **once** in
+one fresh interpreter, with all allocated devices in `CUDA_VISIBLE_DEVICES`.
+Logical devices are numbered `0` through `gpu_count - 1`, even when the physical
+GPU indices are not consecutive. The response reports the physical `gpu_ids`
+and their `gpu_count`; the Python client exposes the tuple `result.gpu_ids`.
+
+The program can control several devices directly, run an existing script, or
+launch `torchrun` itself. KCoral does not replicate instructions across ranks,
+set rank variables, or initialize any communication group. The script owns its
+communication and synchronization. References still identify objects local to
+the one request interpreter; they do not automatically access subprocess state.
+
+An explicit count of `1` also selects whole-program reservation. Omitting the
+option preserves the ordinary single-GPU worker and its instruction-level lease
+release behavior. There is no separate execution-mode option.
+
+The set is acquired atomically and held until the interpreter and all its
+children have exited. File operations and `cpu_only` functions do not release
+it. The `cpu_only` declaration still checks the calling interpreter for GPU
+access; it cannot certify GPU use in a subprocess, so do not mark a GPU launcher
+CPU-only. GPU waiting is excluded from the execution timeout. Jobs use a fresh
+process even if worker reuse is configured. Shutdown cancels queued allocations
+and drains executing jobs within their execution deadlines.
+
+Wait for every launched process and propagate nonzero exit codes. Background
+processes left at the end are terminated and turn a successful program into
+`FAILED`. On failure or timeout, a Linux supervisor reaps descendants even if
+they create new process sessions; the reservation is released only after this
+cleanup. If cleanup cannot be verified, the devices are made unavailable and
+the server stops admitting requests. Inspect and clean up the failed process
+tree before restarting it. No model or communication state survives to the next request.
+
+Counts larger than the configured GPU set, or counts on a CPU server, fail with
+HTTP 400. GPU jobs require Linux process supervision. Connect directly to the
+GPU server: the current router does not filter nodes by requested GPU count.
+The script must satisfy any device-memory, peer-access, and topology requirements.
+
+See [whole-model inference](https://github.com/mlc-ai/kcoral/tree/main/examples/multi_gpu_inference) in the
+repository for both one-process and `torchrun` examples. Model weights and large
+artifacts should be provisioned on the server; normal request/response limits
+still apply.
+
 ## Upload Caching
 
 | Property | Memory cache | File cache |
@@ -492,6 +538,8 @@ body described under [Errors](#errors) instead.
 | `elapsed_ms` | number | run | Worker execution and serialization time |
 | `lease_wait_ms` | number | run | Waiting for the GPU another worker held |
 | `lease_held_ms` | number | run | Holding the GPU — the request's GPU time |
+| `gpu_ids` | array of integers | GPU job | Allocated physical devices, in logical-device order |
+| `gpu_count` | integer | GPU job | Number of allocated devices |
 | `results` | object | run | Entries for every `return` that ran; may be empty |
 | `error` | object | `FAILED` | See [Errors](#errors) |
 | `missing_blobs` | array | `CACHE_MISS` | Blob hashes the server does not hold |

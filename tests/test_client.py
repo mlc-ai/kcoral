@@ -104,6 +104,23 @@ def test_execute_with_generated_ids(server_url, id_kwargs):
             assert outcome["answer"] == b"data!"
 
 
+def test_explicit_single_gpu_job_with_cache_retry(server_url):
+    program = add_one_program()
+    program.upload_file(blob=b"job cache retry", path="job.txt")
+    with Client(server_url) as client:
+        for _ in range(2):
+            outcome = client.execute(program, gpu_count=1)
+            assert outcome.completed and outcome.results == {"answer": 42}
+            assert outcome.gpu_ids == (0,)
+
+
+@pytest.mark.parametrize("count", [True, 0, 9, 2.0, "2"])
+def test_invalid_gpu_count_fails_before_submission(count):
+    with Client("http://unused") as client:
+        with pytest.raises(ValueError, match="gpu_count"):
+            client.execute(add_one_program(), gpu_count=count)
+
+
 def test_tensor_cache_retry_and_numpy_result(server_url):
     value = np.arange(6, dtype=np.float32).reshape(2, 3)
     program = Program()
