@@ -193,6 +193,37 @@ supported argument types, restrictions, and other ways to invoke the function.
 For a complete example that uploads a tensor, adds one on the GPU, and returns a
 NumPy array, {download}`download remote_function.py <../../examples/remote_function.py>`.
 
+## Run an existing multi-GPU script
+
+Use `client.execute(program, gpu_count=N)` to run one complete program with
+1–8 GPUs reserved until all its processes exit. Upload the code with
+`upload_folder`, bind a small launcher using `get_function`, and call it once.
+The launcher can use `subprocess.run([...], check=True)` with the project's
+ordinary Python or `torchrun` command. Keep imports and compilation inside the
+script as usual; KCoral does not initialize its communication group.
+
+For example, the final submission is:
+
+```python
+result = client.execute(program, gpu_count=4, timeout_seconds=900)
+print(result.gpu_ids, result.stdout, result.stderr)
+```
+
+The [complete example](https://github.com/mlc-ai/kcoral/tree/main/examples/multi_gpu_inference)
+runs the same model script either as one process controlling all devices or as
+one `torchrun` process per device. It uploads the script and returns a JSON
+report. Adapt the launcher's arguments for your existing model. Preinstall its
+dependencies and put large weights on the server; upload only code and small
+inputs. The server may clamp the requested timeout to its configured maximum.
+
+The program can contain several `run` instructions and reuse interpreter-local
+objects within the request. A script's subprocess state is not automatically a
+register, and no request retains the model for the next request. An explicit
+`gpu_count=1` gives the same whole-program lifetime on one device; omit the
+option to keep ordinary instruction-level GPU leasing. See the
+[reservation protocol](protocol.md#whole-program-gpu-reservations) for cleanup,
+queueing and direct-server requirements.
+
 ## Work with tensors and files
 
 A program may need tensor inputs or files for its code to read, and it may

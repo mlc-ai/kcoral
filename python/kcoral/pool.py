@@ -25,8 +25,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import nvml
 from .events import EventLogger
-from .lease import GPULeases, NoopLeases, Ticket
+from .job import JobCleanupError, run_job
+from .lease import GPULeases, GPUUnavailable, NoopLeases, Ticket
 from .worker import Worker, WorkerCrashed, WorkerTimeout
 
 
@@ -122,6 +124,7 @@ class SubmitOutcome:
     worker_id: str = ""
     finish_reason: str = "completed"
     interfered_request_id: str | None = None  # who held the GPU when a cpu_only call touched it
+    gpu_ids: tuple[int, ...] = ()
 
 
 class WorkerPool:
@@ -147,6 +150,8 @@ class WorkerPool:
             raise ValueError("a worker pool cannot mix CPU and GPU workers")
         if not gpus and cpu_workers is None:
             raise ValueError("a GPU worker pool needs at least one GPU")
+        self._factory = runtime_factory
+        self._termination_grace_seconds = termination_grace_seconds
         self._events = events or EventLogger(None)
         capture_dir = self._events.subdir("output")
         # (device, index) pairs: the index names a worker within its device, so a
@@ -195,6 +200,9 @@ class WorkerPool:
         worker_wait_timeout: float = 0.0,
         request_id: str | None = None,
     ) -> SubmitOutcome:
+        gpu_count = program.options.get("gpu_count")
+        if gpu_count is not None and not 1 <= gpu_count <= min(8, len(self._gpus)):
+            raise ValueError("gpu_count exceeds this GPU server's configured capacity")
         with self._condition:
             if self._closing.is_set():
                 raise PoolBusy("server is shutting down")
@@ -208,6 +216,8 @@ class WorkerPool:
                 self._idle.release(worker)
                 raise PoolBusy("server is shutting down", queue_ms=queue_ms)
             self._active += 1
+        if gpu_count is not None:
+            return self._submit_job(worker, program, gpu_count, timeout, queue_ms, request_id)
         self._events.emit(
             "request_routed",
             request_id=request_id,
@@ -234,6 +244,8 @@ class WorkerPool:
                 result.finish_reason,
                 self._interfered_request(worker, result.execution, request_id),
             )
+        except GPUUnavailable as exc:
+            raise PoolBusy(str(exc), queue_ms) from exc
         except (WorkerTimeout, WorkerCrashed) as exc:
             exc.worker_id = worker.worker_id
             exc.gpu_id = worker.gpu_id
@@ -251,6 +263,79 @@ class WorkerPool:
                     if self._closing.is_set():
                         self._events.emit("shutdown_waiting", remaining=self._active)
                     self._condition.notify_all()
+
+    def _submit_job(self, worker, program, count, timeout, queue_ms, request_id) -> SubmitOutcome:
+        # The idle worker is an admission slot only. Its CUDA interpreter remains
+        # unused; the job gets a fresh process after the entire set is reserved.
+        started = time.monotonic()
+        gpu_ids: tuple[int, ...] = ()
+        held_since = None
+        wait_ms = 0.0
+        worker.request_id = request_id
+        try:
+            allocation = self._leases.acquire_count(count, worker, cancelled=self._closing)
+            if allocation is None:
+                raise PoolBusy("server is shutting down", queue_ms)
+            gpu_ids, wait_ms = allocation
+            held_since = time.monotonic()
+            if self._closing.is_set():
+                raise PoolBusy("server is shutting down", queue_ms)
+            devices = ",".join(nvml.device_uuid(gpu) or str(gpu) for gpu in gpu_ids)
+            self._events.emit(
+                "request_routed",
+                request_id=request_id,
+                worker_id=worker.worker_id,
+                gpu_ids=list(gpu_ids),
+                gpu_count=count,
+                queue_ms=queue_ms,
+            )
+            captures = self._events.subdir("output")
+            outcome = run_job(
+                program,
+                self._factory,
+                devices,
+                timeout,
+                self._termination_grace_seconds,
+                capture_dir=str(captures) if captures else None,
+            )
+            if outcome.error is not None:
+                outcome.error.pop("detected_at_ns", None)
+            return SubmitOutcome(
+                execution=outcome,
+                gpu_id=gpu_ids[0],
+                queue_ms=queue_ms,
+                elapsed_ms=(time.monotonic() - started) * 1000,
+                lease_wait_ms=wait_ms,
+                lease_held_ms=(time.monotonic() - held_since) * 1000,
+                worker_id=worker.worker_id,
+                finish_reason="completed" if outcome.status == "COMPLETED" else "program_failed",
+                gpu_ids=gpu_ids,
+            )
+        except JobCleanupError:
+            # Releasing an unverified process tree could overlap the next job.
+            self._leases.quarantine(gpu_ids)
+            self.begin_shutdown()
+            self._events.emit("gpu_job_cleanup_failed", level="ERROR", gpu_ids=list(gpu_ids))
+            raise
+        except GPUUnavailable as exc:
+            raise PoolBusy(str(exc), queue_ms) from exc
+        except (WorkerTimeout, WorkerCrashed) as exc:
+            exc.worker_id = worker.worker_id
+            exc.gpu_id = gpu_ids[0] if gpu_ids else None
+            exc.gpu_ids = gpu_ids
+            exc.queue_ms = queue_ms
+            exc.elapsed_ms = (time.monotonic() - started) * 1000
+            exc.lease_wait_ms = wait_ms
+            exc.lease_held_ms = (time.monotonic() - held_since) * 1000 if held_since else 0.0
+            raise
+        finally:
+            if gpu_ids:
+                self._leases.release_many(gpu_ids, worker)
+            worker.request_id = None
+            self._idle.release(worker)
+            with self._condition:
+                self._active -= 1
+                self._condition.notify_all()
 
     def _interfered_request(self, worker: Worker, execution, request_id: str | None) -> str | None:
         """The request holding the GPU when this one's ``cpu_only`` call touched it."""
