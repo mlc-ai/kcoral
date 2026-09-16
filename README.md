@@ -1,5 +1,3 @@
-# KCoral
-
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/_static/brand/kcoral-logo-dark.png" />
