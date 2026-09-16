@@ -6,6 +6,8 @@
 Building a program does not execute it: `Client.execute()` submits the ordered
 instructions and decodes the selected results. The
 [first GPU program](../getting-started/quickstart.md) shows a complete runnable example.
+For a self-contained Python function, the
+[function decorator](remote-functions.md) constructs these instructions for you.
 
 ## Create and close a client
 
@@ -27,6 +29,9 @@ with Client("http://localhost:8000", connect_timeout_seconds=10) as client:
 `target()` reads the GPU architecture an uploaded compiled library must match; ask the GPU
 server for it, not a CPU compilation server. Optional `headers` are sent with
 every request. If you do not use `with`, call `client.close()` explicitly.
+For a reverse proxy, the base URL may include a path prefix; `execute_path` and
+`health_path` customize the routes appended to that prefix. See
+[endpoint configuration](remote-functions.md#configure-the-endpoint-in-python).
 
 `connect_timeout_seconds` limits connection establishment. It does not limit
 execution. Pass `timeout_seconds` to `execute()` for a server-side execution

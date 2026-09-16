@@ -10,6 +10,7 @@ can build kernels for a separate GPU server.
 | Your task | Read |
 | --- | --- |
 | Run your first GPU program | [Installation](getting-started/installation.md) and [Your First Program](getting-started/quickstart.md) |
+| Run a Python function remotely | [Remote Python Functions](client-guide/remote-functions.md) |
 | Write a client program | [Writing a Program](client-guide/writing-a-program.md), [KCoral Protocol](client-guide/protocol.md) |
 | Operate a service | [Launch the server](server-guide/launch-the-server.md), [Logging](server-guide/logging.md) and [Router](server-guide/router.md) |
 | Compile remotely, then execute the returned library in another request | [Remote Compilation](tutorials/remote-compilation.md) |
@@ -31,6 +32,7 @@ getting-started/quickstart
 :hidden:
 
 client-guide/writing-a-program
+client-guide/remote-functions
 client-guide/protocol
 ```
 

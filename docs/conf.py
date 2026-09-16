@@ -20,6 +20,9 @@ autodoc_typehints_description_target = "documented"
 intersphinx_mapping = {"python": ("https://docs.python.org/3", None)}
 # FastAPI has no Sphinx inventory; the API page links its reference explicitly.
 nitpick_ignore = [("py:class", "fastapi.applications.FastAPI")]
+# Callable decorators use private ParamSpec/TypeVar placeholders. These describe
+# signatures rather than public objects with documentation cross-reference targets.
+nitpick_ignore_regex = [(r"py:(class|obj)", r"(?:typing\.|kcoral\.functions\.)?~?_[PR]")]
 
 html_theme = "furo"
 html_title = "KCoral documentation"

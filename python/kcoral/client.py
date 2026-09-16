@@ -7,10 +7,10 @@ import math
 import os
 import stat
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 
 import httpx
 import ml_dtypes
@@ -27,6 +27,12 @@ from .schemas import (
     validate_and_add_file_path,
     validate_and_add_file_paths,
 )
+
+if TYPE_CHECKING:
+    from .functions import RemoteFunction
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 class KCoralError(Exception):
@@ -439,16 +445,26 @@ class Client:
         *,
         headers: dict[str, str] | None = None,
         connect_timeout_seconds: float = 10.0,
+        execute_path: str = "/execute",
+        health_path: str = "/health",
     ) -> None:
         """Create a client without contacting the server.
 
-        :param base_url: Server address, such as ``http://localhost:8000``.
+        :param base_url: Server address, optionally including a proxy prefix,
+            such as ``http://localhost:8000/kcoral``.
         :param headers: Optional HTTP headers sent with every request.
         :param connect_timeout_seconds: Limit for establishing a connection.
+        :param execute_path: Execution path appended to ``base_url``.
+        :param health_path: Health path appended to ``base_url``.
+
+        Paths may have a leading slash; both forms preserve the base URL's
+        prefix. Paths must not include a host, scheme, query, or fragment.
 
         Response reading has no client-side timeout. Pass ``timeout_seconds``
         to :meth:`execute` to request a server-side execution limit.
         """
+        self._execute_path = _endpoint_path(execute_path)
+        self._health_path = _endpoint_path(health_path)
         timeout = httpx.Timeout(None, connect=connect_timeout_seconds)
         self._http = httpx.Client(base_url=base_url.rstrip("/"), headers=headers, timeout=timeout)
 
@@ -463,6 +479,40 @@ class Client:
     def close(self) -> None:
         """Release the underlying HTTP client's connections."""
         self._http.close()
+
+    def function(
+        self,
+        *,
+        timeout: float | None = None,
+        output_limit_bytes: int | None = None,
+        cpu_only: bool = False,
+    ) -> Callable[[Callable[_P, _R]], RemoteFunction[_P, _R]]:
+        """Decorate a self-contained Python function for this server.
+
+        :param timeout: Server execution limit in seconds, subject to its maximum.
+        :param output_limit_bytes: Captured output limit per stream.
+        :param cpu_only: Whether the function touches no GPU.
+        :returns: A decorator producing a :class:`RemoteFunction`. Its
+            ``remote()`` method returns the decoded value; ``execute()`` returns
+            the full :class:`ProgramResult`. Ordinary calls execute locally.
+
+        The function must have available Python source, no captured variables,
+        and no external globals. Import dependencies inside the function.
+        Calls reuse this client's paths, headers and connections. Keep it open
+        for the duration of remote calls.
+        """
+        from .functions import RemoteFunction
+
+        def decorate(fn: Callable[_P, _R]) -> RemoteFunction[_P, _R]:
+            return RemoteFunction(
+                fn,
+                client=self,
+                timeout=timeout,
+                output_limit_bytes=output_limit_bytes,
+                cpu_only=cpu_only,
+            )
+
+        return decorate
 
     def execute(
         self,
@@ -535,7 +585,7 @@ class Client:
         :raises TransportError: If no response can be obtained.
         :raises ProtocolError: If readiness or the response format is invalid.
         """
-        response = self._request("GET", "/health")
+        response = self._request("GET", self._health_path)
         if response.status_code != 200:
             raise _server_error(response)
         body = _json_body(response)
@@ -588,7 +638,7 @@ class Client:
             if blob_hash in include_blobs
         )
         headers = {"X-KCoral-Node": route} if route else None
-        response = self._request("POST", "/execute", files=files, headers=headers)
+        response = self._request("POST", self._execute_path, files=files, headers=headers)
         if response.status_code != 200:
             raise _server_error(response)
         next_route = response.headers.get("X-KCoral-Node")
@@ -602,6 +652,15 @@ class Client:
             return self._http.request(method, path, **kwargs)
         except httpx.HTTPError as exc:
             raise TransportError(str(exc)) from exc
+
+
+def _endpoint_path(path: str) -> str:
+    if not isinstance(path, str) or not path or not path.strip("/"):
+        raise ValueError("endpoint path must be a non-empty relative URL path")
+    parsed = httpx.URL(path)
+    if parsed.scheme or parsed.host or "?" in path or "#" in path or path.startswith("//"):
+        raise ValueError("endpoint path must not include a scheme, host, query, or fragment")
+    return path
 
 
 def _folder_files(folder: str | os.PathLike[str], destination: str) -> Iterator[tuple[str, bytes]]:

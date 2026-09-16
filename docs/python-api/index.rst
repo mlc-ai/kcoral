@@ -11,8 +11,17 @@ Client
 ------
 
 .. autoclass:: Client
-   :members: execute, health, target, close
+   :members: function, execute, health, target, close
    :special-members: __init__, __enter__, __exit__
+
+Remote functions
+----------------
+
+.. autofunction:: function
+
+.. autoclass:: RemoteFunction
+   :members: remote, execute, build_program
+   :special-members: __call__
 
 Program construction
 --------------------
@@ -41,9 +50,13 @@ Results
 Errors
 ------
 
-An instruction failure produces a :class:`ProgramResult` whose status is
-``FAILED``. The exceptions below describe failures to obtain a valid program
-outcome. See :doc:`../client-guide/protocol` for server error codes.
+``Client.execute`` and ``RemoteFunction.execute`` represent instruction failures
+as a :class:`ProgramResult` with status ``FAILED``. ``RemoteFunction.remote``
+instead raises :class:`RemoteExecutionError` retaining that outcome.
+The other exceptions below describe failures to obtain a valid program outcome.
+See :doc:`../client-guide/protocol` for server error codes.
+
+.. autoclass:: RemoteExecutionError
 
 .. autoclass:: KCoralError
 
