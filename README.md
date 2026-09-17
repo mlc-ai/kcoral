@@ -9,6 +9,12 @@ KCoral executes GPU benchmark programs over HTTP. It can also run as a CPU
 compilation service: upload code and data, call functions, and explicitly return
 the results you need.
 
+> [!WARNING]
+> KCoral allows clients to execute arbitrary code on its workers. Only allow
+> trusted clients to access your KCoral server or Router. Deploy on a trusted,
+> isolated network and never expose these endpoints to the public internet.
+> Run workers in a sandbox with restricted permissions and access to host resources.
+
 **[Documentation](docs/index.md)** · [Quickstart](docs/getting-started/quickstart.md) ·
 [Writing a Program](docs/client-guide/writing-a-program.md) · [KCoral Protocol](docs/client-guide/protocol.md)
 

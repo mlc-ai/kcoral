@@ -5,6 +5,13 @@ call functions, check correctness and return measurements. A GPU is a graphics
 processing unit; a CPU is a central processing unit. CPU compilation services
 can build kernels for a separate GPU server.
 
+```{warning}
+KCoral allows clients to execute arbitrary code on its workers. Only allow
+trusted clients to access your KCoral server or Router. Deploy on a trusted,
+isolated network and never expose these endpoints to the public internet.
+Run workers in a sandbox with restricted permissions and access to host resources.
+```
+
 ## Start here
 
 | Your task | Read |
