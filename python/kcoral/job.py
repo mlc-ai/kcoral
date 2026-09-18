@@ -125,6 +125,20 @@ def _drain_children(runner, grace: float) -> bool:
         time.sleep(0.02)
 
 
+def _wait_for_tree_exit(runner, grace: float) -> None:
+    """Allow normal teardown, including adopted multiprocessing helpers."""
+    deadline = time.monotonic() + grace
+    while True:
+        runner.join(timeout=0)
+        if runner.exitcode is not None:
+            _reap()
+            if not _descendants(os.getpid()):
+                return
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(0.02)
+
+
 def _run(conn, factory, devices: str, program, workspace: str, capture_dir: str) -> None:
     os.environ["CUDA_VISIBLE_DEVICES"] = devices
     for name in (
@@ -193,21 +207,27 @@ def _supervise(conn, factory, devices, program, workspace, capture_dir, timeout,
     index = None
     timed_out = False
     cancelled = False
+    pipe_eof = False
     deadline = time.monotonic() + timeout
     runner.start()
     sender.close()
     try:
         conn.send(("pid", runner.pid))
         while True:
-            if receiver.poll(0.05):
+            if not pipe_eof and receiver.poll(0.05):
                 try:
                     kind, value = receiver.recv()
                 except EOFError:
-                    break
-                if kind == "instruction":
-                    index = value
-                elif kind == "outcome":
-                    outcome = value
+                    # _run closes its pipe before Python/CUDA finalizers run.
+                    # Continue enforcing the execution deadline until it exits.
+                    pipe_eof = True
+                else:
+                    if kind == "instruction":
+                        index = value
+                    elif kind == "outcome":
+                        outcome = value
+            elif pipe_eof:
+                runner.join(timeout=0.05)
             if conn.poll():
                 try:
                     conn.recv()
@@ -217,14 +237,15 @@ def _supervise(conn, factory, devices, program, workspace, capture_dir, timeout,
                 break
             if not runner.is_alive():
                 # The pipe is drained before detecting EOF on the next pass.
-                if not receiver.poll():
+                if pipe_eof or not receiver.poll():
                     break
             if time.monotonic() >= deadline:
                 timed_out = True
                 break
         if outcome is not None and not timed_out and not cancelled:
-            # Allow the interpreter to complete normal Python teardown first.
-            runner.join(timeout=min(grace, max(0, deadline - time.monotonic())))
+            # Resource trackers may briefly outlive their launcher. Let the
+            # complete tree finish normal teardown before classifying leftovers.
+            _wait_for_tree_exit(runner, min(grace, max(0, deadline - time.monotonic())))
         incomplete = outcome is not None and runner.is_alive()
         orphaned = _drain_children(runner, grace)
         if timed_out:

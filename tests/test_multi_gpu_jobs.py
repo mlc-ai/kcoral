@@ -40,11 +40,13 @@ def gpu_client():
 
 
 @pytest.mark.parametrize("count", [2, 3, 4, 8])
-def test_execute_library_multi_gpu_kernel(gpu_client, count):
+@pytest.mark.parametrize("multiprocess", [False, True])
+def test_execute_library_multi_gpu_kernel(gpu_client, count, multiprocess):
     client, capacity = gpu_client
     if count > capacity:
         pytest.skip("not enough reserved GPUs")
-    example = Path(__file__).parents[1] / "examples/multi_gpu_kernel.py"
+    name = "multi_gpu_kernel_multiprocess.py" if multiprocess else "multi_gpu_kernel.py"
+    example = Path(__file__).parents[1] / "examples" / name
     program = runpy.run_path(str(example))["build_program"]()
     result = client.execute(program, gpu_count=count, timeout_seconds=120)
     assert result.completed, (result.error, result.stdout, result.stderr)
@@ -52,6 +54,13 @@ def test_execute_library_multi_gpu_kernel(gpu_client, count):
     report = json.loads(result["report"].read_bytes())
     assert report["ok"] and report["kernel"] == "nccl_all_reduce"
     assert report["gpu_count"] == count
+    assert report["gpu_processes"] == (count if multiprocess else 1)
+    assert len(set(report["pids"])) == report["gpu_processes"]
+    assert all(not Path(f"/proc/{pid}").exists() for pid in report["pids"])
+    if multiprocess:
+        assert [(rank["rank"], rank["device"]) for rank in report["ranks"]] == [
+            (i, i) for i in range(count)
+        ]
     assert report["checked_elements"] == count * report["elements"] * report["iterations"]
 
 

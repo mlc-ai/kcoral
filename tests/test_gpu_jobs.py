@@ -155,6 +155,42 @@ def main(path):
     assert ra.execution.status == rb.execution.status == "COMPLETED"
 
 
+def test_normal_descendant_teardown_finishes_before_releasing_devices(pool, tmp_path, monkeypatch):
+    monkeypatch.setattr(pool, "_termination_grace_seconds", 1)
+    marker = tmp_path / "clean-exit"
+    child = f"import time; from pathlib import Path; time.sleep(0.5); Path({str(marker)!r}).touch()"
+    launcher = f"import subprocess,sys; subprocess.Popen([sys.executable, '-c', {child!r}])"
+    program = build(f"""
+def main():
+    import subprocess, sys
+    subprocess.run([sys.executable, '-c', {launcher!r}], check=True)
+    return 42
+""")
+    result = pool.submit(program, timeout=10)
+    assert result.execution.status == "COMPLETED", result.execution.error
+    assert marker.exists(), "the adopted descendant must exit naturally before completion"
+
+
+def test_interpreter_finalizers_use_the_execution_deadline(pool, tmp_path):
+    marker = tmp_path / "interpreter-exited"
+    program = build(f"""
+def main():
+    import atexit
+    def finish():
+        import time
+        from pathlib import Path
+        time.sleep(0.5)
+        Path({str(marker)!r}).touch()
+    atexit.register(finish)
+    return 42
+""")
+    # The pool's 0.1-second termination grace must not kill a healthy interpreter
+    # that is still inside its 10-second execution deadline.
+    result = pool.submit(program, timeout=10)
+    assert result.execution.status == "COMPLETED", result.execution.error
+    assert marker.exists()
+
+
 def test_group_wait_never_partially_claims_and_does_not_starve():
     leases = GPULeases(list(range(8)))
     first, _ = leases.acquire_count(5, "first")

@@ -1,4 +1,4 @@
-"""Run a library multi-GPU kernel locally or upload it to a KCoral server.
+"""Run a library multi-GPU kernel in ONE process, locally or through KCoral.
 
 Local:  CUDA_VISIBLE_DEVICES=0,1 python examples/multi_gpu_kernel.py --local
 Remote: python examples/multi_gpu_kernel.py --url http://localhost:8000 --gpus 2
@@ -16,6 +16,7 @@ import json
 
 SCRIPT = """
 import json
+import os
 from pathlib import Path
 import torch
 from torch.cuda import nccl
@@ -44,6 +45,7 @@ for step in range(iterations):
 
 report = {
     "ok": True, "kernel": "nccl_all_reduce", "gpu_count": count,
+    "gpu_processes": 1, "pids": [os.getpid()],
     "elements": elements, "iterations": iterations,
     "checked_elements": count * elements * iterations,
 }

@@ -190,14 +190,27 @@ result = client.execute(program, gpu_count=4, timeout_seconds=900)
 print(result.gpu_ids, result.stdout, result.stderr)
 ```
 
-The [single-file example](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py)
-calls a precompiled multi-GPU all-reduce kernel from NCCL, NVIDIA's collective
-communication library, through `torch.cuda.nccl.all_reduce`. It sums the inputs
-from every assigned GPU and checks each device's output.
-The same file contains the client Program: one module upload and a JSON file
-return. Run it with `--local` on visible local GPUs, or with `--url` and `--gpus`
-to submit to a server. The script requires PyTorch with NCCL support on the
-execution machine; it does not need a separate compiler or process launcher.
+Two standalone files demonstrate NCCL, NVIDIA's collective communication
+library, summing inputs across GPUs and checking every device's output:
+
+| Example | GPU execution | Submission |
+| --- | --- | --- |
+| [multi_gpu_kernel.py](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py) | One process uses `torch.cuda.nccl.all_reduce` for all GPUs | Uploads the execution code as a module |
+| [multi_gpu_kernel_multiprocess.py](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel_multiprocess.py) | One worker per GPU uses `torch.distributed.all_reduce` | Uploads itself as a file and starts its Python entry point |
+
+Each file includes the kernel call, checks, and client Program. Run either with
+`--local` on visible local GPUs, or with `--url` and `--gpus` to submit to a
+server. Both need PyTorch with NCCL support on the execution machine. The
+multi-process version creates its own workers and communication group using
+a request-private rendezvous file, then joins every worker before returning.
+This demonstrates the process model; SGLang's custom kernels using inter-process
+GPU memory sharing need their own validation.
+
+An uploaded module is not a script entry point: its `__main__` guard does not
+run, and functions defined in its dynamic namespace are not importable worker
+targets for `multiprocessing.spawn`. Upload a real `.py` file and run it with
+Python for such programs, as the multi-process example does. `gpu_count` only
+reserves devices; the script chooses how many processes to create.
 The server may clamp the requested timeout to its configured maximum.
 
 The program can contain several `run` instructions and reuse interpreter-local
