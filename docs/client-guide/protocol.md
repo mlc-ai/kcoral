@@ -461,10 +461,10 @@ HTTP 400. GPU jobs require Linux process supervision. Connect directly to the
 GPU server: the current router does not filter nodes by requested GPU count.
 The script must satisfy any device-memory, peer-access, and topology requirements.
 
-See [whole-model inference](https://github.com/mlc-ai/kcoral/tree/main/examples/multi_gpu_inference) in the
-repository for both one-process and `torchrun` examples. Model weights and large
-artifacts should be provisioned on the server; normal request/response limits
-still apply.
+See the [single-file multi-GPU kernel example](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py)
+for a library all-reduce kernel call, correctness checks, and a client Program
+in one file. Large artifacts should be provisioned on the server;
+normal request/response limits still apply.
 
 ## Caching
 

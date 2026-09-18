@@ -196,11 +196,12 @@ NumPy array, {download}`download remote_function.py <../../examples/remote_funct
 ## Run an existing multi-GPU script
 
 Use `client.execute(program, gpu_count=N)` to run one complete program with
-1–8 GPUs reserved until all its processes exit. Upload the code with
-`upload_folder`, bind a small launcher using `get_function`, and call it once.
-The launcher can use `subprocess.run([...], check=True)` with the project's
-ordinary Python or `torchrun` command. Keep imports and compilation inside the
-script as usual; KCoral does not initialize its communication group.
+1–8 GPUs reserved until all its processes exit. A Python module upload executes
+its top-level code, so it can contain the kernel's compilation, communication
+setup, execution, and checks directly. No launcher function, `get_function`, or
+`run` is required. For an existing project, `upload_folder` can transfer its
+files and the module can call `subprocess.run([...], check=True)` with its usual
+command. KCoral does not initialize a communication group.
 
 For example, the final submission is:
 
@@ -209,12 +210,15 @@ result = client.execute(program, gpu_count=4, timeout_seconds=900)
 print(result.gpu_ids, result.stdout, result.stderr)
 ```
 
-The [complete example](https://github.com/mlc-ai/kcoral/tree/main/examples/multi_gpu_inference)
-runs the same model script either as one process controlling all devices or as
-one `torchrun` process per device. It uploads the script and returns a JSON
-report. Adapt the launcher's arguments for your existing model. Preinstall its
-dependencies and put large weights on the server; upload only code and small
-inputs. The server may clamp the requested timeout to its configured maximum.
+The [single-file example](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py)
+calls a precompiled multi-GPU all-reduce kernel from NCCL, NVIDIA's collective
+communication library, through `torch.cuda.nccl.all_reduce`. It sums the inputs
+from every assigned GPU and checks each device's output.
+The same file contains the client Program: one module upload and a JSON file
+return. Run it with `--local` on visible local GPUs, or with `--url` and `--gpus`
+to submit to a server. The script requires PyTorch with NCCL support on the
+execution machine; it does not need a separate compiler or process launcher.
+The server may clamp the requested timeout to its configured maximum.
 
 The program can contain several `run` instructions and reuse interpreter-local
 objects within the request. A script's subprocess state is not automatically a

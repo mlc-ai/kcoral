@@ -39,20 +39,20 @@ def gpu_client():
         yield client, len(devices)
 
 
-@pytest.mark.parametrize("count", [1, 2, 3, 4, 8])
-@pytest.mark.parametrize("torchrun", [False, True])
-def test_complete_inference_script(gpu_client, count, torchrun):
+@pytest.mark.parametrize("count", [2, 3, 4, 8])
+def test_execute_library_multi_gpu_kernel(gpu_client, count):
     client, capacity = gpu_client
     if count > capacity:
         pytest.skip("not enough reserved GPUs")
-    example = Path(__file__).parents[1] / "examples/multi_gpu_inference/client.py"
-    program = runpy.run_path(str(example))["build_program"](count, torchrun=torchrun)
+    example = Path(__file__).parents[1] / "examples/multi_gpu_kernel.py"
+    program = runpy.run_path(str(example))["build_program"]()
     result = client.execute(program, gpu_count=count, timeout_seconds=120)
     assert result.completed, (result.error, result.stdout, result.stderr)
     assert len(result.gpu_ids) == count
     report = json.loads(result["report"].read_bytes())
-    assert len(report["ranks"]) == (count if torchrun else 1)
-    assert all(rank["ok"] and rank["gpu_count"] == count for rank in report["ranks"])
+    assert report["ok"] and report["kernel"] == "nccl_all_reduce"
+    assert report["gpu_count"] == count
+    assert report["checked_elements"] == count * report["elements"] * report["iterations"]
 
 
 def test_interpreter_local_objects_survive_multiple_runs(gpu_client):
@@ -128,7 +128,7 @@ def main():
     for rank in range(2):
         pid = (tmp_path / f"rank-{rank}.pid").read_text()
         assert not Path(f"/proc/{pid}").exists()
-    example = Path(__file__).parents[1] / "examples/multi_gpu_inference/client.py"
-    program = runpy.run_path(str(example))["build_program"](2, steps=1)
+    example = Path(__file__).parents[1] / "examples/multi_gpu_kernel.py"
+    program = runpy.run_path(str(example))["build_program"]()
     result = client.execute(program, gpu_count=2, timeout_seconds=90)
     assert result.completed, (result.error, result.stderr)

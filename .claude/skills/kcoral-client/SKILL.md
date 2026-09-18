@@ -179,10 +179,14 @@ work.
 Pass `Client.execute(program, gpu_count=N)` for 1-8 GPUs on one direct server.
 The program executes once in a fresh interpreter with the entire GPU set
 visible. The script can use several devices or launch `torchrun`; KCoral does
-not inject rank variables or initialize communication groups. Upload code with
-`upload_folder`, call a launcher with `subprocess.run(..., check=True)`, and
-return logs or files. Preinstall dependencies and keep large model weights on
-the server. See `examples/multi_gpu_inference/`.
+not inject rank variables or initialize communication groups. A Python module
+upload executes top-level statements: place compilation and kernel execution
+directly in its source, without a launcher function or `get_function`/`run`.
+For existing scripts, upload their files and call their normal command with
+`subprocess.run(..., check=True)`. Return logs or files and preinstall dependencies.
+See `examples/multi_gpu_kernel.py`: a precompiled NCCL all-reduce kernel call,
+correctness checks, and client Program in one standalone file. It uses PyTorch's
+single-process NCCL interface, without a process group or external launcher.
 
 An explicit count of 1 also reserves the device for the complete program.
 Omitting the option preserves existing single-GPU instruction-level leasing.

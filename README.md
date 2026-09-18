@@ -117,11 +117,13 @@ Programs contain `upload`, `get_function`, `run` and `return` instructions.
 The [protocol](docs/client-guide/protocol.md) defines requests, results, caching and errors.
 [Tutorials](docs/tutorials/benchmark-kernel.md) cover remote compilation, library
 uploads and separate compilation/execution servers.
-### Whole-model multi-GPU scripts
+
+### Multi-GPU kernels and scripts
 
 Reserve 1–8 GPUs for a complete program with
 `client.execute(program, gpu_count=N)`. The program runs once with the full
 GPU set visible and can execute its existing Python or `torchrun` command.
 KCoral holds the set through process-tree cleanup; the script owns communication.
-See [the whole-model inference example](examples/multi_gpu_inference/README.md)
-for both one-process and multi-process execution.
+See [the single-file multi-GPU kernel example](examples/multi_gpu_kernel.py),
+which calls a precompiled NCCL all-reduce kernel through PyTorch and includes
+correctness checks and the client Program that uploads and executes it.
