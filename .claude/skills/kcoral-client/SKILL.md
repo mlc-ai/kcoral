@@ -187,13 +187,18 @@ For existing scripts, upload their files and call their normal command with
 See `examples/multi_gpu_kernel.py`: a precompiled NCCL all-reduce kernel call,
 correctness checks, and client Program in one standalone file. It uses PyTorch's
 single-process NCCL interface, without a process group or external launcher.
+`examples/multi_gpu_kernel_multiprocess.py` provides a second standalone example
+with one GPU worker per process. It uploads itself as a real file and invokes
+its Python entry point, so `multiprocessing.spawn` can import its worker function.
+Do not upload a spawn-based script as a dynamic module: its `__main__` guard
+will not run and its worker definitions are not importable in child processes.
 
 An explicit count of 1 also reserves the device for the complete program.
 Omitting the option preserves existing single-GPU instruction-level leasing.
 A job holds all GPUs across CPU-only and file operations until the interpreter
 and every descendant exit. Do not mark a GPU subprocess launcher CPU-only.
-Background descendants are terminated and fail the request; timeouts clean the
-complete tree. `result.gpu_ids` reports physical devices. The current router
+Descendants still alive after the normal teardown grace period are terminated
+and fail the request; timeouts clean the complete tree. `result.gpu_ids` reports physical devices. The current router
 does not select by GPU count. There is no cross-request model state.
 
 ## Compilation and measurement helpers

@@ -448,8 +448,11 @@ CPU-only. GPU waiting is excluded from the execution timeout. Jobs use a fresh
 process even if worker reuse is configured. Shutdown cancels queued allocations
 and drains executing jobs within their execution deadlines.
 
-Wait for every launched process and propagate nonzero exit codes. Background
-processes left at the end are terminated and turn a successful program into
+Wait for every launched process and propagate nonzero exit codes. Normal
+interpreter teardown runs within the execution deadline. After it exits, adopted
+helpers get the configured termination grace period to finish, capped by the
+remaining execution time. Background processes
+still alive afterward are terminated and turn a successful program into
 `FAILED`. On failure or timeout, a Linux supervisor reaps descendants even if
 they create new process sessions; the reservation is released only after this
 cleanup. If cleanup cannot be verified, the devices are made unavailable and
@@ -461,10 +464,11 @@ HTTP 400. GPU jobs require Linux process supervision. Connect directly to the
 GPU server: the current router does not filter nodes by requested GPU count.
 The script must satisfy any device-memory, peer-access, and topology requirements.
 
-See the [single-file multi-GPU kernel example](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py)
-for a library all-reduce kernel call, correctness checks, and a client Program
-in one file. Large artifacts should be provisioned on the server;
-normal request/response limits still apply.
+See the [single-process](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py)
+and [one-process-per-GPU](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel_multiprocess.py)
+examples. Each contains a library all-reduce kernel call, correctness checks,
+and a client Program in one file. Large artifacts should be provisioned on the
+server; normal request/response limits still apply.
 
 ## Caching
 
