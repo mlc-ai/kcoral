@@ -120,13 +120,8 @@ uploads and separate compilation/execution servers.
 
 ### Multi-GPU kernels and scripts
 
-Reserve 1–8 GPUs for a complete program with
-`client.execute(program, gpu_count=N)`. The program runs once with the full
-GPU set visible and can execute its existing Python or `torchrun` command.
-KCoral holds the set through process-tree cleanup; the script owns communication.
-Two standalone examples call NCCL all-reduce through PyTorch. Each file includes
-the kernel call, correctness checks, and the client Program. Uploads load
-definitions and files; `get_function` selects the entry point and `run` invokes it:
-
-- [One process controlling all GPUs](examples/multi_gpu_kernel.py).
-- [One worker process per GPU](examples/multi_gpu_kernel_multiprocess.py).
+Use `client.execute(program, gpu_count=N)` to run a program on 1–8 GPUs.
+Single- and multi-GPU programs share the same worker and release GPUs for `cpu_only` calls. Both standalone examples execute through `Program.run`:
+[one process controlling all GPUs](examples/multi_gpu_kernel.py) and
+[one worker per GPU](examples/multi_gpu_kernel_multiprocess.py).
+See the [multi-GPU guide](docs/client-guide/writing-a-program.md#run-a-multi-gpu-program).

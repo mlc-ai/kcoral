@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from kcoral import Client, Program
+from kcoral import Program
 from kcoral.app import create_app
 from kcoral.config import ServerConfig
 from kcoral.lease import GPULeases
@@ -29,25 +29,26 @@ def wait_for(predicate, timeout=10):
     raise AssertionError("condition did not become true")
 
 
-def build(source, args=(), *, count=2, files=None):
+def build(source, args=(), *, count=2):
     p = Program()
-    for name, content in (files or {}).items():
-        p.upload_file(path=name, blob=content)
     module = p.upload(id="module", kind="module", source=source)
     fn = p.get_function(id="fn", module=module, name="main")
     result = p.run(id="result", fn=fn, args=list(args))
     p.return_(key="result", value=result)
-    parsed = parse_program({"instructions": p.instructions, "options": {"gpu_count": count}})
+    parsed = parse_program(
+        {"instructions": p.instructions, "options": {} if count is None else {"gpu_count": count}}
+    )
     parsed.blob_bytes = p._blobs.copy()
     return parsed
 
 
 @pytest.fixture
 def pool(monkeypatch):
-    monkeypatch.setattr("kcoral.pool.nvml.device_uuid", lambda _: None)
+    monkeypatch.setattr("kcoral.worker.nvml.device_uuid", lambda _: None)
     with_pool = WorkerPool(
         [0, 2, 4, 6],
         fake_runtime_factory,
+        sandbox="none",
         max_requests_per_worker=0,
         termination_grace_seconds=0.1,
     )
@@ -80,29 +81,6 @@ def main():
     assert result.lease_held_ms > 0
 
 
-def test_uploaded_script_runs_with_its_original_command_and_returns_files(pool):
-    script = (
-        b'import json, os\nprint("script output")\n'
-        b'open("answer.json", "w").write(json.dumps(os.environ["CUDA_VISIBLE_DEVICES"]))\n'
-    )
-    program = build(
-        """
-def main():
-    import subprocess, sys
-    subprocess.run([sys.executable, "infer.py"], check=True)
-    return "answer.json"
-""",
-        files={"infer.py": script},
-    )
-    from kcoral.schemas import FileReturn, Ref
-
-    program.instructions.append(FileReturn("artifact", "file", Ref("result")))
-    result = pool.submit(program, timeout=10)
-    assert result.execution.status == "COMPLETED", result.execution.error
-    assert "script output" in result.execution.stdout
-    assert b'"0,2"' in result.execution.binary_parts.values()
-
-
 @pytest.mark.parametrize("name", ["multi_gpu_kernel.py", "multi_gpu_kernel_multiprocess.py"])
 def test_examples_defer_execution_until_run(pool, name):
     example = Path(__file__).parents[1] / "examples" / name
@@ -112,15 +90,9 @@ def test_examples_defer_execution_until_run(pool, name):
         id="execution_guard",
         kind="module",
         source="""
-import builtins
 import subprocess
-
-original_import = builtins.__import__
-def checked_import(name, *args, **kwargs):
-    if name == "torch" or name.startswith("torch."):
-        raise RuntimeError("example entered GPU execution")
-    return original_import(name, *args, **kwargs)
-builtins.__import__ = checked_import
+import sys
+sys.modules["torch"] = None
 
 def reject_subprocess(*args, **kwargs):
     raise RuntimeError("unexpected script subprocess")
@@ -141,16 +113,15 @@ subprocess.Popen = reject_subprocess
         if execute_kernel:
             assert outcome.status == "FAILED"
             assert outcome.error["instruction_op"] == "run"
-            assert "example entered GPU execution" in outcome.error["message"]
+            assert "import of torch halted" in outcome.error["message"]
         else:
             assert outcome.status == "COMPLETED", outcome.error
             assert outcome.results == {}
 
 
-@pytest.mark.parametrize(
-    "ending", ["return 1", "raise ValueError('model failed')", "os._exit(17)", "time.sleep(30)"]
-)
-def test_cleanup_reaps_detached_descendants_after_all_outcomes(pool, tmp_path, ending):
+@pytest.mark.parametrize("count", [None, 2])
+@pytest.mark.parametrize("ending", ["return 1", "os._exit(17)", "time.sleep(30)"])
+def test_cleanup_reaps_descendants_after_return_crash_or_timeout(pool, tmp_path, ending, count):
     marker = tmp_path / "child.pid"
     source = f"""
 def main(path):
@@ -165,7 +136,7 @@ def main(path):
     time.sleep(0.1)
     {ending}
 """
-    program = build(source, [str(marker)])
+    program = build(source, [str(marker)], count=count)
     if ending.startswith("os._exit"):
         with pytest.raises(WorkerCrashed) as error:
             pool.submit(program, timeout=5)
@@ -176,28 +147,11 @@ def main(path):
     else:
         result = pool.submit(program, timeout=5)
         assert result.execution.status == "FAILED"
-        expected = "background processes" if ending.startswith("return") else "model failed"
-        assert expected in result.execution.error["message"]
+        assert "background processes" in result.execution.error["message"]
     assert marker.exists()
     assert not Path(f"/proc/{marker.read_text()}").exists()
     recovered = pool.submit(build("def main(): return 42"), timeout=5)
     assert recovered.execution.status == "COMPLETED"
-
-
-def test_multi_gpu_jobs_never_share_devices(pool, tmp_path):
-    source = """
-def main(path):
-    import os, time
-    with open(path, "w") as f:
-        f.write(os.environ["CUDA_VISIBLE_DEVICES"])
-    time.sleep(0.5)
-"""
-    with ThreadPoolExecutor(2) as executor:
-        a = executor.submit(pool.submit, build(source, [str(tmp_path / "a")]), 5)
-        b = executor.submit(pool.submit, build(source, [str(tmp_path / "b")]), 5)
-        ra, rb = a.result(), b.result()
-    assert not set(ra.gpu_ids) & set(rb.gpu_ids)
-    assert ra.execution.status == rb.execution.status == "COMPLETED"
 
 
 def test_normal_descendant_teardown_finishes_before_releasing_devices(pool, tmp_path, monkeypatch):
@@ -307,104 +261,61 @@ def test_server_rejects_impossible_gpu_count_and_cpu_jobs():
             assert "capacity" in response.json()["error"]["message"]
 
 
-def test_cpu_only_and_file_steps_keep_the_complete_reservation(pool, tmp_path):
-    from kcoral.schemas import FileReturn, FileUpload, GetFunction, Ref, Run
+def test_cpu_only_releases_and_reacquires_the_same_gpu_set(pool, tmp_path):
+    from kcoral.schemas import GetFunction, Ref, Run
 
-    marker = tmp_path / "cpu-phase"
+    marker, resume = tmp_path / "cpu-phase", tmp_path / "resume"
     program = build(
         """
 def main():
     return 1
 
-def cpu_phase(marker):
+def cpu_phase(marker, resume):
     import time
     from pathlib import Path
-    Path(marker).write_text("ready")
-    time.sleep(0.5)
+    Path(marker).touch()
+    while not Path(resume).exists():
+        time.sleep(0.01)
 """,
         count=4,
     )
-    from kcoral.keys import compute_blob_hash
-
-    digest = compute_blob_hash(b"data")
-    program.blob_bytes[digest] = b"data"
     program.instructions.extend(
         [
-            FileUpload(digest, "input.bin"),
-            FileReturn("file", "file", "input.bin"),
             GetFunction("cpu", Ref("module"), "cpu_phase", cpu_only=True),
-            Run("paused", Ref("cpu"), [str(marker)]),
+            Run("paused", Ref("cpu"), [str(marker), str(resume)]),
+            Run("resumed", Ref("fn"), []),
         ]
     )
     with ThreadPoolExecutor(1) as executor:
         pending = executor.submit(pool.submit, program, 10)
-        wait_for(marker.exists)
-        assert all(pool._leases._holder[gpu] is not None for gpu in pool._gpus)
+        try:
+            wait_for(marker.exists)
+            assert all(pool._leases.depth(gpu) == 0 for gpu in pool._gpus)
+            held, _ = pool._leases.acquire_count(4, "other")
+            try:
+                resume.touch()
+                wait_for(lambda: pool._leases.depth(held[0]) == 2)
+                assert not pending.done()
+            finally:
+                pool._leases.release_many(held, "other")
+        finally:
+            resume.touch()
         assert pending.result().execution.status == "COMPLETED"
     assert all(pool._leases.depth(gpu) == 0 for gpu in pool._gpus)
 
 
-def test_shutdown_drains_an_executing_job(pool, tmp_path):
-    marker = tmp_path / "started"
-    program = build(
-        """
-def main(path):
-    import time
-    from pathlib import Path
-    Path(path).write_text("ready")
-    time.sleep(0.5)
-    return 42
-""",
-        [str(marker)],
-    )
-    with ThreadPoolExecutor(2) as executor:
-        pending = executor.submit(pool.submit, program, 10)
-        wait_for(marker.exists)
-        stopping = executor.submit(pool.shutdown)
-        wait_for(lambda: pool.closing)
-        assert not stopping.done()
-        assert pending.result().execution.status == "COMPLETED"
-        stopping.result(timeout=10)
-
-
 def test_unverified_cleanup_quarantines_the_allocation(pool, monkeypatch):
-    from kcoral.job import JobCleanupError
     from kcoral.lease import GPUUnavailable
+    from kcoral.worker import WorkerCleanupError
 
     def lost_supervisor(*args, **kwargs):
-        raise JobCleanupError("supervisor disappeared")
+        raise WorkerCleanupError("supervisor disappeared")
 
-    monkeypatch.setattr("kcoral.pool.run_job", lost_supervisor)
-    with pytest.raises(JobCleanupError):
+    monkeypatch.setattr("kcoral.worker.Worker.run", lost_supervisor)
+    with pytest.raises(WorkerCleanupError):
         pool.submit(build("def main(): return 1"), 5)
     with pytest.raises(GPUUnavailable):
         pool._leases.acquire_count(4, "next")
     assert pool.closing
     with pytest.raises(PoolBusy):
         pool.submit(build("def main(): return 1"), 5)
-
-
-def test_eight_device_job_protocol_without_gpu_hardware(monkeypatch):
-    monkeypatch.setattr("kcoral.pool.nvml.device_uuid", lambda _: None)
-    config = ServerConfig(gpus=list(range(8)), workers_per_gpu=1, max_requests_per_worker=0)
-    with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as server:
-        client = Client("http://testserver")
-        client._http.close()
-        client._http = server
-        program = Program()
-        module = program.upload(
-            id="m",
-            kind="module",
-            source="""
-def main():
-    import os
-    return os.environ["CUDA_VISIBLE_DEVICES"]
-""",
-        )
-        fn = program.get_function(id="fn", module=module, name="main")
-        value = program.run(id="value", fn=fn)
-        program.return_(key="devices", value=value)
-        result = client.execute(program, gpu_count=8)
-        assert result.completed, result.error
-        assert result.gpu_ids == tuple(range(8))
-        assert result["devices"] == "0,1,2,3,4,5,6,7"

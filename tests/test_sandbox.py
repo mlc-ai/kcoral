@@ -96,7 +96,9 @@ def test_optional_nsight_installation(monkeypatch, tmp_path, require_bubblewrap,
     monkeypatch.setattr(
         Path,
         "resolve",
-        lambda path, **kwargs: tmp_path if path == installation else original_resolve(path, **kwargs),
+        lambda path, **kwargs: (
+            tmp_path if path == installation else original_resolve(path, **kwargs)
+        ),
     )
     script = (
         f"/bin/sh {installation}/ncu && ! touch {installation}/unexpected-write"
@@ -145,6 +147,54 @@ def test_direct_worker_reports_bubblewrap_launch_failure(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name: executable)
     with pytest.raises(WorkerCrashed, match="failed during prepare"):
         Worker(None, cpu_runtime_factory, sandbox="bubblewrap", termination_grace_seconds=0.1)
+
+
+def test_multi_gpu_mounts_include_only_the_assigned_device_minors(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/bwrap")
+    monkeypatch.setattr(sandboxing.nvml, "device_minor_number", {0: 6, 2: 4}.__getitem__)
+    original_exists = Path.exists
+    nodes = {f"/dev/nvidia{i}" for i in range(8)}
+    monkeypatch.setattr(Path, "exists", lambda path: str(path) in nodes or original_exists(path))
+    instance = Sandbox()
+    try:
+        command = instance.command((0, 2))
+        devices = {command[i + 1] for i, arg in enumerate(command) if arg == "--dev-bind"}
+        assert nodes & devices == {"/dev/nvidia4", "/dev/nvidia6"}
+    finally:
+        instance.close()
+
+
+def test_explicit_gpu_set_preserves_filesystem_isolation(require_bubblewrap, tmp_path):
+    from kcoral.testing import fake_runtime_factory
+
+    hidden = tmp_path / "host-secret"
+    hidden.write_text("private")
+    allowed = tmp_path / "runtime"
+    allowed.mkdir()
+    (allowed / "data").write_text("shared")
+    pool = WorkerPool(
+        [0, 2],
+        fake_runtime_factory,
+        sandbox_readonly_paths=(allowed,),
+        max_requests_per_worker=0,
+    )
+    try:
+        program = parsed(
+            """
+def main(hidden, allowed):
+    from pathlib import Path
+    from kcoral import sandbox
+    return [sandbox.active(), Path(hidden).exists(), Path(allowed, "data").read_text()]
+""",
+            args=[str(hidden), str(allowed)],
+            cpu_only=False,
+        )
+        program.options["gpu_count"] = 2
+        outcome = pool.submit(program, timeout=15)
+        assert outcome.gpu_ids == (0, 2)
+        assert values(outcome.execution)["value"] == [True, False, "shared"]
+    finally:
+        pool.shutdown()
 
 
 @pytest.mark.parametrize("failure", ["missing", "launch", "timeout"])

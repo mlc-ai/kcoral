@@ -528,9 +528,9 @@ class Client:
         """Submit a program and decode the values it explicitly returns.
 
         :param program: Program built with the client-side :class:`Program`.
-        :param gpu_count: Reserve 1-8 GPUs for one complete program and its child
-            processes. The program executes once and owns the set until cleanup.
-            Omit to retain ordinary single-GPU instruction-level leasing.
+        :param gpu_count: Run once on 1-8 GPUs. CPU-only calls release the complete
+            set after synchronization; later GPU instructions reacquire it.
+            Omit to use the configured single-GPU workers.
         :param timeout_seconds: Requested execution limit in seconds; ``None``
             uses the server default. The server clamps it to its configured maximum.
         :param output_limit_bytes: Requested captured output limit per stream;

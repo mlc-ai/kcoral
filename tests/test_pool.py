@@ -626,10 +626,13 @@ def test_parent_waits_for_retiring_process_exit_before_releasing_gpu(tmp_path):
     reason = "request_limit"
 
     class Connection:
-        messages = deque([
-            {'__lease__': 'acquire'},
-            {'__outcome__': 'outcome', '__retire_reason__': reason},
-        ])
+        def __init__(self):
+            self.messages = deque(
+                [
+                    {"__lease__": "acquire"},
+                    {"__outcome__": "outcome", "__retire_reason__": reason},
+                ]
+            )
 
         def send(self, message):
             pass
@@ -662,32 +665,34 @@ def test_parent_waits_for_retiring_process_exit_before_releasing_gpu(tmp_path):
     assert not leases.held
 
 
-def test_cpu_timeout_waits_for_gpu_before_destroying_live_context():
+@pytest.mark.parametrize("gpu_ids", [(0,), (0, 2)])
+def test_cpu_timeout_waits_for_gpu_before_destroying_live_context(gpu_ids):
     from types import SimpleNamespace
 
-    leases = GPULeases([0])
+    leases = GPULeases(list(gpu_ids))
     peer = object()
-    leases.acquire(0, peer)
+    leases.acquire(gpu_ids[-1], peer)
     worker = object.__new__(Worker)
     worker.gpu_id = 0
+    worker._gpu_ids = gpu_ids
     worker._proc = SimpleNamespace(is_alive=lambda: True)
     worker._closing = threading.Event()
     observed = []
-    worker._kill = lambda: observed.append(leases._holder[0] is worker)
+    worker._kill = lambda: observed.append(all(leases._holder[gpu] is worker for gpu in gpu_ids))
     worker._start_process = lambda: None
     worker._initialize_process = lambda: None
     thread = threading.Thread(
-        target=worker._abandon_and_respawn, args=(leases, 'timeout'), daemon=True
+        target=worker._abandon_and_respawn, args=(leases, "timeout"), daemon=True
     )
     thread.start()
     try:
         deadline = time.monotonic() + 3
-        while leases.depth(0) < 2 and not observed:
+        while leases.depth(gpu_ids[-1]) < 2 and not observed:
             assert time.monotonic() < deadline
-            time.sleep(.005)
-        assert not observed, 'Context destruction must wait for the peer GPU stage'
+            time.sleep(0.005)
+        assert not observed, "Context destruction must wait for the peer GPU stage"
     finally:
-        leases.release(0, peer)
+        leases.release(gpu_ids[-1], peer)
         thread.join(timeout=3)
     assert not thread.is_alive()
     assert observed == [True]
