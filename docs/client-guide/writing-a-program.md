@@ -193,63 +193,33 @@ supported argument types, restrictions, and other ways to invoke the function.
 For a complete example that uploads a tensor, adds one on the GPU, and returns a
 NumPy array, {download}`download remote_function.py <../../examples/remote_function.py>`.
 
-## Run an existing multi-GPU script
+## Run a multi-GPU program
 
-Use `client.execute(program, gpu_count=N)` to run one complete program with
-1–8 GPUs reserved until all its processes exit. Upload the function definitions
-and required files, select the entry point with `get_function`, then invoke it
-with `run`. Put compilation, communication setup, kernel execution, and checks
-inside that function. Module uploads execute Python's top-level statements, so
-keep those statements limited to definitions and imports. KCoral does not
-initialize a communication group.
-
-For example, after uploading a module that defines `run_local`:
+Pass `gpu_count=N` to run the program once with 1–8 GPUs on one server.
+Upload definitions and files, then invoke the entry point with `run`:
 
 ```python
 fn = program.get_function(id="run_kernel", module=module, name="run_local")
 program.run(id="execution", fn=fn)
 program.return_file(key="report", path="result.json")
-result = client.execute(program, gpu_count=4, timeout_seconds=900)
+result = client.execute(program, gpu_count=2, timeout_seconds=120)
 print(result.gpu_ids, result.stdout, result.stderr)
 ```
 
-Two standalone files demonstrate NCCL, NVIDIA's collective communication
-library, summing inputs across GPUs and checking every device's output:
+Two standalone examples call NCCL, NVIDIA's collective communication library,
+and check the sum on every GPU:
 
-| Example | GPU execution | Submission |
-| --- | --- | --- |
-| [multi_gpu_kernel.py](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py) | One process uses `torch.cuda.nccl.all_reduce` for all GPUs | Uploads the function definition and calls it with `run` |
-| [multi_gpu_kernel_multiprocess.py](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel_multiprocess.py) | One worker per GPU uses `torch.distributed.all_reduce` | Uploads itself as an importable file and calls its function with `run` |
+- [One process controlling all GPUs](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py).
+- [One worker process per GPU](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel_multiprocess.py).
 
-Each file includes the kernel call, checks, and client Program. Run either with
-`--local` on visible local GPUs, or with `--url` and `--gpus` to submit to a
-server. Both need PyTorch with NCCL support on the execution machine. The
-multi-process version creates its own workers and communication group using
-a request-private rendezvous file, then joins every worker before returning.
-This demonstrates the process model; SGLang's custom kernels using inter-process
-GPU memory sharing need their own validation.
-
-Functions defined in a dynamic uploaded module are not importable worker targets
-for `multiprocessing.spawn`. The multi-process example uploads a real `.py` file,
-adds the request workspace to Python's import path, and imports `run_local`
-without calling it. `get_function` selects this imported function; `run` calls
-it to create and join the GPU workers directly. No extra script subprocess or
-`torchrun` launcher is needed. `gpu_count` only reserves devices; the script
-chooses how many processes to create.
-
-For an existing project, `upload_folder` can transfer its files. If it requires
-a command-line entry point, call `subprocess.run([...], check=True)` inside the
-function invoked by `run`. A dynamic module does not execute a script's
-`if __name__ == "__main__"` block.
-The server may clamp the requested timeout to its configured maximum.
-
-The program can contain several `run` instructions and reuse interpreter-local
-objects within the request. A script's subprocess state is not automatically a
-register, and no request retains the model for the next request. An explicit
-`gpu_count=1` gives the same whole-program lifetime on one device; omit the
-option to keep ordinary instruction-level GPU leasing. See the
-[reservation protocol](protocol.md#whole-program-gpu-reservations) for cleanup,
-queueing and direct-server requirements.
+Both include the client Program. Use `--url URL --gpus 2` for remote execution,
+or `--local` for visible local GPUs. The execution machine needs PyTorch with
+NCCL support. Uploading only loads definitions; `run` starts the computation.
+For `multiprocessing.spawn`, workers must come from an importable `.py` file,
+as in the second example. The script creates its own processes and communication
+group. A `cpu_only` call releases the entire GPU set after synchronization; later
+GPU instructions reacquire the same set. See the [execution protocol](protocol.md#multi-gpu-execution)
+for device visibility, cleanup, and direct-server requirements.
 
 ## Work with tensors and files
 
