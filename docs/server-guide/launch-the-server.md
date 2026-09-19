@@ -60,7 +60,8 @@ See [logs](logging.md) to follow a request and diagnose worker replacement.
 
 On Linux, install [bubblewrap](https://github.com/containers/bubblewrap) with
 support for `--disable-userns` and allow unprivileged user namespaces on the
-host. Filesystem isolation is enabled by default:
+host. The server checks whether isolation can start before creating workers;
+the default configuration requests it:
 
 ```bash
 # A fresh isolated process for each program (the default request limit).
@@ -73,7 +74,7 @@ kcoral --device cpu --num-workers 2 --max-requests-per-worker 0
 kcoral --gpus 0 --workers-per-gpu 2
 ```
 
-Each worker gets a separate filesystem view. Its only writable ordinary file
+When enabled, each worker gets a separate filesystem view. Its only writable ordinary file
 tree is `/work`; other workers' directories, the server's upload cache and log
 directories, and the host home directory are not mounted. The operating system
 rejects writes outside this tree, including writes from compiler subprocesses.
@@ -129,11 +130,22 @@ mechanism. The sandbox exposes the selected NVIDIA device and required control
 devices; custom driver/toolchain installations may require additional read-only
 runtime paths.
 
-Missing bubblewrap, denied namespace creation, or failure to construct the
-requested sandbox prevents worker startup. There is no automatic fallback to
-unisolated execution. Set `--sandbox none`, or `ServerConfig(sandbox="none")`
-in Python, to explicitly disable isolation. `--sandbox bubblewrap` and
-`ServerConfig(sandbox="bubblewrap")` explicitly select the default mode.
+Before creating the worker pool, the server runs a short Python process with
+the same bubblewrap options and mounts as the workers. The check covers each
+distinct selected GPU configuration without initializing CUDA. A missing binary,
+denied namespace creation, mount failure, or a probe that does not finish within
+10 seconds disables isolation for this server run. The server emits a
+`RuntimeWarning` and a `sandbox_disabled` log event at `WARNING`, with the failure
+reason, and continues starting workers without filesystem isolation.
+
+The check runs only at server startup. Requests and worker replacements keep
+the selected mode; restarting the server checks again. `server_started.config`
+records the requested setting and `pool_ready.sandbox` records the effective
+mode. Runtime initialization errors after a successful probe still fail startup.
+
+Set `--sandbox none`, or `ServerConfig(sandbox="none")` in Python, to explicitly
+disable isolation and skip the check. `--sandbox bubblewrap` and
+`ServerConfig(sandbox="bubblewrap")` select the default startup check.
 
 
 ## Configuration

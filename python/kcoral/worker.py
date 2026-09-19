@@ -602,3 +602,27 @@ def _signal_process_group(process_group_id: int, sig: signal.Signals) -> bool:
         return False
     except PermissionError:
         return True  # the group exists but a member is not signalable
+
+
+def _sandbox_main() -> None:
+    """Private entry point for ``python -m kcoral.worker`` inside bubblewrap."""
+    from multiprocessing.connection import Connection
+
+    conn = Connection(os.dup(0))
+    with open(os.devnull, "rb") as null:
+        os.dup2(null.fileno(), 0)
+    sandboxing.activate()
+    # Both sides are trusted KCoral processes and use the existing protocol.
+    device, factory, max_requests = conn.recv()
+    worker_main(
+        device,
+        conn,
+        factory,
+        max_requests,
+        capture_dir=f"{sandboxing.WORKSPACE}/{sandboxing.PRIVATE}/output",
+        isolated=True,
+    )
+
+
+if __name__ == "__main__":
+    _sandbox_main()

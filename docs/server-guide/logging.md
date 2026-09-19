@@ -9,6 +9,12 @@ writes it, so one file holds a request's whole history: `request_received`,
 worker that took it, and `request_finished`. One that never comes back stops
 after the record naming its worker.
 
+If the startup check cannot launch bubblewrap, `sandbox_disabled` records the
+reason at `WARNING` and the server continues without filesystem isolation. A
+Python `RuntimeWarning` also reports this when event logging is disabled.
+`pool_ready.sandbox` records the actual mode (`bubblewrap` or `none`), while
+`server_started.config.sandbox` is the requested mode.
+
 `request_finished` carries a `finish_reason`: why the request ended when it did.
 
 | `finish_reason` | what happened | worker |

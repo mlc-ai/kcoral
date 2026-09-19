@@ -4,12 +4,14 @@ import json
 import os
 import shutil
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
 from kcoral import Program
+from kcoral import sandbox as sandboxing
 from kcoral.client import _decode_value
 from kcoral.cpu_runtime import cpu_runtime_factory
 from kcoral.events import EventLogger
@@ -74,19 +76,140 @@ def worker(require_bubblewrap):
         instance.close()
 
 
-def test_missing_bubblewrap_fails_closed(monkeypatch):
+def test_direct_worker_reports_missing_bubblewrap(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name: None)
     with pytest.raises(ValueError, match="install bubblewrap"):
         Worker(None, cpu_runtime_factory)
 
 
-def test_failed_sandbox_launch_does_not_fall_back(monkeypatch):
+def test_direct_worker_reports_bubblewrap_launch_failure(monkeypatch):
     executable = shutil.which("false")
     if executable is None:
         pytest.skip("requires the false utility")
     monkeypatch.setattr(shutil, "which", lambda name: executable)
     with pytest.raises(WorkerCrashed, match="failed during prepare"):
         Worker(None, cpu_runtime_factory, sandbox="bubblewrap", termination_grace_seconds=0.1)
+
+
+@pytest.mark.parametrize("failure", ["missing", "launch", "timeout"])
+def test_server_startup_disables_unavailable_sandbox_and_warns(monkeypatch, tmp_path, failure):
+    from fastapi.testclient import TestClient
+
+    from kcoral import ServerConfig
+    from kcoral.app import create_app
+
+    if failure == "missing":
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        reason = "install bubblewrap"
+    else:
+        executable = tmp_path / "bwrap"
+        executable.write_text(
+            "#!/bin/sh\necho 'namespace creation denied' >&2\nexit 1\n"
+            if failure == "launch"
+            else "#!/bin/sh\nexec sleep 60\n"
+        )
+        executable.chmod(0o700)
+        monkeypatch.setattr(shutil, "which", lambda name: str(executable))
+        reason = "namespace creation denied" if failure == "launch" else "timed out"
+    calls = []
+    workspaces = []
+    original_probe = sandboxing.probe
+    original_prepare = Sandbox.prepare
+
+    def probe(gpu_ids, readonly_paths):
+        calls.append((gpu_ids, readonly_paths))
+        return original_probe(gpu_ids, readonly_paths, timeout=0.1 if failure == "timeout" else 10)
+
+    def prepare(instance):
+        workspaces.append(instance.root)
+        return original_prepare(instance)
+
+    monkeypatch.setattr(sandboxing, "probe", probe)
+    monkeypatch.setattr(Sandbox, "prepare", prepare)
+    config = ServerConfig(
+        device="cpu",
+        num_workers=2,
+        max_requests_per_worker=1,
+        log_dir=tmp_path / "logs",
+        log_console=False,
+        disk_cache_capacity_mbytes=0,
+    )
+    app = create_app(config)
+    with pytest.warns(RuntimeWarning, match="filesystem isolation is disabled") as caught:
+        with TestClient(app) as client:
+            assert client.get("/health").status_code == 200
+            assert app.state.sandbox == "none"
+            for _ in range(3):
+                result = app.state.pool.submit(parsed("def main(): return 7"), 15, 15)
+                assert values(result.execution)["value"] == 7
+            assert all(worker._sandbox_mode == "none" for worker in app.state.pool._workers)
+    assert len(caught) == 1 and reason in str(caught[0].message)
+    assert calls == [([None], ())]  # no repeated probes for requests or replacements
+    assert config.sandbox == "bubblewrap"  # the next server start will check again
+    assert all(not root.exists() for root in workspaces)
+    events = [
+        json.loads(line)
+        for line in next((tmp_path / "logs").glob("runs/*/events.jsonl")).read_text().splitlines()
+    ]
+    disabled = [event for event in events if event["event"] == "sandbox_disabled"]
+    assert len(disabled) == 1 and disabled[0]["level"] == "WARNING"
+    assert reason in disabled[0]["error"]
+    assert next(event for event in events if event["event"] == "pool_ready")["sandbox"] == "none"
+
+
+def test_explicitly_disabled_sandbox_skips_startup_probe(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from kcoral import ServerConfig
+    from kcoral.app import create_app
+
+    monkeypatch.setattr(sandboxing, "probe", lambda *args: pytest.fail("unexpected probe"))
+    app = create_app(ServerConfig(device="cpu", sandbox="none", disk_cache_capacity_mbytes=0))
+    with warnings.catch_warnings(record=True) as caught:
+        with TestClient(app) as client:
+            assert client.get("/health").status_code == 200
+            assert app.state.sandbox == "none"
+    assert not [warning for warning in caught if "bubblewrap" in str(warning.message)]
+
+
+def test_server_rechecks_bubblewrap_on_next_start(require_bubblewrap, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from kcoral import ServerConfig
+    from kcoral.app import create_app
+
+    config = ServerConfig(device="cpu", log_console=False, disk_cache_capacity_mbytes=0)
+    app = create_app(config)
+    with monkeypatch.context() as unavailable:
+        unavailable.setattr(shutil, "which", lambda name: None)
+        with pytest.warns(RuntimeWarning, match="filesystem isolation is disabled"):
+            with TestClient(app):
+                assert app.state.sandbox == "none"
+    with TestClient(app):
+        assert app.state.sandbox == "bubblewrap"
+        assert app.state.pool._workers[0]._sandbox is not None
+    assert config.sandbox == "bubblewrap"
+
+
+def test_successful_probe_does_not_hide_worker_runtime_failures(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from kcoral import ServerConfig
+    from kcoral import app as app_module
+
+    monkeypatch.setattr(sandboxing, "probe", lambda *args: None)
+
+    def fail_pool(*args, **kwargs):
+        assert kwargs["sandbox"] == "bubblewrap"
+        raise RuntimeError("runtime initialization failed")
+
+    monkeypatch.setattr(app_module, "WorkerPool", fail_pool)
+    app = app_module.create_app(ServerConfig(device="cpu", disk_cache_capacity_mbytes=0))
+    with warnings.catch_warnings(record=True) as caught:
+        with pytest.raises(RuntimeError, match="runtime initialization failed"):
+            with TestClient(app):
+                pass
+    assert not [warning for warning in caught if "bubblewrap" in str(warning.message)]
 
 
 def test_partial_pool_startup_closes_already_created_sandboxes(require_bubblewrap, monkeypatch):
@@ -437,12 +560,22 @@ def test_workspace_is_removed_on_shutdown(worker):
     assert not root.exists() and not worker._proc.is_alive()
 
 
-def test_http_uploads_and_logging_use_isolated_reused_worker(require_bubblewrap, tmp_path):
+def test_http_uploads_and_logging_use_isolated_reused_worker(
+    require_bubblewrap, tmp_path, monkeypatch
+):
     from fastapi.testclient import TestClient
 
     from kcoral import ServerConfig
     from kcoral.app import create_app
 
+    calls = []
+    original_probe = sandboxing.probe
+
+    def probe(gpu_ids, readonly_paths):
+        calls.append((gpu_ids, readonly_paths))
+        return original_probe(gpu_ids, readonly_paths)
+
+    monkeypatch.setattr(sandboxing, "probe", probe)
     cache = tmp_path / "cache"
     config = ServerConfig(
         device="cpu",
@@ -454,6 +587,7 @@ def test_http_uploads_and_logging_use_isolated_reused_worker(require_bubblewrap,
     )
     app = create_app(config)
     with TestClient(app) as client:
+        assert app.state.sandbox == "bubblewrap"
         original_pid = app.state.pool._workers[0].pid
         for data in (b"first", b"second"):
             program = parsed(
@@ -496,6 +630,8 @@ def main(cache):
     log = next((tmp_path / "logs").glob("runs/*/events.jsonl")).read_text()
     assert '"sandbox":"bubblewrap"' in log
     assert "request_finished" in log
+    assert calls == [([None], ())]
+    assert "sandbox_disabled" not in log
 
 
 @pytest.fixture
@@ -508,6 +644,7 @@ def gpu_sandbox(require_bubblewrap, tmp_path):
     readonly = tuple(
         Path(p) for p in os.environ.get("KCORAL_SANDBOX_READONLY_PATHS", "").split(os.pathsep) if p
     )
+    sandboxing.probe([gpu_id], readonly)
     events = EventLogger(tmp_path / "events", console=True)
     instance = Worker(
         gpu_id,

@@ -12,6 +12,7 @@ import gc
 import importlib
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,74 @@ _DIRECTORIES = (
     "output",
     "shm",
 )
+
+
+class SandboxUnavailable(RuntimeError):
+    """The requested bubblewrap environment could not start its probe."""
+
+
+def probe(
+    gpu_ids: list[int | None],
+    readonly_paths: tuple[Path, ...] = (),
+    *,
+    timeout: float = 10.0,
+) -> None:
+    """Try the worker's mounts and namespaces before starting the server pool.
+
+    Run a short Python process for each distinct device configuration, without
+    initializing CUDA or a worker runtime. Always reclaim the probe workspace.
+    """
+    sandbox = None
+    marker = b"kcoral-sandbox-ready"
+    program = (
+        sys.executable,
+        "-I",
+        "-S",
+        "-c",
+        "import os; assert os.getcwd() == '/work'; "
+        "open('.kcoral/probe', 'w').close(); print('kcoral-sandbox-ready')",
+    )
+    try:
+        sandbox = Sandbox(readonly_paths)
+        for gpu_id in dict.fromkeys(gpu_ids):
+            with subprocess.Popen(
+                sandbox.command(gpu_id, program=program),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+            ) as process:
+                try:
+                    output, _ = process.communicate(timeout=timeout)
+                except subprocess.TimeoutExpired as exc:
+                    # Also stop helpers if startup stalled before bubblewrap
+                    # finished creating its private PID namespace.
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.kill()
+                    process.communicate()
+                    raise SandboxUnavailable(
+                        f"bubblewrap startup probe timed out after {timeout}s"
+                    ) from exc
+                if process.returncode != 0 or marker not in output.splitlines():
+                    detail = output[-8192:].decode("utf-8", errors="replace").strip()
+                    raise SandboxUnavailable(
+                        f"bubblewrap startup probe exited with status {process.returncode}: "
+                        f"{detail or 'no readiness confirmation'}"
+                    )
+    except (OSError, ValueError) as exc:
+        raise SandboxUnavailable(str(exc)) from exc
+    finally:
+        if sandbox is not None:
+            try:
+                sandbox.close()
+            except OSError as exc:
+                raise SandboxUnavailable(
+                    f"cannot clean up bubblewrap startup probe: {exc}"
+                ) from exc
 
 
 def active() -> bool:
@@ -94,7 +163,7 @@ class Sandbox:
     def close(self) -> None:
         self._directory.cleanup()
 
-    def command(self, gpu_id: int | None) -> list[str]:
+    def command(self, gpu_id: int | None, *, program: tuple[str, ...] | None = None) -> list[str]:
         command = [
             self.executable,
             "--unshare-all",
@@ -181,9 +250,7 @@ class Sandbox:
             "--remount-ro",
             "/",
             "--",
-            sys.executable,
-            "-m",
-            "kcoral.sandbox_worker",
+            *(program or (sys.executable, "-m", "kcoral.worker")),
         ]
         return command
 
