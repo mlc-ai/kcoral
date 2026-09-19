@@ -1,6 +1,7 @@
 """Real process supervision and scheduling, using a GPU-free execution runtime."""
 
 import json
+import runpy
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -100,6 +101,50 @@ def main():
     assert result.execution.status == "COMPLETED", result.execution.error
     assert "script output" in result.execution.stdout
     assert b'"0,2"' in result.execution.binary_parts.values()
+
+
+@pytest.mark.parametrize("name", ["multi_gpu_kernel.py", "multi_gpu_kernel_multiprocess.py"])
+def test_examples_defer_execution_until_run(pool, name):
+    example = Path(__file__).parents[1] / "examples" / name
+    program = runpy.run_path(str(example))["build_program"]()
+    guard = Program()
+    guard.upload(
+        id="execution_guard",
+        kind="module",
+        source="""
+import builtins
+import subprocess
+
+original_import = builtins.__import__
+def checked_import(name, *args, **kwargs):
+    if name == "torch" or name.startswith("torch."):
+        raise RuntimeError("example entered GPU execution")
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = checked_import
+
+def reject_subprocess(*args, **kwargs):
+    raise RuntimeError("unexpected script subprocess")
+subprocess.Popen = reject_subprocess
+""",
+    )
+    instructions = guard.instructions + program.instructions
+    run_index = next(i for i, inst in enumerate(instructions) if inst["op"] == "run")
+    for execute_kernel in (False, True):
+        parsed = parse_program(
+            {
+                "instructions": instructions if execute_kernel else instructions[:run_index],
+                "options": {"gpu_count": 2},
+            }
+        )
+        parsed.blob_bytes = program._blobs.copy()
+        outcome = pool.submit(parsed, timeout=10).execution
+        if execute_kernel:
+            assert outcome.status == "FAILED"
+            assert outcome.error["instruction_op"] == "run"
+            assert "example entered GPU execution" in outcome.error["message"]
+        else:
+            assert outcome.status == "COMPLETED", outcome.error
+            assert outcome.results == {}
 
 
 @pytest.mark.parametrize(

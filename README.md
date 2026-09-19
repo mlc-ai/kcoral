@@ -125,7 +125,8 @@ Reserve 1–8 GPUs for a complete program with
 GPU set visible and can execute its existing Python or `torchrun` command.
 KCoral holds the set through process-tree cleanup; the script owns communication.
 Two standalone examples call NCCL all-reduce through PyTorch. Each file includes
-the kernel call, correctness checks, and the client Program:
+the kernel call, correctness checks, and the client Program. Uploads load
+definitions and files; `get_function` selects the entry point and `run` invokes it:
 
 - [One process controlling all GPUs](examples/multi_gpu_kernel.py).
 - [One worker process per GPU](examples/multi_gpu_kernel_multiprocess.py).

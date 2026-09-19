@@ -467,7 +467,8 @@ The script must satisfy any device-memory, peer-access, and topology requirement
 See the [single-process](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py)
 and [one-process-per-GPU](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel_multiprocess.py)
 examples. Each contains a library all-reduce kernel call, correctness checks,
-and a client Program in one file. Large artifacts should be provisioned on the
+and a client Program in one file. Both load definitions during upload and invoke
+their entry point explicitly with `run`. Large artifacts should be provisioned on the
 server; normal request/response limits still apply.
 
 ## Caching

@@ -196,16 +196,19 @@ NumPy array, {download}`download remote_function.py <../../examples/remote_funct
 ## Run an existing multi-GPU script
 
 Use `client.execute(program, gpu_count=N)` to run one complete program with
-1–8 GPUs reserved until all its processes exit. A Python module upload executes
-its top-level code, so it can contain the kernel's compilation, communication
-setup, execution, and checks directly. No launcher function, `get_function`, or
-`run` is required. For an existing project, `upload_folder` can transfer its
-files and the module can call `subprocess.run([...], check=True)` with its usual
-command. KCoral does not initialize a communication group.
+1–8 GPUs reserved until all its processes exit. Upload the function definitions
+and required files, select the entry point with `get_function`, then invoke it
+with `run`. Put compilation, communication setup, kernel execution, and checks
+inside that function. Module uploads execute Python's top-level statements, so
+keep those statements limited to definitions and imports. KCoral does not
+initialize a communication group.
 
-For example, the final submission is:
+For example, after uploading a module that defines `run_local`:
 
 ```python
+fn = program.get_function(id="run_kernel", module=module, name="run_local")
+program.run(id="execution", fn=fn)
+program.return_file(key="report", path="result.json")
 result = client.execute(program, gpu_count=4, timeout_seconds=900)
 print(result.gpu_ids, result.stdout, result.stderr)
 ```
@@ -215,8 +218,8 @@ library, summing inputs across GPUs and checking every device's output:
 
 | Example | GPU execution | Submission |
 | --- | --- | --- |
-| [multi_gpu_kernel.py](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py) | One process uses `torch.cuda.nccl.all_reduce` for all GPUs | Uploads the execution code as a module |
-| [multi_gpu_kernel_multiprocess.py](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel_multiprocess.py) | One worker per GPU uses `torch.distributed.all_reduce` | Uploads itself as a file and starts its Python entry point |
+| [multi_gpu_kernel.py](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py) | One process uses `torch.cuda.nccl.all_reduce` for all GPUs | Uploads the function definition and calls it with `run` |
+| [multi_gpu_kernel_multiprocess.py](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel_multiprocess.py) | One worker per GPU uses `torch.distributed.all_reduce` | Uploads itself as an importable file and calls its function with `run` |
 
 Each file includes the kernel call, checks, and client Program. Run either with
 `--local` on visible local GPUs, or with `--url` and `--gpus` to submit to a
@@ -226,11 +229,18 @@ a request-private rendezvous file, then joins every worker before returning.
 This demonstrates the process model; SGLang's custom kernels using inter-process
 GPU memory sharing need their own validation.
 
-An uploaded module is not a script entry point: its `__main__` guard does not
-run, and functions defined in its dynamic namespace are not importable worker
-targets for `multiprocessing.spawn`. Upload a real `.py` file and run it with
-Python for such programs, as the multi-process example does. `gpu_count` only
-reserves devices; the script chooses how many processes to create.
+Functions defined in a dynamic uploaded module are not importable worker targets
+for `multiprocessing.spawn`. The multi-process example uploads a real `.py` file,
+adds the request workspace to Python's import path, and imports `run_local`
+without calling it. `get_function` selects this imported function; `run` calls
+it to create and join the GPU workers directly. No extra script subprocess or
+`torchrun` launcher is needed. `gpu_count` only reserves devices; the script
+chooses how many processes to create.
+
+For an existing project, `upload_folder` can transfer its files. If it requires
+a command-line entry point, call `subprocess.run([...], check=True)` inside the
+function invoked by `run`. A dynamic module does not execute a script's
+`if __name__ == "__main__"` block.
 The server may clamp the requested timeout to its configured maximum.
 
 The program can contain several `run` instructions and reuse interpreter-local

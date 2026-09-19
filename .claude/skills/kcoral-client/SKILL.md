@@ -179,19 +179,24 @@ work.
 Pass `Client.execute(program, gpu_count=N)` for 1-8 GPUs on one direct server.
 The program executes once in a fresh interpreter with the entire GPU set
 visible. The script can use several devices or launch `torchrun`; KCoral does
-not inject rank variables or initialize communication groups. A Python module
-upload executes top-level statements: place compilation and kernel execution
-directly in its source, without a launcher function or `get_function`/`run`.
-For existing scripts, upload their files and call their normal command with
-`subprocess.run(..., check=True)`. Return logs or files and preinstall dependencies.
+not inject rank variables or initialize communication groups. Upload definitions
+and files, select an entry point with `get_function`, then invoke it with `run`.
+Put compilation, communication setup, and kernel execution inside the function.
+Module uploads execute top-level statements, so do not call the kernel or launch
+workers at module scope. For existing command-line scripts, upload their files
+and call `subprocess.run(..., check=True)` inside the function invoked by `run`.
+Return logs or files and preinstall dependencies.
 See `examples/multi_gpu_kernel.py`: a precompiled NCCL all-reduce kernel call,
 correctness checks, and client Program in one standalone file. It uses PyTorch's
 single-process NCCL interface, without a process group or external launcher.
 `examples/multi_gpu_kernel_multiprocess.py` provides a second standalone example
-with one GPU worker per process. It uploads itself as a real file and invokes
-its Python entry point, so `multiprocessing.spawn` can import its worker function.
-Do not upload a spawn-based script as a dynamic module: its `__main__` guard
-will not run and its worker definitions are not importable in child processes.
+with one GPU worker per process. It uploads itself as a real file, adds the
+workspace to Python's import path, and imports its `run_local` function.
+`get_function` selects that function and `run` calls it to create and join the
+workers directly, without an extra script subprocess. `multiprocessing.spawn`
+can import the worker from the file. Worker functions defined only in a dynamic
+uploaded module are not importable in child processes, and a dynamic module
+does not execute a script's `__main__` guard.
 
 An explicit count of 1 also reserves the device for the complete program.
 Omitting the option preserves existing single-GPU instruction-level leasing.
