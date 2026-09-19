@@ -50,10 +50,90 @@ explains how to pass a compiled library between them.
 The CPU compilation service does not provide general GPU execution.
 
 `0.0.0.0` listens on every network interface. The default `127.0.0.1` listens
-only on this machine. Workers execute uploaded Python code with the server's
-permissions; a request working directory does not isolate that code from the host.
+only on this machine. Disabling filesystem isolation lets workers execute
+uploaded Python code with the server's permissions; a request working directory
+alone does not isolate that code from the host.
 
 See [logs](logging.md) to follow a request and diagnose worker replacement.
+
+## Isolate worker files with bubblewrap
+
+On Linux, install [bubblewrap](https://github.com/containers/bubblewrap) with
+support for `--disable-userns` and allow unprivileged user namespaces on the
+host. Filesystem isolation is enabled by default:
+
+```bash
+# A fresh isolated process for each program (the default request limit).
+kcoral --device cpu --num-workers 2
+
+# Reuse an isolated process, clearing its files after each program.
+kcoral --device cpu --num-workers 2 --max-requests-per-worker 0
+
+# The same isolation backend supports GPU workers.
+kcoral --gpus 0 --workers-per-gpu 2
+```
+
+Each worker gets a separate filesystem view. Its only writable ordinary file
+tree is `/work`; other workers' directories, the server's upload cache and log
+directories, and the host home directory are not mounted. The operating system
+rejects writes outside this tree, including writes from compiler subprocesses.
+Python installations, system libraries, system device information and approved
+dependencies remain readable. A private process view prevents inspecting other
+workers through `/proc`. Network access is disabled.
+
+The parent owns the backing directory. A program's file uploads and relative
+paths resolve beneath `/work`. It is emptied between requests even when the
+process is reused, so uploading the same path in successive programs creates
+independent files. The interpreter and GPU context can remain alive. File and
+folder returns keep their existing instruction-time snapshot semantics.
+
+`/work/.kcoral` is reserved for runtime files and cannot be an upload
+destination. Home, temporary files, shared-memory files, compiler caches,
+uploaded libraries and captured output live below it. `/tmp`, `/var/tmp` and
+`/dev/shm` refer into this private tree. Request-local caches are cleared;
+the front-end upload cache is unaffected. Uploaded dynamic libraries are not
+retained across sandboxed requests.
+
+For dependencies installed outside the interpreter and system directories,
+add only their necessary runtime paths:
+
+```bash
+kcoral --sandbox bubblewrap \
+  --sandbox-readonly-path /opt/custom-compiler \
+  --sandbox-readonly-path /opt/custom-python-packages
+```
+
+These paths are also added to the worker's Python module search path when they
+are directories. Every file under an approved path becomes readable to every
+worker. Do not approve private data, other workspaces, or broad host directories.
+Run from a regular package installation; editable dependencies may need their
+source and native-library directories approved explicitly.
+
+This feature assumes **trusted programs**. It limits filesystem access; it
+does not make arbitrary Python or native code in one interpreter mutually
+untrusted, provide GPU memory isolation, or change upload-cache authorization.
+Programs must finish their background work before returning. Before reuse,
+KCoral removes workspace imports and checks for remaining Python/native threads,
+child processes, open workspace files and workspace-backed memory mappings.
+If cleanup cannot be confirmed, it retires the worker with
+`finish_reason="sandbox_cleanup"` instead of exposing the next program's files.
+Lazy dependency initialization that leaves new threads can also cause retirement.
+Libraries that remain mapped after unloading also retire the process, including
+libraries built with the linker's `-z nodelete` option.
+
+GPU device files and the GPU worker's private `/proc` filesystem are approved
+kernel interfaces, not ordinary writable files. NVIDIA drivers can require a
+writable `/proc` mount to initialize CUDA. GPU isolation still relies on the
+existing device selection and lease
+mechanism. The sandbox exposes the selected NVIDIA device and required control
+devices; custom driver/toolchain installations may require additional read-only
+runtime paths.
+
+Missing bubblewrap, denied namespace creation, or failure to construct the
+requested sandbox prevents worker startup. There is no automatic fallback to
+unisolated execution. Set `--sandbox none`, or `ServerConfig(sandbox="none")`
+in Python, to explicitly disable isolation. `--sandbox bubblewrap` and
+`ServerConfig(sandbox="bubblewrap")` explicitly select the default mode.
 
 
 ## Configuration
@@ -79,6 +159,8 @@ access to its GPU while it executes or measures GPU work.
 | `--workers-per-gpu` | `8` | — | `workers_per_gpu`, used in GPU mode |
 | `--max-requests-per-worker` | `1` | — | `max_requests_per_worker`; `0` reuses workers |
 | `--worker-termination-grace-seconds` | `5` | — | `worker_termination_grace_seconds` |
+| `--sandbox` | `bubblewrap` | — | `sandbox`; `none` explicitly disables filesystem isolation |
+| `--sandbox-readonly-path` | No additional paths | — | `sandbox_readonly_paths`, a list of paths; repeatable |
 
 `--gpus` takes comma-separated physical device numbers such as `0,1`. Workers
 select their devices from this option, so setting `CUDA_VISIBLE_DEVICES` on the

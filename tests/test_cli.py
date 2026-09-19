@@ -21,6 +21,31 @@ def test_defaults():
     assert config.log_dir == Path("logs")
     assert config.max_requests_per_worker == 1
     assert config.disk_cache_capacity_mbytes == 16 * 1024
+    assert config.sandbox == "bubblewrap"
+    assert config.sandbox_readonly_paths == []
+
+
+def test_filesystem_sandbox_flags():
+    config = parse(
+        [
+            "--sandbox",
+            "bubblewrap",
+            "--sandbox-readonly-path",
+            "/opt/compiler",
+            "--sandbox-readonly-path",
+            "/opt/dependencies",
+            "--max-requests-per-worker",
+            "0",
+        ]
+    )
+    assert config.sandbox == "bubblewrap"
+    assert config.sandbox_readonly_paths == [Path("/opt/compiler"), Path("/opt/dependencies")]
+    assert config.max_requests_per_worker == 0
+    assert _describe(config)["sandbox_readonly_paths"] == ["/opt/compiler", "/opt/dependencies"]
+    with pytest.raises(SystemExit, match="requires --sandbox"):
+        parse(["--sandbox", "none", "--sandbox-readonly-path", "/opt/compiler"])
+    assert parse(["--sandbox", "none"]).sandbox == "none"
+    assert parse(["--sandbox-readonly-path", "/opt/compiler"]).sandbox == "bubblewrap"
 
 
 def test_host_default_and_flag():

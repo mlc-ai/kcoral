@@ -17,6 +17,7 @@ after the record naming its worker.
 | `program_failed` | the program raised; `error_kind` and `instruction_index` say where | keeps serving |
 | `request_limit` | `--max-requests-per-worker` reached, after answering | replaced |
 | `poisoned_context` | cleanup after the program failed, after answering | replaced |
+| `sandbox_cleanup` | sandbox resources survived the request or workspace cleanup failed | killed, replaced |
 | `timeout` | no answer inside `timeout_seconds` | killed, replaced |
 | `crashed` | the process exited mid-request; `exitcode` says how | killed, replaced |
 | `no_worker` | saturated, nothing ran | untouched |

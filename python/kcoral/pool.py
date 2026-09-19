@@ -23,6 +23,7 @@ from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 
 from .events import EventLogger
 from .lease import GPULeases, NoopLeases, Ticket
@@ -133,6 +134,8 @@ class WorkerPool:
         max_requests_per_worker: int = 1,
         cpu_workers: int | None = None,
         events: EventLogger | None = None,
+        sandbox: str = "bubblewrap",
+        sandbox_readonly_paths: tuple[Path, ...] = (),
     ) -> None:
         if max_requests_per_worker < 0:
             raise ValueError("max_requests_per_worker must be non-negative")
@@ -158,18 +161,26 @@ class WorkerPool:
         self._active = 0
         self._shutdown_lock = threading.Lock()
         self._shutdown_done = False
-        self._workers = [
-            Worker(
-                device,
-                runtime_factory,
-                termination_grace_seconds=termination_grace_seconds,
-                max_requests=max_requests_per_worker,
-                index=index,
-                events=self._events,
-                capture_dir=str(capture_dir) if capture_dir is not None else None,
-            )
-            for device, index in devices
-        ]
+        self._workers = []
+        try:
+            for device, index in devices:
+                self._workers.append(
+                    Worker(
+                        device,
+                        runtime_factory,
+                        termination_grace_seconds=termination_grace_seconds,
+                        max_requests=max_requests_per_worker,
+                        index=index,
+                        events=self._events,
+                        capture_dir=str(capture_dir) if capture_dir is not None else None,
+                        sandbox=sandbox,
+                        sandbox_readonly_paths=sandbox_readonly_paths,
+                    )
+                )
+        except BaseException:
+            for worker in self._workers:
+                worker.close()
+            raise
         self._gpus = list(dict.fromkeys(gpus))
         self._idle = IdleWorkers(self._workers)
         self._leases = NoopLeases() if cpu_workers is not None else GPULeases(self._gpus)

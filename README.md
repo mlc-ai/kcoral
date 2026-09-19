@@ -15,6 +15,11 @@ the results you need.
 > isolated network and never expose these endpoints to the public internet.
 > Run workers in a sandbox with restricted permissions and access to host resources.
 
+Workers use [bubblewrap filesystem isolation](docs/server-guide/launch-the-server.md#isolate-worker-files-with-bubblewrap)
+by default, requiring Linux and an installed `bwrap`. Each worker has a private
+writable workspace; reused workers clear it between programs. This mode assumes
+trusted code. Set `--sandbox none` to explicitly disable isolation.
+
 **[Documentation](docs/index.md)** · [Quickstart](docs/getting-started/quickstart.md) ·
 [Writing a Program](docs/client-guide/writing-a-program.md) · [KCoral Protocol](docs/client-guide/protocol.md)
 

@@ -12,6 +12,7 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import IO, Any, Protocol
 
+from . import sandbox
 from .artifacts import ReturnedFile, ReturnedFolder
 from .errors import ExecutionError, GPUAccessViolation
 from .file_transfer import collect
@@ -277,6 +278,8 @@ def _materialize_file(workspace_dir: str, path: str, data: bytes) -> None:
     """Copy one blob beneath ``workspace_dir`` without following symlinks."""
     try:
         path = normalize_file_path(path)
+        if sandbox.active() and path.split("/")[0] == sandbox.PRIVATE:
+            raise ValueError(f"{sandbox.PRIVATE!r} is reserved for sandbox runtime files")
         directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         directory_fds = [os.open(workspace_dir, directory_flags)]
         try:

@@ -207,6 +207,7 @@ async def _test_real_app_executes_multipart_request_over_outbound_grpc():
     await server.start()
     app = create_app(
         ServerConfig(
+            sandbox="none",
             device="cpu",
             num_workers=1,
             max_requests_per_worker=0,

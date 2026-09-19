@@ -31,7 +31,7 @@ def successful_program():
 
 @pytest.fixture
 def pool():
-    p = WorkerPool([0], fake_runtime_factory, max_requests_per_worker=0)
+    p = WorkerPool([0], fake_runtime_factory, sandbox="none", max_requests_per_worker=0)
     yield p
     p.shutdown()
 
@@ -45,7 +45,9 @@ def test_pool_runs_a_program(pool):
 
 
 def test_cpu_pool_runs_without_gpus_or_leases():
-    pool = WorkerPool([], fake_runtime_factory, cpu_workers=2, max_requests_per_worker=0)
+    pool = WorkerPool(
+        [], fake_runtime_factory, sandbox="none", cpu_workers=2, max_requests_per_worker=0
+    )
     try:
         outcome = pool.submit(successful_program(), timeout=10)
         health = pool.health()
@@ -62,7 +64,9 @@ def test_cpu_pool_runs_without_gpus_or_leases():
 
 
 def test_cpu_timeout_respawns_without_a_gpu():
-    pool = WorkerPool([], fake_runtime_factory, cpu_workers=1, max_requests_per_worker=0)
+    pool = WorkerPool(
+        [], fake_runtime_factory, sandbox="none", cpu_workers=1, max_requests_per_worker=0
+    )
     try:
         with pytest.raises(WorkerTimeout) as exc_info:
             pool.submit(prog(*harness_call("sleep", "sleep", [2.0])), timeout=0.2)
@@ -143,7 +147,7 @@ def test_last_error_fails_current_request_without_replacing_worker(pool):
 
 
 def test_default_request_limit_replaces_worker_after_preserving_outcome():
-    pool = WorkerPool([0], fake_runtime_factory)
+    pool = WorkerPool([0], fake_runtime_factory, sandbox="none")
     try:
         original_pid = pool._workers[0]._proc.pid
         outcome = pool.submit(successful_program(), timeout=10)
@@ -177,6 +181,8 @@ class _ExitedProcess:
 )
 def test_run_replaces_worker_on_pipe_failures(pipe_error):
     worker = object.__new__(Worker)
+    worker._sandbox_mode = "none"
+    worker._sandbox = None
     worker.gpu_id = 0
     worker._conn = _FailedPipe(pipe_error)
     worker._proc = _ExitedProcess()
@@ -380,7 +386,9 @@ def test_load_tracks_assigned_and_waiting_requests(pool, monkeypatch):
 
 
 def test_load_during_background_worker_replacement(monkeypatch):
-    pool = WorkerPool([], fake_runtime_factory, cpu_workers=1, max_requests_per_worker=1)
+    pool = WorkerPool(
+        [], fake_runtime_factory, sandbox="none", cpu_workers=1, max_requests_per_worker=1
+    )
     entered, release = threading.Event(), threading.Event()
     worker = pool._workers[0]
     original_replace = worker.replace
@@ -429,7 +437,9 @@ def test_backpressure_when_all_workers_busy(pool):
 @pytest.fixture
 def shared_gpu_pool():
     """Two workers on one GPU, so they must take turns through its lease."""
-    p = WorkerPool([0], fake_runtime_factory, workers_per_gpu=2, max_requests_per_worker=0)
+    p = WorkerPool(
+        [0], fake_runtime_factory, sandbox="none", workers_per_gpu=2, max_requests_per_worker=0
+    )
     yield p
     p.shutdown()
 
@@ -537,7 +547,9 @@ class _LeaseRecorder:
 def test_lease_invariants_hold_while_workers_die_under_load():
     """Concurrency and the failure paths together: workers killed mid-program
     cannot leave a GPU held, and no two ever hold one at once."""
-    pool = WorkerPool([0], fake_runtime_factory, workers_per_gpu=4, max_requests_per_worker=0)
+    pool = WorkerPool(
+        [0], fake_runtime_factory, sandbox="none", workers_per_gpu=4, max_requests_per_worker=0
+    )
     recorder = _LeaseRecorder(pool._leases)
     pool._leases = recorder
     finished, killed, errors = [], [], []

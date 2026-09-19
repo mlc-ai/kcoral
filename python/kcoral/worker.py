@@ -21,8 +21,10 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from . import nvml
+from . import sandbox as sandboxing
 from .engine import execute, read_captured_output
 from .events import EventLogger
 from .lease import GPULeases, LeaseClient, NoopLease, NoopLeases
@@ -30,7 +32,7 @@ from .lease import GPULeases, LeaseClient, NoopLease, NoopLeases
 _WORKER_PIPE_FAILURES = (EOFError, ConnectionResetError, BrokenPipeError, OSError)
 
 # Finish reasons whose worker answered the request but must not serve another.
-RETIRING_FINISH_REASONS = frozenset({"poisoned_context", "request_limit"})
+RETIRING_FINISH_REASONS = frozenset({"poisoned_context", "request_limit", "sandbox_cleanup"})
 
 # How loud each one is: a failed program is the client's kernel and stays INFO,
 # so one level separates our faults from theirs.
@@ -41,6 +43,7 @@ FINISH_REASON_LEVEL = {
     "poisoned_context": "WARNING",
     "timeout": "WARNING",
     "crashed": "ERROR",
+    "sandbox_cleanup": "WARNING",
 }
 
 _NO_EVENTS = EventLogger(None)  # a shared no-op, for a handle given no log
@@ -53,6 +56,7 @@ def worker_main(
     runtime_factory: Callable,
     max_requests: int,
     capture_dir: str | None = None,
+    isolated: bool = False,
 ) -> None:
     """Child entry point. Optionally pins a GPU, then serves programs.
 
@@ -98,7 +102,10 @@ def worker_main(
         conn.send({"__error__": f"runtime init failed: {type(exc).__name__}: {exc}"})
         return
     # A GPU process describes its visible card; a CPU process reports no target.
-    conn.send({"__ready__": described})
+    ready = {"__ready__": described}
+    if isolated:
+        ready["__pid__"] = os.getpid()
+    conn.send(ready)
     lease = LeaseClient(conn) if device is not None else NoopLease()
     requests_served = 0
     while True:
@@ -110,6 +117,7 @@ def worker_main(
             return
         program, workspace_dir = message
         cleanup_error: BaseException | None = None
+        request_state = sandboxing.RequestState() if isolated else None
 
         def mark_cleanup_failed(exc: BaseException) -> None:
             nonlocal cleanup_error
@@ -125,11 +133,19 @@ def worker_main(
             capture_dir=capture_dir,
             workspace_dir=workspace_dir,
         )
+        sandbox_cleanup_error = None
+        if request_state is not None:
+            try:
+                request_state.finish()
+            except Exception as exc:
+                sandbox_cleanup_error = f"{type(exc).__name__}: {exc}"
         requests_served += 1
-        # The only reasons this side can name are the two that retire it; None
+        # This side names retirement reasons; None
         # means it can serve on, and the parent reads the rest off the outcome.
         retire_reason: str | None = None
-        if cleanup_error is not None:
+        if sandbox_cleanup_error is not None:
+            retire_reason = "sandbox_cleanup"
+        elif cleanup_error is not None:
             retire_reason = "poisoned_context"
         elif max_requests and requests_served >= max_requests:
             # A fresh process gives every request the same context and allocator
@@ -138,7 +154,10 @@ def worker_main(
         # Always the same shape, so the parent reads the reason rather than
         # inferring it, and the result goes first either way: the parent respawns
         # after answering, not before.
-        conn.send({"__outcome__": outcome, "__finish__": retire_reason})
+        response = {"__outcome__": outcome, "__finish__": retire_reason}
+        if sandbox_cleanup_error is not None:
+            response["__sandbox_cleanup_error__"] = sandbox_cleanup_error
+        conn.send(response)
         if retire_reason is not None:
             return
 
@@ -187,6 +206,8 @@ class Worker:
         index: int = 0,
         events: EventLogger | None = None,
         capture_dir: str | None = None,
+        sandbox: str = "bubblewrap",
+        sandbox_readonly_paths: tuple[Path, ...] = (),
     ) -> None:
         self._lifecycle_lock = threading.RLock()
         self._closing = threading.Event()
@@ -201,6 +222,12 @@ class Worker:
         self._termination_grace_seconds = termination_grace_seconds
         self._max_requests = max_requests
         self._capture_dir = capture_dir
+        self._sandbox_mode = sandbox
+        self._sandbox_readonly_paths = sandbox_readonly_paths
+        self._sandbox: sandboxing.Sandbox | None = None
+        self._capture_pid: int | None = None
+        if sandbox not in ("none", "bubblewrap"):
+            raise ValueError(f"unknown worker sandbox: {sandbox!r}")
         self._ctx = mp.get_context("spawn")  # 'spawn' — 'fork' is unsafe with CUDA
         self._spawn()
 
@@ -232,15 +259,31 @@ class Worker:
             self.started_at = time.monotonic()
             parent, child = self._ctx.Pipe()
             self._conn = parent
-            self._proc = self._ctx.Process(
-                target=worker_main,
-                args=(self._device, child, self._factory, self._max_requests, self._capture_dir),
-                daemon=True,
-            )
-            self._proc.start()
+            try:
+                if self._sandbox_mode == "bubblewrap":
+                    self._sandbox = sandboxing.Sandbox(self._sandbox_readonly_paths)
+                    self._proc = sandboxing.SandboxProcess(self._sandbox, child, self.gpu_id)
+                    parent.send((self._device, self._factory, self._max_requests))
+                else:
+                    self._proc = self._ctx.Process(
+                        target=worker_main,
+                        args=(
+                            self._device,
+                            child,
+                            self._factory,
+                            self._max_requests,
+                            self._capture_dir,
+                        ),
+                        daemon=True,
+                    )
+                    self._proc.start()
+            except BaseException:
+                self._kill()
+                raise
+            finally:
+                child.close()
             self.generation += 1
             self.pid = self._proc.pid
-            child.close()  # parent keeps only its end, so it sees EOF if the child dies
         msg = self._await_startup_message("prepare")
         if not (isinstance(msg, dict) and msg.get("__startup__") == "prepared"):
             self._kill()
@@ -261,6 +304,7 @@ class Worker:
             self._kill()
             raise WorkerCrashed(f"worker init error: {msg}")
         described = msg["__ready__"]
+        self._capture_pid = msg.get("__pid__", self.pid)
         self.target: dict[str, str] = described["target"]
         self.versions: dict[str, str] = described["versions"]
         self.device_uuid: str | None = described.get("device_uuid")
@@ -306,7 +350,12 @@ class Worker:
             msg = self._conn.recv() if ready else None
         except _WORKER_PIPE_FAILURES as exc:
             self._kill()
-            raise WorkerCrashed(f"{self._description()} failed during {phase}") from exc
+            details = (
+                self._proc.output_tail()
+                if isinstance(self._proc, sandboxing.SandboxProcess)
+                else ""
+            )
+            raise WorkerCrashed(f"{self._description()} failed during {phase}: {details}") from exc
         if not ready:
             self._kill()
             raise WorkerCrashed(f"{self._description()} timed out during {phase}")
@@ -320,6 +369,28 @@ class Worker:
         The parent owns the workspace so it is removed even when the child is
         killed before its own cleanup handlers can run.
         """
+        if self._sandbox_mode == "bubblewrap":
+            sandbox = self._sandbox
+            if sandbox is None:
+                self._abandon_and_respawn(leases, "crashed")
+                sandbox = self._sandbox
+            assert sandbox is not None
+            try:
+                sandbox.prepare()
+            except OSError as exc:
+                self._abandon_and_respawn(leases, "sandbox_cleanup")
+                raise WorkerCrashed(f"cannot prepare sandbox workspace: {exc}") from exc
+            result = self._run_in_workspace(program, timeout, leases, sandboxing.WORKSPACE)
+            if result[-1] in RETIRING_FINISH_REASONS:
+                # Stop surviving tasks before the parent touches their files.
+                self._kill()
+            else:
+                try:
+                    sandbox.prepare()
+                except OSError:
+                    self._kill()
+                    result = (*result[:-1], "sandbox_cleanup")
+            return result
         with tempfile.TemporaryDirectory(prefix="kcoral-program-") as workspace_dir:
             return self._run_in_workspace(program, timeout, leases, workspace_dir)
 
@@ -359,6 +430,8 @@ class Worker:
                     instruction_index = message["__instruction__"]
                     continue
                 if isinstance(message, dict) and "__outcome__" in message:
+                    if cleanup_error := message.get("__sandbox_cleanup_error__"):
+                        self._log_failure("sandbox_cleanup", RuntimeError(cleanup_error))
                     if held_since is not None:
                         lease_held_ms += (time.monotonic() - held_since) * 1000
                     leases.release(self.gpu_id, self)  # no-op if the engine already did
@@ -407,6 +480,12 @@ class Worker:
     def _output_tail(self) -> str:
         """What the worker had printed when it stopped answering. Its own copy
         travels back in the outcome, but a worker that never answers has none."""
+        if self._sandbox is not None:
+            return read_captured_output(
+                str(self._sandbox.workspace / sandboxing.PRIVATE / "output"),
+                self._capture_pid,
+                _OUTPUT_TAIL_BYTES,
+            )
         return read_captured_output(self._capture_dir, self.pid, _OUTPUT_TAIL_BYTES)
 
     def replace(self, leases: GPULeases | NoopLeases, reason: str) -> None:
@@ -457,14 +536,27 @@ class Worker:
             self._closing.set()
 
     def _kill(self) -> None:
+        process = getattr(self, "_proc", None)
+        sandbox = getattr(self, "_sandbox", None)
         try:
-            _terminate_process_tree(self._proc, self._termination_grace_seconds)
+            if process is not None:
+                _terminate_process_tree(process, self._termination_grace_seconds)
         except Exception:
             pass
+        if sandbox is not None and process is not None and process.is_alive():
+            # Never clear a workspace while a surviving process can still use
+            # it, or proceed to a new generation after failed termination.
+            raise WorkerCrashed("sandbox worker survived termination")
         try:
             self._conn.close()
         except Exception:
             pass
+        if sandbox is not None:
+            self._sandbox = None
+            try:
+                sandbox.close()
+            except OSError as exc:
+                self._log_failure("sandbox_cleanup", exc)
 
     def close(self) -> None:
         try:

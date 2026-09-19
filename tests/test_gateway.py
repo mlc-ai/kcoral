@@ -114,6 +114,7 @@ async def running_app(url, node, directory, **limits):
     limits.setdefault("disk_cache_dir", directory / "cache")
     app = create_app(
         ServerConfig(
+            sandbox="none",
             device="cpu",
             num_workers=1,
             max_requests_per_worker=0,
@@ -492,7 +493,8 @@ async def _supervisor_reports_python_worker_status(tmp_path):
         "from kcoral.config import ServerConfig\n"
         "from kcoral.testing import fake_runtime_factory\n"
         "if __name__ == '__main__':\n"
-        "    config = ServerConfig(device='cpu', num_workers=2, max_requests_per_worker=0,\n"
+        "    config = ServerConfig(sandbox='none', device='cpu', num_workers=2,\n"
+        "        max_requests_per_worker=0,\n"
         "        log_console=False, router_endpoint=os.environ['KCORAL_ROUTER_ENDPOINT'],\n"
         "        node_id=os.environ['KCORAL_NODE_ID'])\n"
         "    uvicorn.run(create_app(config, runtime_factory=fake_runtime_factory),\n"

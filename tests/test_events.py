@@ -27,6 +27,7 @@ def failing_runtime_factory():
 
 def _make_client(tmp_path, **overrides):
     settings = dict(
+        sandbox="none",
         gpus=[0],
         log_dir=tmp_path / "logs",
         max_requests_per_worker=0,
@@ -143,8 +144,12 @@ def test_program_failure_records_the_failing_instruction(tmp_path):
 
 
 def test_request_limit_is_the_reason_a_healthy_worker_retires(tmp_path):
-    config = ServerConfig(  # the default limit of one request per worker
-        gpus=[0], log_dir=tmp_path / "logs", workers_per_gpu=1
+    # Keep the default limit of one request per worker.
+    config = ServerConfig(
+        sandbox="none",
+        gpus=[0],
+        log_dir=tmp_path / "logs",
+        workers_per_gpu=1,
     )
     with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as client:
         assert _post(client, STRUCTURAL_PROGRAM).status_code == 200
@@ -217,8 +222,13 @@ def test_saturation_is_the_reason_no_worker_ran_the_request(tmp_path, monkeypatc
 def test_a_replacement_that_fails_is_not_silent(tmp_path):
     """The pool carries on with a dead worker, which the next request revives.
     Unlogged, that reads as the pool being mysteriously slow."""
-    config = ServerConfig(  # the default limit of one, so answering retires it
-        gpus=[0], log_dir=tmp_path / "logs", workers_per_gpu=1, log_console=False
+    # Keep the default limit of one, so answering retires the worker.
+    config = ServerConfig(
+        sandbox="none",
+        gpus=[0],
+        log_dir=tmp_path / "logs",
+        workers_per_gpu=1,
+        log_console=False,
     )
     app = create_app(config, runtime_factory=fake_runtime_factory)
     with TestClient(app) as client:
@@ -304,7 +314,7 @@ def test_a_cpu_only_function_touching_the_gpu_is_a_warning_naming_both_requests(
 
 
 def test_a_server_that_cannot_start_says_so_on_disk(tmp_path):
-    config = ServerConfig(gpus=[0], log_dir=tmp_path / "logs", workers_per_gpu=1)
+    config = ServerConfig(sandbox="none", gpus=[0], log_dir=tmp_path / "logs", workers_per_gpu=1)
     with pytest.raises(Exception):
         with TestClient(create_app(config, runtime_factory=failing_runtime_factory)):
             pass
@@ -324,7 +334,11 @@ def test_an_unhandled_front_end_error_still_finishes_the_request(tmp_path, monke
 
     monkeypatch.setattr(app_module, "_encode_response", boom)
     config = ServerConfig(
-        gpus=[0], log_dir=tmp_path / "logs", max_requests_per_worker=0, workers_per_gpu=1
+        sandbox="none",
+        gpus=[0],
+        log_dir=tmp_path / "logs",
+        max_requests_per_worker=0,
+        workers_per_gpu=1,
     )
     client = TestClient(
         create_app(config, runtime_factory=fake_runtime_factory), raise_server_exceptions=False
@@ -374,7 +388,7 @@ def test_one_unencodable_field_does_not_cost_the_event(tmp_path):
 
 
 def test_no_log_dir_writes_nothing_to_disk(tmp_path):
-    config = ServerConfig(gpus=[0], log_dir=None)  # the console mirror stays on
+    config = ServerConfig(sandbox="none", gpus=[0], log_dir=None)  # the console mirror stays on
     with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as client:
         assert _post(client, STRUCTURAL_PROGRAM).status_code == 200
     assert not (tmp_path / "logs").exists()

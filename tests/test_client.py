@@ -48,6 +48,7 @@ def _start_server(app):
 def server_url(tmp_path_factory):
     app = create_app(
         ServerConfig(
+            sandbox="none",
             gpus=[0],
             max_requests_per_worker=0,
             disk_cache_dir=tmp_path_factory.mktemp("file-cache"),
@@ -190,6 +191,7 @@ def test_folder_upload_reuses_identical_wire_program_for_every_attempt(
     program.return_(key="value", value=value)
     app = create_app(
         ServerConfig(
+            sandbox="none",
             gpus=[0],
             workers_per_gpu=1,
             max_requests_per_worker=0,
@@ -293,7 +295,7 @@ def test_cache_miss_retry_returns_the_router_affinity_header():
 
 def test_cache_churn_falls_back_to_all_blobs():
     app = create_app(
-        ServerConfig(gpus=[0], workers_per_gpu=1, cache_capacity_bytes=16),
+        ServerConfig(sandbox="none", gpus=[0], workers_per_gpu=1, cache_capacity_bytes=16),
         runtime_factory=fake_runtime_factory,
     )
     server, thread, url = _start_server(app)
@@ -721,7 +723,8 @@ def test_tensor_round_trip_on_gpu():
     gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0
     # One worker: spawning the default eight outlasts _start_server's deadline.
     app = create_app(
-        ServerConfig(gpus=[gpu_id], workers_per_gpu=1), runtime_factory=gpu_runtime_factory
+        ServerConfig(sandbox="none", gpus=[gpu_id], workers_per_gpu=1),
+        runtime_factory=gpu_runtime_factory,
     )
     server, thread, url = _start_server(app)
     try:

@@ -137,6 +137,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=_DEFAULTS.worker_termination_grace_seconds,
         help="SIGTERM-to-SIGKILL window when killing a hung or crashed worker",
     )
+    parser.add_argument(
+        "--sandbox",
+        choices=("none", "bubblewrap"),
+        default=_DEFAULTS.sandbox,
+        help="isolate trusted workers' files with bubblewrap (Linux; requires bwrap)",
+    )
+    parser.add_argument(
+        "--sandbox-readonly-path",
+        action="append",
+        type=Path,
+        default=[],
+        help="additional runtime dependency visible read-only to isolated workers; repeatable",
+    )
     parser.add_argument("--max-request-bytes", type=int, default=_DEFAULTS.max_request_bytes)
     parser.add_argument("--max-response-bytes", type=int, default=_DEFAULTS.max_response_bytes)
     parser.add_argument(
@@ -170,6 +183,8 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         raise SystemExit("--disk-cache-capacity-mbytes must be non-negative")
     if bool(args.router_endpoint) != bool(args.node_id):
         raise SystemExit("--router-endpoint and --node-id must be configured together")
+    if args.sandbox_readonly_path and args.sandbox == "none":
+        raise SystemExit("--sandbox-readonly-path requires --sandbox bubblewrap")
     return ServerConfig(
         device=args.device,
         gpus=gpus,
@@ -185,6 +200,8 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         worker_wait_timeout_seconds=args.worker_wait_timeout_seconds,
         workers_per_gpu=args.workers_per_gpu,
         max_requests_per_worker=args.max_requests_per_worker,
+        sandbox=args.sandbox,
+        sandbox_readonly_paths=args.sandbox_readonly_path,
         worker_termination_grace_seconds=args.worker_termination_grace_seconds,
         max_request_bytes=args.max_request_bytes,
         max_response_bytes=args.max_response_bytes,

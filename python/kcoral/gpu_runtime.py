@@ -25,7 +25,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from . import process_state
+from . import process_state, sandbox
 from .cuda_source import CUDAModule
 from .errors import ExecutionError, GPUAccessViolation
 from .python_module import LoadedPythonModule, materialize_module
@@ -213,6 +213,11 @@ class GPURuntime:
         # module-scope tensors `empty_cache()` would otherwise find still live.
         gc.collect()
         self._request_libraries.clear()
+        if sandbox.active():
+            # Uploaded library mappings and static state must not survive a
+            # request in a reused filesystem sandbox.
+            _LOADED_LIBRARIES.clear()
+            gc.collect()
         # CUDA errors are sticky within a process. Surface one so the parent can
         # replace this worker instead of returning its context to the pool.
         torch.cuda.synchronize()
@@ -401,7 +406,12 @@ def _materialize_library(data: bytes) -> LoadedLibrary:
         path = _library_dir() / f"{digest}.so"
         path.write_bytes(data)
         try:
-            cached = tvm_ffi.load_module(str(path))
+            if sandbox.active():
+                # TVM FFI otherwise retains its own process-lifetime reference,
+                # even after our Python library cache has been cleared.
+                cached = tvm_ffi.load_module(str(path), keep_module_alive=False)
+            else:
+                cached = tvm_ffi.load_module(str(path))
         except Exception as exc:
             raise ExecutionError("compile", f"cannot load the uploaded library: {exc}") from exc
         finally:
@@ -443,6 +453,8 @@ def _preload_cute_dsl_runtime() -> None:
 
 def _library_dir() -> Path:
     global _LIBRARY_DIR
+    if sandbox.active():
+        return Path(sandbox.WORKSPACE) / sandbox.PRIVATE / "libraries"
     if _LIBRARY_DIR is None:
         _LIBRARY_DIR = Path(tempfile.mkdtemp(prefix="kcoral-lib-"))
     return _LIBRARY_DIR

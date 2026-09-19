@@ -38,7 +38,7 @@ def running(pid):
 
 
 def test_shutdown_drains_active_job_and_rejects_waiter():
-    pool = WorkerPool([], fake_runtime_factory, cpu_workers=1)
+    pool = WorkerPool([], fake_runtime_factory, sandbox="none", cpu_workers=1)
     with ThreadPoolExecutor(2) as executor:
         try:
             active = executor.submit(
@@ -62,7 +62,9 @@ def test_shutdown_drains_active_job_and_rejects_waiter():
 
 
 def test_shutdown_interrupts_replacement_initialization(monkeypatch):
-    pool = WorkerPool([], fake_runtime_factory, cpu_workers=1, termination_grace_seconds=0.1)
+    pool = WorkerPool(
+        [], fake_runtime_factory, sandbox="none", cpu_workers=1, termination_grace_seconds=0.1
+    )
     worker = pool._workers[0]
     entered, release = threading.Event(), threading.Event()
     initialize = worker._initialize_process
@@ -88,7 +90,7 @@ def test_shutdown_interrupts_replacement_initialization(monkeypatch):
 
 
 def test_cancelled_future_still_drains_with_a_saturated_executor():
-    pool = WorkerPool([], fake_runtime_factory, cpu_workers=1)
+    pool = WorkerPool([], fake_runtime_factory, sandbox="none", cpu_workers=1)
 
     async def exercise():
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
@@ -111,7 +113,9 @@ def test_cancelled_future_still_drains_with_a_saturated_executor():
 
 
 def test_shutdown_respects_request_timeouts_and_gpu_lease_waiters():
-    pool = WorkerPool([0], fake_runtime_factory, workers_per_gpu=2, termination_grace_seconds=0.1)
+    pool = WorkerPool(
+        [0], fake_runtime_factory, sandbox="none", workers_per_gpu=2, termination_grace_seconds=0.1
+    )
     with ThreadPoolExecutor(2) as executor:
         try:
             jobs = [
@@ -143,7 +147,8 @@ from kcoral.app import create_app
 from kcoral.config import ServerConfig
 from kcoral.shutdown import ShutdownServer
 from kcoral.testing import fake_runtime_factory
-app = create_app(ServerConfig(device="cpu", num_workers=2, log_dir=Path({str(tmp_path)!r})),
+app = create_app(ServerConfig(sandbox='none', device="cpu", num_workers=2,
+                             log_dir=Path({str(tmp_path)!r})),
                  runtime_factory=fake_runtime_factory)
 ShutdownServer(uvicorn.Config(app, host="127.0.0.1", port={port}), app).run()
 """

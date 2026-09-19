@@ -20,7 +20,7 @@ ADD_ONE = "def main(value):\n    return value + 1\n"
 
 def make_client(config=None):
     if config is None:
-        config = ServerConfig(max_requests_per_worker=0)
+        config = ServerConfig(sandbox="none", max_requests_per_worker=0)
     return TestClient(create_app(config, runtime_factory=fake_runtime_factory))
 
 
@@ -31,6 +31,7 @@ def gpu_app(**overrides):
     gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0
     return create_app(
         ServerConfig(
+            sandbox="none",
             gpus=[gpu_id],
             workers_per_gpu=overrides.pop("workers_per_gpu", 1),
             max_requests_per_worker=overrides.pop("max_requests_per_worker", 0),
@@ -103,7 +104,10 @@ def test_health():
 
 
 def test_instance_id_changes_with_server_lifecycle():
-    app = create_app(ServerConfig(max_requests_per_worker=0), runtime_factory=fake_runtime_factory)
+    app = create_app(
+        ServerConfig(sandbox="none", max_requests_per_worker=0),
+        runtime_factory=fake_runtime_factory,
+    )
     with TestClient(app) as client:
         first = client.get("/health").json()["instance_id"]
     with TestClient(app) as client:
@@ -112,7 +116,7 @@ def test_instance_id_changes_with_server_lifecycle():
 
 
 def test_cpu_health_and_execution_have_no_gpu_lease():
-    config = ServerConfig(device="cpu", num_workers=2, max_requests_per_worker=0)
+    config = ServerConfig(sandbox="none", device="cpu", num_workers=2, max_requests_per_worker=0)
     with make_client(config) as client:
         health = client.get("/health").json()
         result = post_program(client, scalar_program()).json()
@@ -130,7 +134,7 @@ def test_cpu_health_and_execution_have_no_gpu_lease():
 
 
 def test_cpu_app_selects_cpu_runtime_by_default():
-    config = ServerConfig(device="cpu", num_workers=1, max_requests_per_worker=0)
+    config = ServerConfig(sandbox="none", device="cpu", num_workers=1, max_requests_per_worker=0)
     with TestClient(create_app(config)) as client:
         health = client.get("/health").json()
 
@@ -179,7 +183,7 @@ def test_cpu_cuda_compilation_end_to_end():
             {"op": "return", "key": "library", "value": {"$ref": "library"}},
         ]
     }
-    config = ServerConfig(device="cpu", num_workers=1, max_requests_per_worker=0)
+    config = ServerConfig(sandbox="none", device="cpu", num_workers=1, max_requests_per_worker=0)
     with TestClient(create_app(config)) as client:
         response = post_program(client, program)
 
@@ -264,7 +268,9 @@ def test_file_cache_persists_across_server_restart_without_memory_cache(tmp_path
     program = {
         "instructions": [{"op": "upload", "kind": "file", "blob": key, "path": "data/input"}]
     }
-    config = ServerConfig(workers_per_gpu=1, max_requests_per_worker=0, disk_cache_dir=tmp_path)
+    config = ServerConfig(
+        sandbox="none", workers_per_gpu=1, max_requests_per_worker=0, disk_cache_dir=tmp_path
+    )
     with make_client(config) as client:
         assert post_program(client, program).json()["status"] == "CACHE_MISS"
         assert post_program(client, program, {key: data}).json()["status"] == "COMPLETED"
@@ -281,6 +287,7 @@ def test_uncached_file_upload_still_executes(tmp_path, disabled):
     if disabled == "unusable":
         directory.write_bytes(b"occupied")
     config = ServerConfig(
+        sandbox="none",
         workers_per_gpu=1,
         max_requests_per_worker=0,
         disk_cache_dir=None if disabled == "directory" else directory,
@@ -298,6 +305,7 @@ def test_uncached_file_upload_still_executes(tmp_path, disabled):
 @pytest.mark.parametrize("size", [1024**2, 1024**2 + 1])
 def test_disk_cache_capacity_mbytes_uses_binary_megabytes(tmp_path, size):
     config = ServerConfig(
+        sandbox="none",
         workers_per_gpu=1,
         max_requests_per_worker=0,
         disk_cache_dir=tmp_path,
@@ -328,7 +336,9 @@ def test_blobs_are_cached_only_in_backends_requested_by_their_upload_kinds(tmp_p
         if kind == "tensor":
             item.update(dtype="float32", shape=[1])
         instructions.append(item)
-    config = ServerConfig(workers_per_gpu=1, max_requests_per_worker=0, disk_cache_dir=tmp_path)
+    config = ServerConfig(
+        sandbox="none", workers_per_gpu=1, max_requests_per_worker=0, disk_cache_dir=tmp_path
+    )
     with make_client(config) as client:
         # The fake runtime cannot load libraries; cache routing still happens before execution.
         response = post_program(client, {"instructions": instructions}, {key: data})
@@ -441,7 +451,8 @@ def test_strict_json_and_unknown_instruction_are_400():
 def test_request_and_response_size_limits():
     with TestClient(
         create_app(
-            ServerConfig(gpus=[0], max_request_bytes=100), runtime_factory=fake_runtime_factory
+            ServerConfig(sandbox="none", gpus=[0], max_request_bytes=100),
+            runtime_factory=fake_runtime_factory,
         )
     ) as client:
         too_large = post_program(client, scalar_program())
@@ -463,7 +474,8 @@ def test_request_and_response_size_limits():
     }
     with TestClient(
         create_app(
-            ServerConfig(gpus=[0], max_response_bytes=300), runtime_factory=fake_runtime_factory
+            ServerConfig(sandbox="none", gpus=[0], max_response_bytes=300),
+            runtime_factory=fake_runtime_factory,
         )
     ) as client:
         too_large = post_program(client, program)
@@ -539,7 +551,8 @@ def test_timeout_and_worker_crash_statuses():
 def test_poisoned_context_returns_runtime_then_next_request_recovers():
     poison_program = {"instructions": [*harness_instructions("bad", "poison")]}
     app = create_app(
-        ServerConfig(gpus=[0], workers_per_gpu=1), runtime_factory=fake_runtime_factory
+        ServerConfig(sandbox="none", gpus=[0], workers_per_gpu=1),
+        runtime_factory=fake_runtime_factory,
     )
     with TestClient(app) as client:
         original_pid = app.state.pool._workers[0]._proc.pid
@@ -596,7 +609,7 @@ def _wait_until_pid_gone(pid, deadline_seconds=10):
 
 def test_timeout_kills_spawned_process_tree(tmp_path):
     pid_file = str(tmp_path / "pid")
-    config = ServerConfig(gpus=[0], worker_termination_grace_seconds=1)
+    config = ServerConfig(sandbox="none", gpus=[0], worker_termination_grace_seconds=1)
     with make_client(config) as client:
         response = post_program(client, _spawner_program(SPAWN_AND_HANG, pid_file))
     assert response.status_code == 504
@@ -1191,7 +1204,7 @@ def test_request_ids_accept_one_canonical_uuid_and_replace_unsafe_values():
         ([("x-request-id", valid.upper())], False),
         ([("x-request-id", valid), ("x-request-id", valid)], False),
     ]
-    config = ServerConfig(device="cpu", num_workers=1, max_requests_per_worker=0)
+    config = ServerConfig(sandbox="none", device="cpu", num_workers=1, max_requests_per_worker=0)
     with make_client(config) as client:
         for headers, accepted in cases:
             # Early rejection also uses the shared, validated request ID.
@@ -1204,6 +1217,7 @@ def test_request_ids_accept_one_canonical_uuid_and_replace_unsafe_values():
 
 def test_server_supplies_file_collection_byte_limit():
     config = ServerConfig(
+        sandbox="none",
         max_requests_per_worker=0,
         max_response_bytes=4096,
     )
@@ -1241,7 +1255,9 @@ def test_file_return_still_obeys_final_serialized_response_cap():
             {"op": "return", "key": "report", "kind": "file", "path": "report"},
         ]
     }
-    with make_client(ServerConfig(max_requests_per_worker=0, max_response_bytes=4096)) as client:
+    with make_client(
+        ServerConfig(sandbox="none", max_requests_per_worker=0, max_response_bytes=4096)
+    ) as client:
         response = post_program(client, program)
     assert response.status_code == 500
     assert response.json()["error"]["kind"] == "response_too_large"
