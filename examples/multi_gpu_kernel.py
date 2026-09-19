@@ -12,53 +12,61 @@ compiler, process group, or torchrun launcher is needed by the script.
 """
 
 import argparse
+import inspect
 import json
 
-SCRIPT = """
-import json
-import os
-from pathlib import Path
-import torch
-from torch.cuda import nccl
 
-count = torch.cuda.device_count()
-if not 2 <= count <= 8:
-    raise RuntimeError("this example needs 2-8 visible GPUs")
-elements, iterations = 65539, 3
-base = (torch.arange(elements, dtype=torch.float32) % 257) / 1024
-inputs = [torch.empty(elements, device=f"cuda:{i}") for i in range(count)]
-outputs = [torch.empty_like(x) for x in inputs]
-if not nccl.is_available(inputs):
-    raise RuntimeError("PyTorch must be built with NCCL support")
+def run_local():
+    import json
+    import os
+    from pathlib import Path
 
-for step in range(iterations):
-    for rank, x in enumerate(inputs):
-        x.copy_(base).add_(rank + 1 + 8 * step)
+    import torch
+    from torch.cuda import nccl
 
-    nccl.all_reduce(inputs, outputs)  # The multi-GPU library kernel call.
+    count = torch.cuda.device_count()
+    if not 2 <= count <= 8:
+        raise RuntimeError("this example needs 2-8 visible GPUs")
+    elements, iterations = 65539, 3
+    base = (torch.arange(elements, dtype=torch.float32) % 257) / 1024
+    inputs = [torch.empty(elements, device=f"cuda:{i}") for i in range(count)]
+    outputs = [torch.empty_like(x) for x in inputs]
+    if not nccl.is_available(inputs):
+        raise RuntimeError("PyTorch must be built with NCCL support")
 
-    for device in range(count):
-        torch.cuda.synchronize(device)
-    expected = count * base + count * (count + 1) / 2 + count * 8 * step
-    for output in outputs:
-        torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0)
+    for step in range(iterations):
+        for rank, x in enumerate(inputs):
+            x.copy_(base).add_(rank + 1 + 8 * step)
 
-report = {
-    "ok": True, "kernel": "nccl_all_reduce", "gpu_count": count,
-    "gpu_processes": 1, "pids": [os.getpid()],
-    "elements": elements, "iterations": iterations,
-    "checked_elements": count * elements * iterations,
-}
-Path("result.json").write_text(json.dumps(report, indent=2))
-print(json.dumps(report))
-"""
+        nccl.all_reduce(inputs, outputs)  # The multi-GPU library kernel call.
+
+        for device in range(count):
+            torch.cuda.synchronize(device)
+        expected = count * base + count * (count + 1) / 2 + count * 8 * step
+        for output in outputs:
+            torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0)
+
+    report = {
+        "ok": True,
+        "kernel": "nccl_all_reduce",
+        "gpu_count": count,
+        "gpu_processes": 1,
+        "pids": [os.getpid()],
+        "elements": elements,
+        "iterations": iterations,
+        "checked_elements": count * elements * iterations,
+    }
+    Path("result.json").write_text(json.dumps(report, indent=2))
+    print(json.dumps(report))
 
 
 def build_program():
     from kcoral import Program
 
     program = Program()
-    program.upload(id="kernel", kind="module", source=SCRIPT)
+    module = program.upload(id="kernel", kind="module", source=inspect.getsource(run_local))
+    fn = program.get_function(id="run_kernel", module=module, name="run_local")
+    program.run(id="execution", fn=fn)
     program.return_file(key="report", path="result.json")
     return program
 
@@ -70,7 +78,7 @@ def main():
     parser.add_argument("--local", action="store_true", help="use all visible local GPUs")
     args = parser.parse_args()
     if args.local:
-        exec(SCRIPT, {})
+        run_local()
         return
 
     from kcoral import Client

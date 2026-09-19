@@ -83,17 +83,20 @@ def build_program():
     from kcoral import Program
 
     program = Program()
-    # spawn needs an importable worker and a real __main__ entry point.
+    # spawn needs workers from an importable file, not a dynamic module namespace.
     program.upload_file(path="kernel.py", blob=Path(__file__).read_bytes())
-    program.upload(
-        id="launch",
+    module = program.upload(
+        id="kernel",
         kind="module",
         source="""
-import subprocess
+import os
 import sys
-subprocess.run([sys.executable, "kernel.py", "--local"], check=True)
+sys.path.insert(0, os.getcwd())
+from kernel import run_local
 """,
     )
+    fn = program.get_function(id="run_kernel", module=module, name="run_local")
+    program.run(id="execution", fn=fn)
     program.return_file(key="report", path="result.json")
     return program
 
