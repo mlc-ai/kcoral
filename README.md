@@ -15,11 +15,9 @@ the results you need.
 > isolated network and never expose these endpoints to the public internet.
 > Run workers in a sandbox with restricted permissions and access to host resources.
 
-At startup the server tries [bubblewrap filesystem isolation](docs/server-guide/launch-the-server.md#isolate-worker-files-with-bubblewrap)
-by default. If the launch check fails, it warns and continues without isolation.
-When enabled, each worker has a private writable workspace that is cleared
-between programs. This mode assumes trusted code. Set `--sandbox none` to skip
-the check and explicitly disable isolation.
+The server checks [bubblewrap filesystem isolation](docs/server-guide/launch-the-server.md#isolate-worker-files-with-bubblewrap)
+at startup by default. If unavailable, it warns and runs without isolation.
+Use `--sandbox none` to disable it explicitly.
 
 **[Documentation](docs/index.md)** · [Quickstart](docs/getting-started/quickstart.md) ·
 [Writing a Program](docs/client-guide/writing-a-program.md) · [KCoral Protocol](docs/client-guide/protocol.md)

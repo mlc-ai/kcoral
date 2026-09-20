@@ -58,95 +58,33 @@ See [logs](logging.md) to follow a request and diagnose worker replacement.
 
 ## Isolate worker files with bubblewrap
 
-On Linux, install [bubblewrap](https://github.com/containers/bubblewrap) with
-support for `--disable-userns` and allow unprivileged user namespaces on the
-host. The server checks whether isolation can start before creating workers;
-the default configuration requests it:
+By default, the server checks whether bubblewrap can start before creating
+workers. If the check fails or times out, it warns and disables isolation for
+that server run. Restart to check again. Set `--sandbox none` or
+`ServerConfig(sandbox="none")` to disable isolation and skip the check.
+See [installation requirements](../getting-started/installation.md#install-the-server).
+
+When enabled, each worker can write ordinary files only under its private
+`/work`. Other workers' files and the server's cache and logs are hidden;
+runtime dependencies are read-only, and network access is disabled.
+`/work/.kcoral` is reserved for runtime files and cannot receive uploads.
+
+`--max-requests-per-worker 0` reuses processes while clearing files and caches
+between programs. Programs must finish background work before returning;
+workers with remaining resources or failed cleanup are replaced.
+
+For dependencies outside the standard runtime directories, add read-only paths:
 
 ```bash
-# A fresh isolated process for each program (the default request limit).
-kcoral --device cpu --num-workers 2
-
-# Reuse an isolated process, clearing its files after each program.
-kcoral --device cpu --num-workers 2 --max-requests-per-worker 0
-
-# The same isolation backend supports GPU workers.
-kcoral --gpus 0 --workers-per-gpu 2
+kcoral --sandbox-readonly-path /opt/custom-compiler
 ```
 
-When enabled, each worker gets a separate filesystem view. Its only writable ordinary file
-tree is `/work`; other workers' directories, the server's upload cache and log
-directories, and the host home directory are not mounted. The operating system
-rejects writes outside this tree, including writes from compiler subprocesses.
-Python installations, system libraries, system device information and approved
-dependencies remain readable. A private process view prevents inspecting other
-workers through `/proc`. Network access is disabled.
+Repeat the option for multiple paths. Directories also enter the Python module
+search path. All workers can read these paths, so exclude private data and
+other workspaces.
 
-The parent owns the backing directory. A program's file uploads and relative
-paths resolve beneath `/work`. It is emptied between requests even when the
-process is reused, so uploading the same path in successive programs creates
-independent files. The interpreter and GPU context can remain alive. File and
-folder returns keep their existing instruction-time snapshot semantics.
-
-`/work/.kcoral` is reserved for runtime files and cannot be an upload
-destination. Home, temporary files, shared-memory files, compiler caches,
-uploaded libraries and captured output live below it. `/tmp`, `/var/tmp` and
-`/dev/shm` refer into this private tree. Request-local caches are cleared;
-the front-end upload cache is unaffected. Uploaded dynamic libraries are not
-retained across sandboxed requests.
-
-For dependencies installed outside the interpreter and system directories,
-add only their necessary runtime paths:
-
-```bash
-kcoral --sandbox bubblewrap \
-  --sandbox-readonly-path /opt/custom-compiler \
-  --sandbox-readonly-path /opt/custom-python-packages
-```
-
-These paths are also added to the worker's Python module search path when they
-are directories. Every file under an approved path becomes readable to every
-worker. Do not approve private data, other workspaces, or broad host directories.
-Run from a regular package installation; editable dependencies may need their
-source and native-library directories approved explicitly.
-
-This feature assumes **trusted programs**. It limits filesystem access; it
-does not make arbitrary Python or native code in one interpreter mutually
-untrusted, provide GPU memory isolation, or change upload-cache authorization.
-Programs must finish their background work before returning. Before reuse,
-KCoral removes workspace imports and checks for remaining Python/native threads,
-child processes, open workspace files and workspace-backed memory mappings.
-If cleanup cannot be confirmed, it retires the worker with
-`finish_reason="sandbox_cleanup"` instead of exposing the next program's files.
-Lazy dependency initialization that leaves new threads can also cause retirement.
-Libraries that remain mapped after unloading also retire the process, including
-libraries built with the linker's `-z nodelete` option.
-
-GPU device files and the GPU worker's private `/proc` filesystem are approved
-kernel interfaces, not ordinary writable files. NVIDIA drivers can require a
-writable `/proc` mount to initialize CUDA. GPU isolation still relies on the
-existing device selection and lease
-mechanism. The sandbox exposes the selected NVIDIA device and required control
-devices; custom driver/toolchain installations may require additional read-only
-runtime paths.
-
-Before creating the worker pool, the server runs a short Python process with
-the same bubblewrap options and mounts as the workers. The check covers each
-distinct selected GPU configuration without initializing CUDA. A missing binary,
-denied namespace creation, mount failure, or a probe that does not finish within
-10 seconds disables isolation for this server run. The server emits a
-`RuntimeWarning` and a `sandbox_disabled` log event at `WARNING`, with the failure
-reason, and continues starting workers without filesystem isolation.
-
-The check runs only at server startup. Requests and worker replacements keep
-the selected mode; restarting the server checks again. `server_started.config`
-records the requested setting and `pool_ready.sandbox` records the effective
-mode. Runtime initialization errors after a successful probe still fail startup.
-
-Set `--sandbox none`, or `ServerConfig(sandbox="none")` in Python, to explicitly
-disable isolation and skip the check. `--sandbox bubblewrap` and
-`ServerConfig(sandbox="bubblewrap")` select the default startup check.
-
+This feature assumes **trusted programs**. It does not isolate hostile code
+sharing an interpreter or provide GPU memory isolation.
 
 ## Configuration
 
