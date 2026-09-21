@@ -20,7 +20,7 @@ at startup by default. If unavailable, it warns and runs without isolation.
 Use `--sandbox none` to disable it explicitly.
 
 **[Documentation](docs/index.md)** · [Quickstart](docs/getting-started/quickstart.md) ·
-[Writing a Program](docs/client-guide/writing-a-program.md) · [KCoral Protocol](docs/client-guide/protocol.md)
+[Write a client program](docs/client-guide/writing-a-program.md) · [KCoral Protocol](docs/client-guide/protocol.md)
 
 ## Install
 
@@ -82,7 +82,7 @@ KCORAL_URL=http://localhost:8000 python examples/first_program.py
 ```
 
 See [Your First Program](docs/getting-started/quickstart.md),
-[Writing a Program](docs/client-guide/writing-a-program.md) and the
+[Write a client program](docs/client-guide/writing-a-program.md) and the
 [Python API](docs/python-api/index.rst) for the complete example and interfaces.
 
 Use `Program.return_file()` or `return_folder()` to receive workspace outputs,

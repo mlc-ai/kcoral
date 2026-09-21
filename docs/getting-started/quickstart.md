@@ -84,6 +84,6 @@ The example also checks `result.completed` before reading the output. Instructio
 failures are returned as data in `result.error`; connection failures and request
 errors raise the exceptions documented in the {ref}`Python API <python-errors>`.
 
-Continue to [Writing a Program](../client-guide/writing-a-program.md) for the builder methods and
+Continue to [Write a client program](../client-guide/writing-a-program.md) for the builder methods and
 request lifecycle, or [Benchmark a Kernel with KCoral](../tutorials/benchmark-kernel.md)
 to compile a custom kernel, check correctness and measure its execution.

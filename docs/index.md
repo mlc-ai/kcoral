@@ -17,7 +17,7 @@ Run workers in a sandbox with restricted permissions and access to host resource
 | Your task | Read |
 | --- | --- |
 | Run your first GPU program | [Installation](getting-started/installation.md) and [Your First Program](getting-started/quickstart.md) |
-| Write a client program | [Writing a Program](client-guide/writing-a-program.md), [KCoral Protocol](client-guide/protocol.md) |
+| Write a client program | [Write a client program](client-guide/writing-a-program.md), [KCoral Protocol](client-guide/protocol.md) |
 | Operate a service | [Launch the server](server-guide/launch-the-server.md), [Logging](server-guide/logging.md) and [Router](server-guide/router.md) |
 | Compile remotely, then execute the returned library in another request | [Remote Compilation](tutorials/remote-compilation.md) |
 | Measure or automate a workload | [Benchmark a Kernel with KCoral](tutorials/benchmark-kernel.md) and [Agent Integration Guide](tutorials/agent-integration.md) |
@@ -33,12 +33,12 @@ getting-started/quickstart
 ```
 
 ```{toctree}
-:caption: Client Guide
+:caption: KCoral Protocol
 :maxdepth: 1
 :hidden:
 
-client-guide/writing-a-program
 client-guide/protocol
+client-guide/writing-a-program
 ```
 
 ```{toctree}

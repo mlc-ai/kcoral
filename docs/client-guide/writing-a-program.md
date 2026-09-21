@@ -1,6 +1,7 @@
 <a id="writing-a-benchmark-program"></a>
+<a id="writing-a-program"></a>
 
-# Writing a Program
+# Write a client program
 
 `Client` connects to a KCoral server. `Program` describes work to run there.
 Building a program does not execute it: `Client.execute()` submits the ordered

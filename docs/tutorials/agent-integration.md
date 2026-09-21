@@ -22,7 +22,7 @@ cat .agents/skills/kcoral-client/SKILL.md
 
 Give the agent access to the same revision of the skill, the
 [KCoral Protocol](../client-guide/protocol.md) and
-[Writing a Program](../client-guide/writing-a-program.md). The protocol is the authority for field
+[Write a client program](../client-guide/writing-a-program.md). The protocol is the authority for field
 validation when a summary and the protocol disagree. The Python API supplies
 the actual method signatures.
 
