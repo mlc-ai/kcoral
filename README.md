@@ -53,6 +53,10 @@ kcoral run bench kda/decode v0
 kcoral run shell --send experiment -- bash setup.sh
 ```
 
+Any remote tool also accepts `--host HOST --port PORT`, for example
+`kcoral run python --host localhost --port 8000 --send experiment -- check.py`.
+These options override `KCORAL_URL`, with a warning showing the address used.
+
 See the [command line guide](docs/client-guide/command-line.md) for file transfer,
 tool dependencies, reports, and the TIRx benchmark checkout used by `bench`.
 

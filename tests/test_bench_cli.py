@@ -126,8 +126,12 @@ def test_benchmark_request_is_self_contained():
 
 
 @pytest.mark.parametrize("passed", [True, False])
-def test_bench_command_sends_each_workload_and_summarizes(monkeypatch, tmp_path, passed):
+@pytest.mark.parametrize("connection", [[], ["--host", "gpu.example", "--port", "9000"]])
+def test_bench_command_sends_each_workload_and_summarizes(
+    monkeypatch, tmp_path, capsys, passed, connection
+):
     monkeypatch.setenv("KCORAL_URL", "http://server")
+    expected_url = "http://gpu.example:9000" if connection else "http://server"
     common = SimpleNamespace(summarize=lambda rows, label: summaries.append((rows, label)))
     monkeypatch.setitem(sys.modules, "flashinfer_bench_evolve.benchmark_common", common)
     summaries, requests = [], []
@@ -148,6 +152,7 @@ def test_bench_command_sends_each_workload_and_summarizes(monkeypatch, tmp_path,
     monkeypatch.setattr(bench_cli, "load_adapter", lambda repo: adapter)
 
     def execute(args, program):
+        assert args.url == expected_url
         requests.append(program)
         instructions = program._instructions
         assert len(next(item for item in instructions if item.get("id") == "init")["args"][3]) == 1
@@ -167,9 +172,16 @@ def test_bench_command_sends_each_workload_and_summarizes(monkeypatch, tmp_path,
             return self.results[key]
 
     monkeypatch.setattr(bench_cli, "execute", lambda args, program: Result(execute(args, program)))
-    assert bench_cli.main(["kda/decode", "v0", "--warmup", "4"]) == int(not passed)
+    assert bench_cli.main(["kda/decode", "v0", "--warmup", "4", *connection]) == int(not passed)
     assert len(requests) == 2
     assert summaries == [([{"passed": passed}, {"passed": passed}], "")]
+    captured = capsys.readouterr()
+    assert f"benchmark server: {expected_url}" in captured.out
+    assert captured.err == (
+        f"kcoral: warning: --host/--port override KCORAL_URL; using {expected_url}\n"
+        if connection
+        else ""
+    )
 
 
 def test_adapter_discovery_from_nested_workload(monkeypatch, tmp_path):

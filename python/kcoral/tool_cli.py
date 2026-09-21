@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
 import re
 import sys
@@ -28,7 +29,16 @@ def run_main(argv):
 
 def add_connection_args(parser):
     parser.add_argument(
-        "--url", default=os.environ.get("KCORAL_URL"), help="server URL; default: KCORAL_URL"
+        "--url", help="server URL; default: KCORAL_URL; cannot combine with --host or --port"
+    )
+    parser.add_argument(
+        "--host",
+        help="HTTP server hostname or IP; overrides KCORAL_URL (default with --port: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        help="HTTP server port; overrides KCORAL_URL (default with --host: 8000)",
     )
     parser.add_argument(
         "--timeout",
@@ -45,8 +55,38 @@ def add_connection_args(parser):
 
 
 def validate_connection_args(parser, args):
+    environment_url = os.environ.get("KCORAL_URL")
+    if args.host is not None or args.port is not None:
+        if args.url is not None:
+            parser.error("--url cannot be combined with --host or --port")
+        host = args.host if args.host is not None else "127.0.0.1"
+        port = args.port if args.port is not None else 8000
+        if not 1 <= port <= 65535:
+            parser.error("--port must be between 1 and 65535")
+        if not host or re.search(r"[\s\x00-\x1f\x7f/@?#\\]", host):
+            parser.error("--host must be a hostname or IP address, without a scheme, port or path")
+        if ":" in host:
+            # Accept IPv6 both with and without URL brackets.
+            address = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+            try:
+                ipaddress.IPv6Address(address)
+            except ValueError:
+                parser.error(
+                    "--host must be a hostname or IP address, without a scheme, port or path"
+                )
+            host = f"[{address}]"
+        elif re.search(r"[\[\]%]", host):
+            parser.error("--host must be a hostname or IP address, without a scheme, port or path")
+        args.url = f"http://{host}:{port}"
+        if environment_url:
+            print(
+                f"kcoral: warning: --host/--port override KCORAL_URL; using {args.url}",
+                file=sys.stderr,
+            )
+    elif args.url is None:
+        args.url = environment_url
     if not args.url:
-        parser.error("set KCORAL_URL or pass --url")
+        parser.error("set KCORAL_URL or pass --url, --host or --port")
     if args.timeout <= 0 or args.output_limit_bytes <= 0:
         parser.error("--timeout and --output-limit-bytes must be positive")
 

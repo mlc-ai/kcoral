@@ -10,8 +10,26 @@ and select the server:
 export KCORAL_URL='http://SERVER_HOST:PORT'
 ```
 
-Use `--url URL` on a command to override the environment variable. The tools
-use the ordinary execution protocol and work through a KCoral Router too.
+Alternatively, specify an HTTP address directly on any remote command:
+
+```bash
+kcoral run python --host gpu.example.com --port 8000 --send experiment -- check.py
+kcoral run bench kda/decode v0 --host gpu.example.com --port 8000
+```
+
+`--host` and `--port` take precedence over `KCORAL_URL`. If either option is
+supplied, the address is `http://HOST:PORT`; an omitted host defaults to
+`127.0.0.1` and an omitted port to `8000`. Neither value is inherited from
+`KCORAL_URL`. Hostnames, IPv4, and IPv6 addresses are supported. If `KCORAL_URL`
+is also set, the command writes a warning to stderr with the effective address:
+
+```text
+kcoral: warning: --host/--port override KCORAL_URL; using http://gpu.example.com:8000
+```
+
+Use `--url URL` for a complete URL, including HTTPS or a path prefix; it also
+overrides `KCORAL_URL`. Do not combine `--url` with `--host` or `--port`.
+The tools use the ordinary execution protocol and work through a KCoral Router too.
 `kcoral run --help` lists the remote tools. Tool-specific options follow
 `run TOOL`; existing server and router entry points are unchanged.
 

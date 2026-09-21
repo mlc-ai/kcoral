@@ -322,6 +322,100 @@ def test_url_and_environment_defaults(monkeypatch):
     assert forwarded[-1] == "-i"
 
 
+@pytest.mark.parametrize("environment_url", [None, "https://environment.example:9443/prefix"])
+@pytest.mark.parametrize(
+    "options,expected_url",
+    [
+        (["--host", "gpu.example", "--port", "9000"], "http://gpu.example:9000"),
+        (["--host", "gpu.example"], "http://gpu.example:8000"),
+        (["--port", "9000"], "http://127.0.0.1:9000"),
+        (["--host", "127.0.0.2", "--port", "65535"], "http://127.0.0.2:65535"),
+        (["--host", "::1", "--port", "9000"], "http://[::1]:9000"),
+        (["--host", "[::1]", "--port", "1"], "http://[::1]:1"),
+    ],
+)
+def test_explicit_address_overrides_environment(
+    monkeypatch, capsys, environment_url, options, expected_url
+):
+    if environment_url is None:
+        monkeypatch.delenv("KCORAL_URL", raising=False)
+    else:
+        monkeypatch.setenv("KCORAL_URL", environment_url)
+    args, forwarded = cli.parse_args("python", [*options, "--", "check.py"])
+    assert args.url == expected_url
+    assert forwarded == ["check.py"]
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        f"kcoral: warning: --host/--port override KCORAL_URL; using {expected_url}\n"
+        if environment_url
+        else ""
+    )
+
+
+@pytest.mark.parametrize("explicit_url", [None, "https://explicit.example/prefix"])
+def test_url_selection_preserves_native_host_and_port(monkeypatch, capsys, explicit_url):
+    monkeypatch.setenv("KCORAL_URL", "https://environment.example/prefix")
+    options = ["--url", explicit_url] if explicit_url else []
+    native_args = ["check.py", "--host", "native-host", "--port", "invalid-for-kcoral"]
+    args, forwarded = cli.parse_args("python", [*options, "--", *native_args])
+    assert args.url == (explicit_url or "https://environment.example/prefix")
+    assert forwarded == native_args
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize(
+    "tool,native_args",
+    [
+        ("python", ["check.py"]),
+        ("shell", ["bash", "setup.sh"]),
+        ("compute-sanitizer", ["python", "check.py"]),
+        ("ncu", ["--set", "basic", "--", "python", "capture.py"]),
+        ("run-iket", ["profile", "--", "python", "capture.py"]),
+    ],
+)
+def test_all_tools_accept_connection_flags(monkeypatch, tool, native_args):
+    monkeypatch.delenv("KCORAL_URL", raising=False)
+    options = ["--host", "gpu.example", "--port", "9000"]
+    if tool in {"ncu", "run-iket"}:
+        options += ["--out", "artifacts"]
+    args, forwarded = cli.parse_args(tool, [*options, "--", *native_args])
+    assert args.url == "http://gpu.example:9000"
+    assert forwarded == native_args
+
+
+@pytest.mark.parametrize(
+    "options,message",
+    [
+        (["--port", "0"], "--port must be between 1 and 65535"),
+        (["--port", "65536"], "--port must be between 1 and 65535"),
+        (["--port", "-1"], "--port must be between 1 and 65535"),
+        (["--port", "abc"], "invalid int value"),
+        *[
+            (["--host", host], "--host must be a hostname or IP address")
+            for host in (
+                "",
+                "http://gpu",
+                "gpu:9000",
+                "gpu/path",
+                "user@gpu",
+                "a b",
+                "[gpu]",
+                "::x",
+            )
+        ],
+        (["--url", "http://gpu", "--host", "other"], "--url cannot be combined"),
+        (["--url", "http://gpu", "--port", "9000"], "--url cannot be combined"),
+    ],
+)
+def test_invalid_connection_flags(monkeypatch, capsys, options, message):
+    monkeypatch.setenv("KCORAL_URL", "http://environment.example")
+    with pytest.raises(SystemExit) as exc:
+        cli.parse_args("python", [*options, "--", "check.py"])
+    assert exc.value.code == 2
+    assert message in capsys.readouterr().err
+
+
 def test_input_snapshots_are_stable_and_reject_conflicts(tmp_path):
     source = tmp_path / "inputs"
     source.mkdir()
