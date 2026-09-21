@@ -12,9 +12,8 @@ export KCORAL_URL='http://SERVER_HOST:PORT'
 
 Use `--url URL` on a command to override the environment variable. The tools
 use the ordinary execution protocol and work through a KCoral Router too.
-Use `kcoral server` to start an execution server and `kcoral router` to start a
-Router. `kcoral run --help` lists the remote tools. Server flags follow the
-`server` subcommand; tool-specific options follow `run TOOL`.
+`kcoral run --help` lists the remote tools. Tool-specific options follow
+`run TOOL`; existing server and router entry points are unchanged.
 
 ## Upload and execute
 

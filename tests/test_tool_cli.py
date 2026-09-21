@@ -20,6 +20,49 @@ from kcoral.config import ServerConfig
 from kcoral.testing import fake_runtime_factory
 
 
+@pytest.mark.parametrize("tool", cli.COMMANDS)
+def test_run_command_preserves_tool_arguments(monkeypatch, tool):
+    from kcoral.__main__ import main
+
+    arguments = (
+        ["kda/decode", "v0"]
+        if tool == "bench"
+        else ["--send", "experiment", "--", "--flag", "--", "script.py", "a b"]
+    )
+    calls = []
+    monkeypatch.setattr(cli, "main", lambda name, argv: calls.append((name, argv)) or 7)
+    monkeypatch.setattr(sys, "argv", ["kcoral", "run", tool, *arguments])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 7
+    assert calls == [(tool, arguments)]
+
+
+@pytest.mark.parametrize("argv", [[], ["unknown"]])
+def test_run_requires_a_known_tool(argv):
+    with pytest.raises(SystemExit) as exc:
+        cli.run_main(argv)
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "argv,usage",
+    [
+        (["run", "--help"], "kcoral run"),
+        (["run", "ncu", "--help"], "kcoral run ncu"),
+        (["run", "bench", "--help"], "kcoral run bench"),
+    ],
+)
+def test_run_command_help(monkeypatch, argv, usage, capsys):
+    from kcoral.__main__ import main
+
+    monkeypatch.setattr(sys, "argv", ["kcoral", *argv])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 0
+    assert usage in capsys.readouterr().out
+
+
 @pytest.fixture
 def remote(monkeypatch, tmp_path):
     config = ServerConfig(

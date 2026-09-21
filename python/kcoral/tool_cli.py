@@ -14,6 +14,18 @@ from .client import Client, Program
 COMMANDS = ("python", "compute-sanitizer", "ncu", "run-iket", "bench", "shell")
 
 
+def run_main(argv):
+    parser = argparse.ArgumentParser(
+        prog="kcoral run", description="Run a tool on a remote server.", allow_abbrev=False
+    )
+    commands = parser.add_subparsers(dest="tool", required=True)
+    for name in COMMANDS:
+        commands.add_parser(name, add_help=False, help=f"run {name} remotely")
+    # Each tool owns its arguments, including --help and native -- separators.
+    args = parser.parse_args(argv[:1])
+    return main(args.tool, argv[1:])
+
+
 def add_connection_args(parser):
     parser.add_argument(
         "--url", default=os.environ.get("KCORAL_URL"), help="server URL; default: KCORAL_URL"

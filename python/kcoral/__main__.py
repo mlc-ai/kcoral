@@ -1,4 +1,4 @@
-"""Command-line entry point for KCoral servers and routers."""
+"""Command-line entry point for KCoral services and remote tools."""
 
 from __future__ import annotations
 
@@ -9,14 +9,9 @@ import sys
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["run"]:
-        from .tool_cli import COMMANDS, main as tool_main
+        from .tool_cli import run_main
 
-        parser = argparse.ArgumentParser(prog="kcoral run", allow_abbrev=False)
-        commands = parser.add_subparsers(dest="tool", required=True)
-        for name in COMMANDS:
-            commands.add_parser(name, add_help=False, help=f"run {name} remotely")
-        args = parser.parse_args(argv[1:2])
-        raise SystemExit(tool_main(args.tool, argv[2:]))
+        raise SystemExit(run_main(argv[1:]))
     if argv[:1] == ["server"]:
         from .commands import server_main
 
