@@ -39,6 +39,7 @@ getting-started/quickstart
 
 client-guide/protocol
 client-guide/writing-a-program
+client-guide/command-line
 ```
 
 ```{toctree}

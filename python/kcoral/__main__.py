@@ -8,6 +8,12 @@ import sys
 
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
+    from .tool_cli import COMMANDS
+
+    if argv and argv[0] in COMMANDS:
+        from .tool_cli import main as tool_main
+
+        raise SystemExit(tool_main(argv[0], argv[1:]))
     if argv[:1] == ["server"]:
         from .commands import server_main
 
