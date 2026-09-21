@@ -2,8 +2,8 @@
 
 Start two instances of the same server before running this example:
 
-    kcoral --device cpu --num-workers 8 --port 8000
-    kcoral --device gpu --gpus 0 --workers-per-gpu 8 --port 8001
+    kcoral server --device cpu --num-workers 8 --port 8000
+    kcoral server --device gpu --gpus 0 --workers-per-gpu 8 --port 8001
 
 Both requests use the regular ``POST /execute`` instruction protocol. The first
 returns shared-object bytes; the second uploads those bytes as ``kind="library"``.

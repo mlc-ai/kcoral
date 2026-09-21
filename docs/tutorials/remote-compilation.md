@@ -46,13 +46,13 @@ that builds CUDA C through TVM FFI.
 On the compilation host, start a CPU server:
 
 ```bash
-kcoral --device cpu --num-workers 8 --host 0.0.0.0 --port 8000
+kcoral server --device cpu --num-workers 8 --host 0.0.0.0 --port 8000
 ```
 
 On the execution host, start a GPU server:
 
 ```bash
-kcoral --device gpu --gpus 0 --workers-per-gpu 8 --host 0.0.0.0 --port 8001
+kcoral server --device gpu --gpus 0 --workers-per-gpu 8 --host 0.0.0.0 --port 8001
 ```
 
 The hosts may be different machines. See

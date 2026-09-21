@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from kcoral.__main__ import build_parser, config_from_args
+from kcoral._server import build_parser, config_from_args
 from kcoral.app import _describe
 
 
@@ -54,7 +54,7 @@ def test_host_default_and_flag():
 
 
 def test_host_env():
-    code = "from kcoral.__main__ import build_parser; print(build_parser().parse_args([]).host)"
+    code = "from kcoral._server import build_parser; print(build_parser().parse_args([]).host)"
     out = subprocess.run(
         [sys.executable, "-c", code],
         env={
@@ -82,7 +82,7 @@ def test_outbound_tunnel_environment_is_used_and_token_is_redacted(monkeypatch):
 
 def test_outbound_tunnel_endpoint_and_node_id_are_configured_together():
     with pytest.raises(SystemExit, match="configured together"):
-        parse(["--router-endpoint", "http://router:9000/"])
+        parse(["--router", "http://router:9000/"])
 
 
 def test_all_flags_reach_config():

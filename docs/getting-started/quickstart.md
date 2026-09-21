@@ -22,7 +22,7 @@ environment, and start one worker on GPU 0:
 
 ```bash
 source .venv/bin/activate
-kcoral --device gpu --gpus 0 --workers-per-gpu 1 --host 127.0.0.1 --port 8000
+kcoral server --device gpu --gpus 0 --workers-per-gpu 1 --host 127.0.0.1 --port 8000
 ```
 
 GPU 0 is the first GPU listed by `nvidia-smi`. Wait for server startup to finish

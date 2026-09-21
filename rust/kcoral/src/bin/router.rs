@@ -9,7 +9,11 @@ use kcoral::{
 use tokio::sync::watch;
 
 #[derive(Debug, Parser)]
-#[command(about = "HTTP and outbound-node gRPC router for a KCoral cohort")]
+#[command(
+    name = "kcoral router",
+    bin_name = "kcoral router",
+    about = "HTTP and outbound-node gRPC router for a KCoral cohort"
+)]
 struct Args {
     #[arg(long, default_value = "127.0.0.1")]
     host: String,

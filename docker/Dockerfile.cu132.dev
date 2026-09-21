@@ -2,6 +2,12 @@
 
 FROM ghcr.io/astral-sh/uv:0.11.30 AS uv
 
+FROM rust:1.87.0-bullseye AS native
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY rust ./rust
+RUN cargo build --release --locked --bins
+
 FROM nvidia/cuda:13.2.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -20,6 +26,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=uv /uv /uvx /bin/
+COPY --from=native /build/target/release/kcoral-node /build/target/release/kcoral-router /usr/local/bin/
 
 WORKDIR /workspace/kcoral
 
@@ -36,4 +43,4 @@ ENV KCORAL_SERVER_HOST=0.0.0.0
 
 EXPOSE 8000
 
-CMD ["python", "-m", "kcoral"]
+CMD ["python", "-m", "kcoral", "server"]

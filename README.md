@@ -41,10 +41,10 @@ for server, GPU and compiler dependencies.
 
 ## Run the server
 
-After installing the worker environment:
+After installing the [worker environment and native services](docs/getting-started/installation.md#install-native-services):
 
 ```bash
-kcoral --host 127.0.0.1 --port 8000
+kcoral server --host 127.0.0.1 --port 8000
 ```
 
 See [deployment](docs/server-guide/launch-the-server.md) and [configuration](docs/server-guide/launch-the-server.md#configuration)
@@ -58,8 +58,20 @@ the persistent cache directory, capacity and disabling caching.
 ## Route across nodes
 
 A Router accepts client requests and chooses an available compute node. Each
-node runs `kcoral-node` to supervise its Python server; both node processes
-connect outward to the Router. Clients use the same execution API.
+node runs `kcoral server --router URL --node-id NAME`. The command starts
+and supervises the local execution service and connects it to the Router.
+Clients use the same execution API.
+
+```bash
+# Router host
+kcoral router --host 0.0.0.0 --port 9000
+
+# Each compute node
+kcoral server --router http://router.example.com:9000 --node-id gpu-a --gpus 0
+```
+
+The top-level `kcoral` command displays help. Service commands run in the
+foreground; Ctrl+C or SIGTERM stops their process trees gracefully.
 
 See [Router deployment](docs/server-guide/router.md) for setup, scheduling and failure
 handling, and the [Rust package guide](rust/kcoral/README.md) for implementation

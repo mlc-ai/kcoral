@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     ffi::OsString,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     process::Stdio,
     sync::Arc,
     time::{Duration, Instant},
@@ -128,7 +129,26 @@ impl SupervisorState {
         if health_timeout.is_zero() {
             anyhow::bail!("health timeout must be positive");
         }
+        // The internal health endpoint accepts loopback peers only. Bind probes
+        // to loopback when the service listens on a specific local interface.
+        // For loopback destinations, let connect choose its source port: binding
+        // port 0 first can select the destination port and connect to itself
+        // before the service has started listening.
+        let source = server_url.host_str().and_then(|host| {
+            host.trim_matches(['[', ']'])
+                .parse::<IpAddr>()
+                .ok()
+                .filter(|ip| !ip.is_loopback())
+                .map(|ip| {
+                    if ip.is_ipv6() {
+                        IpAddr::V6(Ipv6Addr::LOCALHOST)
+                    } else {
+                        IpAddr::V4(Ipv4Addr::LOCALHOST)
+                    }
+                })
+        });
         let client = reqwest::Client::builder()
+            .local_address(source)
             .connect_timeout(health_timeout)
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()

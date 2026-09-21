@@ -8,8 +8,25 @@ CUDA is NVIDIA's GPU programming platform.
 ## Start an instance
 
 ```bash
-kcoral --host 127.0.0.1 --port 8000
+kcoral server --host 127.0.0.1 --port 8000
 ```
+
+`kcoral server` starts a native supervisor and the Python execution service in
+one command. The supervisor checks health, restarts an unhealthy or crashed
+service, and cleans up the previous process tree before starting a replacement.
+This applies to standalone services and nodes connected to a Router. Install
+both components using the [installation guide](../getting-started/installation.md#install-native-services).
+The bare `kcoral` command displays help; it does not start a service.
+
+To connect this machine to a Router, add its address and a stable node name:
+
+```bash
+kcoral server --router http://router.example.com:9000 --node-id gpu-a --gpus 0
+```
+
+The service uses the current Python environment. There is no separate node
+command to launch and no child command or health-check URL to assemble. See
+[Router deployment](router.md) for multi-node configuration.
 
 The server binds to `127.0.0.1` by default. Use `--host` or `KCORAL_SERVER_HOST` to
 select another address.
@@ -18,8 +35,8 @@ To compile on a machine without a GPU and execute on a separate GPU machine,
 run two instances of this same command:
 
 ```bash
-kcoral --device cpu --num-workers 16 --host 0.0.0.0 --port 8000
-kcoral --device gpu --gpus 0 --workers-per-gpu 8 --host 0.0.0.0 --port 8001
+kcoral server --device cpu --num-workers 16 --host 0.0.0.0 --port 8000
+kcoral server --device gpu --gpus 0 --workers-per-gpu 8 --host 0.0.0.0 --port 8001
 ```
 
 See [configuration](#configuration) for every option and its default.
@@ -76,7 +93,7 @@ workers with remaining resources or failed cleanup are replaced.
 For dependencies outside the standard runtime directories, add read-only paths:
 
 ```bash
-kcoral --sandbox-readonly-path /opt/custom-compiler
+kcoral server --sandbox-readonly-path /opt/custom-compiler
 ```
 
 Repeat the option for multiple paths. Directories also enter the Python module
@@ -178,6 +195,31 @@ path restrictions, snapshot behavior and directory uploads.
 The two `--no-*` flags set their fields to `False`. `--log-dir ''` disables
 logging; direct Python construction already defaults to `log_dir=None`.
 See [logs](logging.md) for locations, events and investigation commands.
+
+### Process supervision
+
+All service and supervisor options appear in `kcoral server --help`. Supervisor
+options apply to the local service process, rather than individual requests:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--health-interval-seconds` | `2` | Interval between local health probes |
+| `--health-timeout-seconds` | `1` | Deadline for each probe |
+| `--failure-threshold` | `3` | Consecutive failed probes before restarting |
+| `--startup-grace-seconds` | `30` | Startup time before failed probes count |
+| `--stable-reset-seconds` | `60` | Healthy time before resetting restart backoff |
+| `--termination-grace-seconds` | `5` | Wait before forcibly terminating an unhealthy service |
+| `--restart-min-delay-seconds` | `1` | Initial restart delay |
+| `--restart-max-delay-seconds` | `30` | Maximum restart delay |
+| `--restart-jitter` | `0.2` | Fraction of random variation in restart delays, from 0 to 0.5 |
+
+Ctrl+C or SIGTERM stops new work and waits for active requests to finish before
+cleaning up workers. `--termination-grace-seconds` limits unhealthy-service
+restarts; it does not cut short a normal graceful shutdown. A crashed service
+loses its in-flight requests, which are not replayed automatically.
+
+Run `kcoral server` under your operating system's service manager if the
+supervisor itself must be restarted after a crash or machine reboot.
 
 ### Configure an application in Python
 

@@ -73,7 +73,7 @@ sys.modules["uvicorn"] = None  # force the ImportError a client-only install giv
 
 from kcoral.__main__ import main
 
-sys.argv = ["kcoral"]
+sys.argv = ["kcoral", "server"]
 main()
 """
     result = run_isolated(code)
