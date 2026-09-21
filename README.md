@@ -43,14 +43,14 @@ for server, GPU and compiler dependencies.
 
 ```bash
 export KCORAL_URL='http://SERVER_HOST:PORT'
-kcoral python --send experiment -- check.py
-kcoral compute-sanitizer --send experiment -- python check.py
-kcoral ncu --send experiment --out artifacts/ncu \
+kcoral run python --send experiment -- check.py
+kcoral run compute-sanitizer --send experiment -- python check.py
+kcoral run ncu --send experiment --out artifacts/ncu \
   -- --set basic --launch-count 1 -- python capture.py
-kcoral run-iket --send experiment --out artifacts/iket \
+kcoral run run-iket --send experiment --out artifacts/iket \
   -- profile --postprocess json -- python capture.py
-kcoral bench kda/decode v0
-kcoral shell --send experiment -- bash setup.sh
+kcoral run bench kda/decode v0
+kcoral run shell --send experiment -- bash setup.sh
 ```
 
 See the [command line guide](docs/client-guide/command-line.md) for file transfer,

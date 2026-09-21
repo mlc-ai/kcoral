@@ -8,12 +8,15 @@ import sys
 
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
-    from .tool_cli import COMMANDS
+    if argv[:1] == ["run"]:
+        from .tool_cli import COMMANDS, main as tool_main
 
-    if argv and argv[0] in COMMANDS:
-        from .tool_cli import main as tool_main
-
-        raise SystemExit(tool_main(argv[0], argv[1:]))
+        parser = argparse.ArgumentParser(prog="kcoral run", allow_abbrev=False)
+        commands = parser.add_subparsers(dest="tool", required=True)
+        for name in COMMANDS:
+            commands.add_parser(name, add_help=False, help=f"run {name} remotely")
+        args = parser.parse_args(argv[1:2])
+        raise SystemExit(tool_main(args.tool, argv[2:]))
     if argv[:1] == ["server"]:
         from .commands import server_main
 
@@ -28,6 +31,7 @@ def main(argv: list[str] | None = None) -> None:
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("server", help="start a standalone server or join a Router")
     commands.add_parser("router", help="route requests across compute nodes")
+    commands.add_parser("run", help="run a tool on a remote server")
     parser.parse_args(argv)
     parser.print_help()
 

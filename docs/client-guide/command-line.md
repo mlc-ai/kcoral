@@ -12,8 +12,9 @@ export KCORAL_URL='http://SERVER_HOST:PORT'
 
 Use `--url URL` on a command to override the environment variable. The tools
 use the ordinary execution protocol and work through a KCoral Router too.
-Running `kcoral` without a subcommand still starts the server; existing server
-flags are unchanged.
+Use `kcoral server` to start an execution server and `kcoral router` to start a
+Router. `kcoral run --help` lists the remote tools. Server flags follow the
+`server` subcommand; tool-specific options follow `run TOOL`.
 
 ## Upload and execute
 
@@ -21,15 +22,15 @@ Given an `experiment/` directory containing `check.py`, `capture.py`, and
 `setup.sh`:
 
 ```bash
-kcoral python --send experiment -- check.py
-kcoral compute-sanitizer --send experiment -- python check.py
-kcoral compute-sanitizer --send experiment \
+kcoral run python --send experiment -- check.py
+kcoral run compute-sanitizer --send experiment -- python check.py
+kcoral run compute-sanitizer --send experiment \
   -- --tool racecheck python check.py
-kcoral ncu --send experiment --out artifacts/ncu \
+kcoral run ncu --send experiment --out artifacts/ncu \
   -- --set basic --launch-count 1 -- python capture.py
-kcoral run-iket --send experiment --out artifacts/iket \
+kcoral run run-iket --send experiment --out artifacts/iket \
   -- profile --postprocess json -- python capture.py
-kcoral shell --send experiment -- bash setup.sh
+kcoral run shell --send experiment -- bash setup.sh
 ```
 
 The first `--` separates KCoral options from native tool arguments. For `ncu`
@@ -51,9 +52,9 @@ worker's Python environment is first on `PATH`. Commands inherit the worker's
 GPU assignment. To pass additional variables:
 
 ```bash
-kcoral python --send experiment -e MODE=debug -e MY_LOCAL_VARIABLE -- check.py
-kcoral python -- -c 'print("hello from the worker")'
-kcoral python --send experiment -- -m my_package.check
+kcoral run python --send experiment -e MODE=debug -e MY_LOCAL_VARIABLE -- check.py
+kcoral run python -- -c 'print("hello from the worker")'
+kcoral run python --send experiment -- -m my_package.check
 ```
 
 `-e NAME` copies that variable's local value; `-e NAME=VALUE` sets it explicitly.
@@ -74,10 +75,10 @@ output-directory, export, or import options. Inspect saved reports locally.
 For Python, shell, and Compute Sanitizer, select additional files explicitly:
 
 ```bash
-kcoral compute-sanitizer --send experiment \
+kcoral run compute-sanitizer --send experiment \
   --fetch sanitizer.log --out artifacts/check \
   -- --error-exitcode 1 --log-file sanitizer.log python check.py
-kcoral shell --send experiment --fetch results --out artifacts/setup \
+kcoral run shell --send experiment --fetch results --out artifacts/setup \
   -- bash setup.sh
 ```
 
@@ -106,9 +107,9 @@ From a current TIRx-kernel-agent checkout with its
 `thirdparty/flashinfer-bench-evolve` submodule initialized:
 
 ```bash
-kcoral bench kda/decode v0
-kcoral bench kda/decode baseline --warmup 3 --repeat 50
-kcoral bench kda/decode v0 --repo /path/to/TIRx-kernel-agent
+kcoral run bench kda/decode v0
+kcoral run bench kda/decode baseline --warmup 3 --repeat 50
+kcoral run bench kda/decode v0 --repo /path/to/TIRx-kernel-agent
 ```
 
 KCoral discovers `kernel-evolution/bench_adapter.py` from the current directory

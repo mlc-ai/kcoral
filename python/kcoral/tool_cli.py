@@ -90,7 +90,7 @@ def validate_python_args(parser, arguments):
 
 def parse_args(tool, argv):
     parser = argparse.ArgumentParser(
-        prog=f"kcoral {tool}", allow_abbrev=False, description=f"Run {tool} on a KCoral worker."
+        prog=f"kcoral run {tool}", allow_abbrev=False, description=f"Run {tool} on a KCoral worker."
     )
     add_connection_args(parser)
     parser.add_argument(
@@ -223,9 +223,9 @@ def main(tool, argv):
             code = code or 1
         return code if code >= 0 else 128 - code
     except (OSError, ValueError, RuntimeError) as exc:
-        print(f"kcoral {tool}: {exc}", file=sys.stderr)
+        print(f"kcoral run {tool}: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
         # Transport/protocol failures should have the same concise CLI presentation.
-        print(f"kcoral {tool}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"kcoral run {tool}: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1

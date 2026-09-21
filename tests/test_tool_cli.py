@@ -319,7 +319,7 @@ import sys
 for name in ('fastapi', 'uvicorn', 'grpc', 'torch', 'tvm', 'tvm_ffi'):
     sys.modules[name] = None
 from kcoral.__main__ import main
-sys.argv = ['kcoral', 'ncu', '--help']
+sys.argv = ['kcoral', 'run', 'ncu', '--help']
 main()
 """
     result = subprocess.run(

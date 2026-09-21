@@ -73,7 +73,7 @@ def build_request(adapter, source, task, overrides, entry, candidate):
 
 def main(argv):
     parser = argparse.ArgumentParser(
-        prog="kcoral bench",
+        prog="kcoral run bench",
         allow_abbrev=False,
         description="Benchmark a candidate using a checkout's pinned harness.",
     )
@@ -130,5 +130,5 @@ def main(argv):
         summarize(rows, "")
         return int(any(row.get("passed") is False for row in rows))
     except Exception as exc:
-        print(f"kcoral bench: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"kcoral run bench: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
