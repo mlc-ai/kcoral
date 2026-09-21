@@ -23,6 +23,16 @@ class _NVMLAPI:
             raise OSError("nvmlInit_v2 failed")
         self._handle_by_index = library.nvmlDeviceGetHandleByIndex_v2
         self._device_uuid = library.nvmlDeviceGetUUID
+        self._device_minor_number = library.nvmlDeviceGetMinorNumber
+
+    def device_minor_number(self, gpu_id: int) -> int | None:
+        handle = ctypes.c_void_p()
+        if self._handle_by_index(ctypes.c_uint(gpu_id), ctypes.byref(handle)) != _NVML_SUCCESS:
+            return None
+        minor = ctypes.c_uint()
+        if self._device_minor_number(handle, ctypes.byref(minor)) != _NVML_SUCCESS:
+            return None
+        return minor.value
 
     def device_uuid(self, gpu_id: int) -> str | None:
         handle = ctypes.c_void_p()
@@ -49,6 +59,17 @@ def device_uuid(gpu_id: int) -> str | None:
     """The UUID of a physical GPU, or None if NVML cannot name it."""
     api = _nvml_api()
     return None if api is None else api.device_uuid(gpu_id)
+
+
+def device_minor_number(gpu_id: int) -> int | None:
+    """Resolve an NVML index to the Linux /dev/nvidiaN device number.
+
+    NVIDIA containers can expose index 0 while retaining a host device node
+    such as /dev/nvidia6. UUID selection and filesystem mounts must identify
+    the same card even when these numbers differ.
+    """
+    api = _nvml_api()
+    return None if api is None else api.device_minor_number(gpu_id)
 
 
 def uuid_key(value: str | None) -> str | None:

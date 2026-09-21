@@ -82,6 +82,26 @@ def test_direct_worker_reports_missing_bubblewrap(monkeypatch):
         Worker(None, cpu_runtime_factory)
 
 
+@pytest.mark.parametrize("minor, expected", [(6, "/dev/nvidia6"), (None, "/dev/nvidia0")])
+def test_gpu_mount_uses_device_minor_number(monkeypatch, minor, expected):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/bwrap")
+    monkeypatch.setattr(sandboxing.nvml, "device_minor_number", lambda gpu: minor)
+    original_exists = Path.exists
+    monkeypatch.setattr(
+        Path,
+        "exists",
+        lambda path: True if str(path) in ("/dev/nvidia0", "/dev/nvidia6") else original_exists(path),
+    )
+    instance = Sandbox()
+    try:
+        command = instance.command(0)
+        devices = [command[i + 1] for i, arg in enumerate(command) if arg == "--dev-bind"]
+        assert expected in devices
+        assert ({"/dev/nvidia0", "/dev/nvidia6"} - {expected}).isdisjoint(devices)
+    finally:
+        instance.close()
+
+
 def test_direct_worker_reports_bubblewrap_launch_failure(monkeypatch):
     executable = shutil.which("false")
     if executable is None:

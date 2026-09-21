@@ -20,6 +20,8 @@ import threading
 from pathlib import Path
 from types import ModuleType
 
+from . import nvml
+
 WORKSPACE = "/work"
 PRIVATE = ".kcoral"
 _active = False
@@ -209,8 +211,10 @@ class Sandbox:
         for name in ("null", "zero", "random", "urandom", "full"):
             command += ["--dev-bind", f"/dev/{name}", f"/dev/{name}"]
         if gpu_id is not None:
+            minor = nvml.device_minor_number(gpu_id)
+            device_number = gpu_id if minor is None else minor
             devices = [
-                Path(f"/dev/nvidia{gpu_id}"),
+                Path(f"/dev/nvidia{device_number}"),
                 Path("/dev/nvidiactl"),
                 Path("/dev/nvidia-uvm"),
                 Path("/dev/nvidia-uvm-tools"),
