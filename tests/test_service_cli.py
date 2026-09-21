@@ -1,4 +1,4 @@
-"""Service launchers and real supervised execution, without a GPU."""
+"""Standalone server and routed-node launchers, without a GPU."""
 
 import os
 import signal
@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from kcoral import Client, Program, service_cli
+from kcoral import Client, Program, commands
 from kcoral.__main__ import main
 from kcoral._server import build_parser, config_from_args
 
@@ -24,7 +24,7 @@ def launch(monkeypatch):
     for name in ("KCORAL_ROUTER_ENDPOINT", "KCORAL_NODE_ID", "KCORAL_NODE_TOKEN"):
         monkeypatch.delenv(name, raising=False)
     calls = []
-    monkeypatch.setattr(service_cli, "exec_service", lambda *a, **kw: calls.append((a, kw)))
+    monkeypatch.setattr(commands, "exec_native_binary", lambda *a, **kw: calls.append((a, kw)))
     return calls
 
 
@@ -36,15 +36,17 @@ def test_root_help_and_no_implicit_server(capsys):
     assert exc.value.code == 2
 
 
-def test_router_forwards_native_options(launch):
+def test_router_forwards_options(launch):
     main(["router", "--port", "9001", "--max-queued-requests=20"])
     assert launch == [(("kcoral-router", ["--port", "9001", "--max-queued-requests=20"]), {})]
 
 
-def test_standalone_preserves_worker_options_and_python_environment(launch):
+def test_routed_node_preserves_worker_options_and_python_environment(launch):
     main(
         [
             "server",
+            "--router=http://router:9000",
+            "--node-id=cpu-a",
             "--device=cpu",
             "--num-workers",
             "3",
@@ -64,7 +66,7 @@ def test_standalone_preserves_worker_options_and_python_environment(launch):
     (name, argv), kwargs = launch[0]
     assert name == "kcoral-node"
     assert argv[:2] == ["--server-url", "http://127.0.0.1:8123/"]
-    assert "--router-endpoint" not in argv
+    assert "--router-endpoint" in argv
     boundary = argv.index("--")
     assert argv[boundary + 1 : boundary + 4] == [sys.executable, "-m", "kcoral._server"]
     worker_args = argv[boundary + 4 :]
@@ -73,9 +75,71 @@ def test_standalone_preserves_worker_options_and_python_environment(launch):
     assert config.log_dir == Path("logs with spaces")
     assert config.log_console is False and config.log_programs is False
     assert config.sandbox_readonly_paths == [Path("/opt/compiler one"), Path("/opt/compiler-two")]
+    assert worker_args[:5] == ["--device=cpu", "--num-workers", "3", "--host", "0.0.0.0"]
+    assert "--log-dir=logs with spaces" in worker_args
+    assert "--sandbox-readonly-path=/opt/compiler one" in worker_args
+    assert not any(arg.startswith("--health-interval-seconds") for arg in worker_args)
     assert "--host=0.0.0.0" in worker_args
-    assert argv[argv.index("--health-interval-seconds") + 1] == "0.25"
+    assert "--health-interval-seconds=0.25" in argv
     assert "KCORAL_ROUTER_ENDPOINT" not in kwargs["env"]
+
+
+def test_standalone_runs_in_the_current_process_without_helpers(launch, monkeypatch):
+    served = []
+    monkeypatch.setattr(commands, "serve", served.append)
+    monkeypatch.setattr(commands.shutil, "which", lambda *a, **kw: pytest.fail("helper lookup"))
+    main(["server", "--device=cpu", "--num-workers=3", "--log-dir=with spaces"])
+    assert not launch
+    config = config_from_args(served[0])
+    assert config.device == "cpu" and config.num_workers == 3
+    assert config.log_dir == Path("with spaces")
+
+
+@pytest.mark.parametrize("option", ["--health-interval-seconds=2", "--restart-jitter=0.2"])
+def test_standalone_rejects_router_only_options(launch, option, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["server", option])
+    assert exc.value.code == 2
+    assert "requires --router" in capsys.readouterr().err
+    assert not launch
+
+
+def test_routed_defaults_are_owned_by_the_supervisor(launch):
+    main(["server", "--router", "http://router:9000", "--node-id", "cpu-a"])
+    argv = launch[0][0][1]
+    assert not any(
+        arg.startswith("--" + name) for arg in argv for name in commands._SUPERVISOR_OPTIONS
+    )
+
+
+def test_only_explicit_supervisor_overrides_are_forwarded(launch):
+    main(
+        [
+            "server",
+            "--router",
+            "http://router:9000",
+            "--node-id",
+            "cpu-a",
+            "--failure-threshold=5",
+            "--restart-min-delay-seconds",
+            "2.5",
+        ]
+    )
+    argv = launch[0][0][1]
+    overrides = [
+        arg
+        for arg in argv
+        if any(arg.startswith("--" + name) for name in commands._SUPERVISOR_OPTIONS)
+    ]
+    assert overrides == ["--failure-threshold=5", "--restart-min-delay-seconds=2.5"]
+
+
+def test_advanced_supervisor_options_do_not_clutter_help(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["server", "--help"])
+    assert exc.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--router" in help_text and "--health-interval-seconds" not in help_text
 
 
 def test_routing_flags_override_environment_without_exposing_token(launch, monkeypatch):
@@ -105,10 +169,14 @@ def test_routing_flags_override_environment_without_exposing_token(launch, monke
 def test_routing_environment_alone_is_supported(launch, monkeypatch):
     monkeypatch.setenv("KCORAL_ROUTER_ENDPOINT", "http://router:9000")
     monkeypatch.setenv("KCORAL_NODE_ID", "gpu-a")
+    monkeypatch.setenv("KCORAL_SERVER_HOST", "0.0.0.0")
+    monkeypatch.setenv("KCORAL_SERVER_PORT", "8123")
     main(["server"])
     argv = launch[0][0][1]
     assert argv[argv.index("--router-endpoint") + 1] == "http://router:9000"
     assert argv[argv.index("--node-id") + 1] == "gpu-a"
+    assert argv[argv.index("--server-url") + 1] == "http://127.0.0.1:8123/"
+    assert argv[-2:] == ["--host=0.0.0.0", "--port=8123"]
 
 
 @pytest.mark.parametrize(
@@ -116,45 +184,81 @@ def test_routing_environment_alone_is_supported(launch, monkeypatch):
     [
         ["--router", "http://router:9000"],
         ["--node-id", "gpu-a"],
-        ["--health-interval-seconds", "0"],
-        ["--failure-threshold", "0"],
-        ["--restart-jitter", "0.6"],
-        ["--health-timeout-seconds", "nan"],
-        ["--restart-min-delay-seconds", "20", "--restart-max-delay-seconds", "10"],
         ["--port", "0"],
         ["--num-workers", "0"],
     ],
 )
 def test_invalid_settings_never_start_a_process(launch, arguments):
     with pytest.raises(SystemExit):
-        main(["server", *arguments])
+        route = (
+            []
+            if arguments[0] in {"--router", "--node-id"}
+            else ["--router", "http://router:9000", "--node-id", "cpu-a"]
+        )
+        main(["server", *route, *arguments])
     assert not launch
 
 
-def test_service_helper_prefers_current_environment_and_replaces_process(monkeypatch):
+def test_native_binary_prefers_current_environment_and_replaces_process(monkeypatch):
     searched, executed = [], []
     monkeypatch.setattr(
-        service_cli.shutil, "which", lambda name, path: searched.append(path) or "/native/helper"
+        commands.shutil, "which", lambda name, path: searched.append(path) or "/native/helper"
     )
-    monkeypatch.setattr(service_cli.os, "execve", lambda *args: executed.append(args))
-    service_cli.exec_service("kcoral-router", ["--port", "9000"], env={"EXPLICIT": "1"})
+    monkeypatch.setattr(commands.os, "execve", lambda *args: executed.append(args))
+    commands.exec_native_binary("kcoral-router", ["--port", "9000"], env={"EXPLICIT": "1"})
     assert searched[0].split(os.pathsep)[0] == str(Path(sys.executable).parent)
     assert executed == [("/native/helper", ["/native/helper", "--port", "9000"], {"EXPLICIT": "1"})]
 
 
 def test_missing_helper_has_installation_instructions(monkeypatch):
-    monkeypatch.setattr(service_cli.shutil, "which", lambda *args, **kwargs: None)
-    with pytest.raises(SystemExit, match="cargo install --locked"):
-        service_cli.exec_service("kcoral-node", [])
+    monkeypatch.setattr(commands.shutil, "which", lambda *args, **kwargs: None)
+    with pytest.raises(SystemExit, match="cargo build --release --locked"):
+        commands.exec_native_binary("kcoral-node", [])
 
 
 def _binary_dir():
     binary = Path(os.environ.get("KCORAL_NODE_BIN", ROOT / "target/debug/kcoral-node"))
     if not binary.is_file() or not binary.with_name("kcoral-router").is_file():
         if os.environ.get("KCORAL_REQUIRE_GATEWAY_TESTS") == "1":
-            pytest.fail("build both native service binaries before running these tests")
-        pytest.skip("build native services to test the public launchers")
+            pytest.fail("build the Rust supervisor and Router before running these tests")
+        pytest.skip("build the Rust supervisor and Router to test the public launchers")
     return binary.parent
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--health-interval-seconds", "0"],
+        ["--failure-threshold", "0"],
+        ["--restart-jitter", "0.6"],
+        ["--health-timeout-seconds", "nan"],
+        ["--restart-min-delay-seconds", "20", "--restart-max-delay-seconds", "10"],
+    ],
+)
+def test_rust_validates_supervisor_overrides_before_starting_a_child(arguments):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("KCORAL_")}
+    env.update(PYTHONPATH=str(ROOT / "python"), PATH=str(_binary_dir()))
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "kcoral",
+            "server",
+            "--router",
+            "http://127.0.0.1:1",
+            "--node-id",
+            "invalid-config",
+            "--device",
+            "cpu",
+            *arguments,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode != 0
+    assert "started KCoral Server child" not in result.stdout + result.stderr
 
 
 def _port(host="127.0.0.1", family=socket.AF_INET):
@@ -174,13 +278,13 @@ def _wait(check, timeout=30):
 
 
 @contextmanager
-def _running(tmp_path, name, *args, extra_env=None):
+def _running(tmp_path, name, *args, extra_env=None, use_helpers=True):
     log_path = tmp_path / (name + ".log")
     env = {k: v for k, v in os.environ.items() if not k.startswith("KCORAL_")}
     env.update(
         {
             "PYTHONPATH": str(ROOT / "python"),
-            "PATH": str(_binary_dir()) + os.pathsep + os.environ.get("PATH", ""),
+            "PATH": str(_binary_dir()) if use_helpers else "",
             **(extra_env or {}),
         }
     )
@@ -198,7 +302,8 @@ def _running(tmp_path, name, *args, extra_env=None):
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait()
-            assert proc.returncode == 0, log_path.read_text()
+            expected = (0,) if use_helpers else (0, -signal.SIGINT, -signal.SIGTERM)
+            assert proc.returncode in expected, log_path.read_text()
 
 
 def _healthy(url, process, log_path, previous=None):
@@ -223,8 +328,8 @@ def _program():
     return program
 
 
-def _server_options(tmp_path, port):
-    return [
+def _server_options(tmp_path, port, *, routed=False):
+    options = [
         "server",
         "--device",
         "cpu",
@@ -238,28 +343,32 @@ def _server_options(tmp_path, port):
         str(tmp_path / "events"),
         "--disk-cache-dir",
         "",
-        "--health-interval-seconds",
-        "0.1",
-        "--restart-min-delay-seconds",
-        "0.1",
-        "--restart-max-delay-seconds",
-        "0.1",
-        "--startup-grace-seconds",
-        "10",
-        "--termination-grace-seconds",
-        "0.1",
     ]
+    if routed:
+        options += [
+            "--health-interval-seconds",
+            "0.1",
+            "--restart-min-delay-seconds",
+            "0.1",
+            "--restart-max-delay-seconds",
+            "0.1",
+            "--startup-grace-seconds",
+            "10",
+            "--termination-grace-seconds",
+            "0.1",
+        ]
+    return options
 
 
 @pytest.mark.parametrize("routed", [False, True])
-def test_public_server_executes_restarts_and_shuts_down(tmp_path, routed):
+def test_public_server_runs_directly_or_supervises_a_routed_node(tmp_path, routed):
     from concurrent.futures import ThreadPoolExecutor
     from contextlib import ExitStack
 
     server_port = _port()
     direct_url = f"http://127.0.0.1:{server_port}"
     with ExitStack() as stack:
-        options = _server_options(tmp_path, server_port)
+        options = _server_options(tmp_path, server_port, routed=routed)
         if routed:
             router_port = _port()
             url = f"http://127.0.0.1:{router_port}"
@@ -278,24 +387,27 @@ def test_public_server_executes_restarts_and_shuts_down(tmp_path, routed):
             options += ["--router", url, "--node-id", "cpu-a", "--node-token", "test-token"]
         else:
             url = direct_url
-        server, server_log = stack.enter_context(_running(tmp_path, "server", *options))
+        server, server_log = stack.enter_context(
+            _running(tmp_path, "server", *options, use_helpers=routed)
+        )
         health = _wait(lambda: _healthy(direct_url, server, server_log))
         if routed:
             _wait(lambda: _healthy(url, router, router_log))
         with Client(url) as client:
             assert client.execute(_program()).results == {"answer": 42}
-        # The public launcher execs the supervisor, whose direct child is the
-        # Python server. Kill it, then prove a new generation can execute work.
-        children = {
-            int(pid)
-            for thread in Path(f"/proc/{server.pid}/task").iterdir()
-            for pid in (thread / "children").read_text().split()
-        }
-        assert len(children) == 1
-        child = children.pop()
-        os.kill(child, signal.SIGKILL)
-        _wait(lambda: _healthy(direct_url, server, server_log, health["instance_id"]))
         if routed:
+            # The public launcher execs the supervisor, whose direct child is the
+            # Python server. Kill it, then prove a new generation can execute work.
+            children = {
+                int(pid)
+                for thread in Path(f"/proc/{server.pid}/task").iterdir()
+                for pid in (thread / "children").read_text().split()
+            }
+            assert len(children) == 1
+            child = children.pop()
+            os.kill(child, signal.SIGKILL)
+            _wait(lambda: _healthy(direct_url, server, server_log, health["instance_id"]))
+
             # A fresh slot and a fresh status report must agree before routing.
             def recovered():
                 try:
@@ -305,10 +417,21 @@ def test_public_server_executes_restarts_and_shuts_down(tmp_path, routed):
                     return False
 
             _wait(recovered)
+            assert "restarting KCoral Server" in server_log.read_text()
         else:
+            # CPU workers are children of the serving Python process itself.
+            identity = Program()
+            module = identity.upload(
+                id="identity",
+                kind="module",
+                source="import os\ndef parent():\n    return os.getppid()\n",
+            )
+            fn = identity.get_function(id="parent", module=module, name="parent")
+            result = identity.run(id="pid", fn=fn)
+            identity.return_(key="pid", value=result)
             with Client(url) as client:
-                assert client.execute(_program()).results == {"answer": 42}
-        assert "restarting KCoral Server" in server_log.read_text()
+                assert client.execute(identity).results["pid"] == server.pid
+            assert "KCoral Server child" not in server_log.read_text()
         # A normal stop must finish accepted work even when it takes longer
         # than the grace period used for unhealthy-service restarts.
         started = tmp_path / "request-started"
@@ -330,9 +453,11 @@ def test_public_server_executes_restarts_and_shuts_down(tmp_path, routed):
             _wait(started.exists)
             server.send_signal(signal.SIGTERM if routed else signal.SIGINT)
             assert future.result(timeout=15).results == {"value": "finished"}
-            assert server.wait(timeout=15) == 0
+            code = server.wait(timeout=15)
+            assert code == 0 if routed else code in (0, -signal.SIGINT)
 
-    assert not Path(f"/proc/{child}").exists()
+    if routed:
+        assert not Path(f"/proc/{child}").exists()
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "::1", "::", "interface"])
@@ -348,7 +473,17 @@ def test_supervisor_health_with_bind_addresses(tmp_path, host):
     except OSError:
         pytest.skip("bind address is unavailable on this host")
     url = f"http://[{target}]:{port}" if ipv6 else f"http://{target}:{port}"
-    with _running(tmp_path, "bind", *_server_options(tmp_path, port), "--host", host) as (
+    with _running(
+        tmp_path,
+        "bind",
+        *_server_options(tmp_path, port, routed=True),
+        "--router",
+        "http://127.0.0.1:1",
+        "--node-id",
+        "bind-check",
+        "--host",
+        host,
+    ) as (
         proc,
         log,
     ):

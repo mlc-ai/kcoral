@@ -1,4 +1,4 @@
-"""Internal Python execution service, launched by the server supervisor.
+"""Python execution server for standalone use and routed nodes.
 
 The front-end process itself touches no GPU. GPU workers import torch/tvm and
 are pinned to one GPU, which ``--workers-per-gpu`` of them share by taking turns
@@ -216,7 +216,11 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
+    serve(build_parser().parse_args(argv))
+
+
+def serve(args: argparse.Namespace) -> None:
+    """Run the Python server in the current process."""
     config = config_from_args(args)
     if config.device == "gpu":
         _warn_if_visible_devices_set()
@@ -226,7 +230,7 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def server_components():
-    """Check the server extra before starting a supervised child."""
+    """Load the Python server components and report missing dependencies."""
     try:
         import uvicorn
 

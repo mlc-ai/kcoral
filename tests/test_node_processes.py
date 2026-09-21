@@ -60,9 +60,8 @@ def wait_for(check, timeout=8):
         time.sleep(0.02)
 
 
-@pytest.mark.parametrize("routed", [False, True])
 @pytest.mark.parametrize("mode", ["normal", "graceful", "crash", "health-failure"])
-def test_node_reaps_descendants_that_escape_the_server_session(tmp_path, mode, routed):
+def test_node_reaps_descendants_that_escape_the_server_session(tmp_path, mode):
     binary = Path(
         os.environ.get(
             "KCORAL_NODE_BIN", Path(__file__).resolve().parents[1] / "target/debug/kcoral-node"
@@ -77,7 +76,10 @@ def test_node_reaps_descendants_that_escape_the_server_session(tmp_path, mode, r
     history = tmp_path / "generations.jsonl"
     command = [
         str(binary),
-        *(["--router-endpoint", "http://127.0.0.1:1", "--node-id", "cleanup"] if routed else []),
+        "--router-endpoint",
+        "http://127.0.0.1:1",
+        "--node-id",
+        "cleanup",
         "--server-url",
         "http://127.0.0.1:1",
         "--termination-grace-seconds",

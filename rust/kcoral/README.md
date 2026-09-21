@@ -32,16 +32,14 @@ the server does not require a compiler.
 
 ## Process ownership
 
-Run `kcoral router` and each `kcoral server` as separate systemd services or
+Run `kcoral router` and each `kcoral server --router ...` as separate systemd services or
 container processes. The supervisor launches the Python server child, probes
 its loopback-only `/internal/worker-status` endpoint, and restarts it independently of the router.
 It passes `KCORAL_ROUTER_ENDPOINT`, `KCORAL_NODE_ID`, and the optional
 `KCORAL_NODE_TOKEN` to the child so the child's data slots use the same identity
 as its control stream. The host and port from `--server-url` become the child's
 `KCORAL_SERVER_HOST` and `KCORAL_SERVER_PORT` defaults. The launcher supplies
-an explicit internal service command after `--` using
-its current Python interpreter. Without a Router endpoint, the supervisor
-performs only local health checks and restarts.
+the Python server command after `--`; explicit child flags override the defaults.
 See the [Router deployment guide](../../docs/server-guide/router.md) for examples.
 
 The router and supervisor themselves rely on systemd, Kubernetes, or an

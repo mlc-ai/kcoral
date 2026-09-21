@@ -5,15 +5,16 @@ node for each request. A node supervisor starts, checks and restarts its local
 Python server. The supervisor and Python server initiate their connections to
 the Router, so compute nodes do not need to accept inbound network connections.
 
-Install the client, Python server and native services from the same revision
-so their internal protocols match. See [installation](../getting-started/installation.md#install-native-services).
+Install the client and Python server from the same revision as the Rust
+binaries so their internal protocols match.
 
 ## Components and connections
 
 | Component | Where it runs | Responsibility |
 | --- | --- | --- |
 | `kcoral router` | A host reachable by clients and nodes | Accept HTTP requests, manage a bounded wait queue and select nodes |
-| `kcoral server --router URL --node-id NAME` | Each compute node | Supervise the local execution service, report health and execute programs |
+| `kcoral server --router ...` | Each compute node | Supervise one Python server process tree and report its health |
+| Python server | Each compute node | Execute programs with the existing worker pool |
 
 HTTP is the public request-and-response protocol. Internally, gRPC is the
 streaming remote-call protocol connecting each node to the Router. It uses
@@ -30,66 +31,65 @@ Request and response bytes travel in frames of at most 256 KiB, where KiB means
 tunnel. The Python `/execute` implementation still assembles the complete
 request before parsing it.
 
-## Install and launch
+## Build and launch
 
-Install the native services on the Router host and on each compute node using
-[the installation guide](../getting-started/installation.md#install-native-services).
-Compute nodes additionally need the Python worker environment. A Router host
-needs only the client package and native binaries, without GPU libraries.
+Use Rust 1.87 or newer and Cargo, Rust's build tool. The build supplies its own
+Protocol Buffers compiler. Build from the repository root:
 
-Start the Router at an address nodes can reach:
+```bash
+cargo build --release --locked
+export PATH="$PWD/target/release:$PATH"
+```
+
+Install the [Python package](../getting-started/installation.md) on the Router host
+and the worker environment on each compute node. Start the Router:
 
 ```bash
 export KCORAL_NODE_TOKEN='<shared-node-token>'
-kcoral router --host 0.0.0.0 --port 9000
+kcoral router --host 127.0.0.1 --port 9000
 ```
 
-On each compute node, use the same token and a distinct stable node ID:
+On the same machine, start a node with the same token and a stable `node-id`:
 
 ```bash
 export KCORAL_NODE_TOKEN='<shared-node-token>'
-kcoral server --router http://router.example.com:9000 --node-id gpu-a --gpus 0
+kcoral server \
+  --router http://127.0.0.1:9000 \
+  --node-id gpu-a
 ```
 
-This one command starts both the process supervisor and the local Python
-execution service. It checks health, restarts failed services and connects
-outward to the Router. Omitting `--router` and `--node-id` starts a supervised
-standalone server. Both modes accept the same server options:
-
-```bash
-kcoral server --router http://router.example.com:9000 --node-id cpu-a \
-  --device cpu --num-workers 8 --port 8001 --log-dir /var/log/kcoral
-```
-
-`--router` and `--node-id` must be configured together. They default from
-`KCORAL_ROUTER_ENDPOINT` and `KCORAL_NODE_ID`; command-line values take precedence.
-`--node-token` defaults from `KCORAL_NODE_TOKEN`. Prefer the environment variable
-so the token is not visible in the shell's command line. The launcher passes it
-to child processes through the environment.
-
-The Python service binds to `127.0.0.1:8000` by default. Its local health-check
-address is derived automatically from `--host` and `--port`, including wildcard
-and IPv6 bind addresses. The Router uses the node's outbound connections, so it
-does not need access to the node's listening port. Multiple services on one host
-need distinct ports and, when routed, distinct node IDs.
-
-Replace the Router hostname and token for your deployment. The example uses
+The examples run on one machine. For remote nodes, bind the Router with
+`--host 0.0.0.0` and replace `127.0.0.1` with its reachable address. Give each node
+a distinct stable `node-id`. The example uses
 plain HTTP for a controlled network; an HTTPS endpoint requires TLS (transport
 encryption) terminated by a compatible proxy. The optional token authenticates
 node streams; it does not provide public client authorization or encryption.
 
-The native supervisor requires Linux 5.3 or newer, access to `/proc`, and
-permission to signal its child processes. Run `kcoral router` and each
-`kcoral server` under your service manager so they also restart after a host
-reboot or a supervisor crash. Service options are listed by
-`kcoral router --help` and `kcoral server --help`.
+With `--router`, `kcoral server` starts a supervisor (the node manager) that
+manages the Python server using the current Python environment. Its health-check address follows
+`--host` and `--port`; the Router does not connect to that address.
+Without `--router`, the Python server runs directly.
+
+Pass server options directly:
+
+```bash
+kcoral server \
+  --router http://127.0.0.1:9000 \
+  --node-id gpu-a \
+  --host 0.0.0.0 --gpus 0 --log-dir /var/log/kcoral
+```
+
+The manager requires Linux 5.3 or newer, access to `/proc`, and permission to
+signal its child processes. Run the Router
+and node managers under your service manager so those processes are also
+restarted if they fail.
 
 Clients continue using `Client`, `Program`, `POST /execute` and `GET /health`:
 
 ```python
 from kcoral import Client
 
-with Client("http://router.example.com:9000") as client:
+with Client("http://127.0.0.1:9000") as client:
     print(client.target())
     # client.execute(program) uses the same program format as a direct server.
 ```
