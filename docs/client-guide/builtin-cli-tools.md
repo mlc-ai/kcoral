@@ -10,7 +10,7 @@ output through an existing KCoral server or Router.
 | [compute-sanitizer](#compute-sanitizer) | Find CUDA memory-access and synchronization errors. |
 | [ncu](#ncu) | Collect NVIDIA Nsight Compute kernel performance reports. |
 | [run-iket](#run-iket) | Collect instrumented kernel execution timelines. |
-| [bench](#bench) | Check correctness and measure a candidate using a checkout's benchmark definitions. |
+| [bench](#bench) | Check correctness and measure a candidate using a local benchmark definition. |
 | [shell](#shell) | Run a shell script, uploaded executable, or program installed on the worker. |
 
 The common reference below defines KCoral's options and execution behavior.
@@ -68,7 +68,7 @@ Or specify the address on the invocation:
 
 ```bash
 kcoral run python --host gpu.example.com --port 8000 --send experiment -- experiment/check.py
-kcoral run bench --host gpu.example.com --port 8000 -- kda/decode v0
+kcoral run bench --host gpu.example.com --port 8000 -- examples/benchmarks/vector_add v0
 ```
 
 If either `--host` or `--port` is present, KCoral constructs `http://HOST:PORT`
@@ -133,7 +133,7 @@ files written as `experiment/results/report.json` need `--fetch experiment/resul
 Send the files your program needs, including local modules and configuration.
 Sending a script does not discover its imports or upload its parent directory.
 Without `--send`, the tool starts in an empty working directory. Bench separately
-uploads its adapter-selected code and tensors. Relative paths in tool arguments
+automatically uploads the selected benchmark directory. Relative paths in tool arguments
 are resolved in the working directory; absolute paths refer to the worker's
 filesystem, subject to the server's isolation settings.
 
@@ -546,16 +546,16 @@ describes kernel instrumentation and version-specific requirements.
 
 ### Purpose and requirements
 
-`bench` checks and measures a candidate using a benchmark adapter in a local
-TIRx-kernel-agent checkout. The adapter selects the task, input shapes, reference
-implementation, and iteration defaults. KCoral sends that checkout's benchmark
-code and inputs to the worker for execution.
+`bench` checks a candidate against a reference implementation, measures both the
+baseline and candidate on the worker, and summarizes results across test cases.
+KCoral provides the runner, correctness checks, CUPTI timing, and result
+format. A benchmark is an ordinary local directory containing its configuration,
+input generator, reference, and candidate files.
 
-The client needs a checkout containing `kernel-evolution/bench_adapter.py`, its
-initialized `thirdparty/flashinfer-bench-evolve` submodule, the adapter's Python
-dependencies, and access to the selected input tensor files. PyTorch is used
-locally to load tensor data on the CPU. The worker needs the task's execution
-dependencies and compatible GPU, including any libraries imported by the candidate.
+The client needs only KCoral and the benchmark files. Benchmark Python code runs
+on the worker, which needs CUDA-enabled PyTorch, `cupti-python`, and any libraries imported by
+the benchmark or candidate. Inputs can be generated on the GPU or read from
+uploaded data files. No benchmark package or separate framework is required.
 
 ### Command format and parameters
 
@@ -565,105 +565,209 @@ kcoral run bench [KCoral options] -- WORKLOAD [VERSION]
 ```
 
 Put shared connection, execution, upload, environment, and output options before
-`--`. Put the workload, version, and all benchmark-specific options after it.
-The separator is required. For example:
-
-```bash
-kcoral run bench --host gpu.example.com --port 8000 -- kda/decode v0
-kcoral run bench --out artifacts/bench -- kda/decode v0 --repo /path/to/TIRx-kernel-agent
-```
+`--`. Put the workload, version, and benchmark-specific options after it. The
+separator is required.
 
 | Argument or option | Default | Meaning |
 | --- | --- | --- |
-| `WORKLOAD` | Required | Workload registered by the selected adapter, for example `kda/decode`. It is not an arbitrary Python filename. |
-| `VERSION` | `baseline` | Candidate directory name such as `v0`, or `baseline` for the adapter's baseline run. |
-| `--repo PATH` | Search current directory and parents | Local checkout containing `kernel-evolution/bench_adapter.py`, or the directory containing `bench_adapter.py` directly. This benchmark-specific option belongs after `--`. |
-| `--warmup N` | Adapter's workload default | Nonnegative number of warmup iterations. |
-| `--repeat N` | Adapter's workload default | Positive number of measured iterations. |
+| `WORKLOAD` | Required | Local directory containing `bench.json` and `bench.py`, for example `examples/benchmarks/vector_add`. Absolute paths are accepted. |
+| `VERSION` | `baseline` | Candidate file or filename stem inside that directory: `v0` selects `v0.py`. `baseline` checks and measures the baseline only. Subdirectory paths are not accepted. |
+| `--repo PATH` | Current local directory | Root for resolving a relative `WORKLOAD`. It has no effect on an absolute workload path and does not upload the whole root. |
+| `--warmup N` | `bench.json`, otherwise `3` | Nonnegative number of untimed warmup calls for each implementation. |
+| `--repeat N` | `bench.json`, otherwise `50` | Positive number of measured calls for each implementation. |
 
-The registered workload list, shape selection, timing method, and defaults
-belong to the checkout's adapter and may change with its revision. Inspect
-that adapter's `PACKAGED` mapping for its workload keys and defaults. KCoral
-does not maintain a separate fixed workload list.
+Paths are resolved directly; KCoral does not search parent directories or use a
+registry of workload names. A path such as `kda/decode` works when that directory
+contains the files described below.
 
-Both help forms run locally without a configured server. The first shows the
-shared options and benchmark arguments; the second shows benchmark arguments:
+Both help forms run locally without a configured server. The first includes the
+shared options, and the second shows only benchmark arguments:
 
 ```bash
 kcoral run bench --help
 kcoral run bench -- --help
 ```
 
-### Checkout discovery and candidate selection
+### Define a benchmark
 
-Without `--repo`, KCoral searches the current directory and each parent for
-`kernel-evolution/bench_adapter.py` or `bench_adapter.py`. With `--repo`, it checks
-only the supplied directory in those two forms. This selects the source of the
-benchmark definitions; it does not upload the entire checkout.
-
-For the standard adapter, this layout makes `kda/decode v0` select the shown
-candidate:
+A minimal directory has three files:
 
 ```text
-TIRx-kernel-agent/
-  kernel-evolution/
-    bench_adapter.py
-    kda/decode/v0/lowered.py
-  thirdparty/
-    flashinfer-bench-evolve/
+vector_add/
+  bench.json
+  bench.py
+  v0.py
 ```
 
-Run the baseline, a candidate, or a checkout elsewhere on your machine:
+`bench.json` lists cases and optional defaults:
+
+```json
+{
+  "cases": [{"id": "small", "n": 1024}, {"id": "large", "n": 1048576}],
+  "warmup": 3,
+  "repeat": 50,
+  "atol": 0.00001,
+  "rtol": 0.00001
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `cases` | Required | Nonempty list of JSON objects. Each object is passed unchanged to `make_inputs`; use any fields your input generator needs. An optional `id` is shown in the summary. |
+| `warmup` | `3` | Nonnegative integer; overridden by the command-line option. |
+| `repeat` | `50` | Positive integer; overridden by the command-line option. |
+| `atol` | `1e-5` | Finite, nonnegative absolute tolerance for correctness checks. |
+| `rtol` | `1e-5` | Finite, nonnegative relative tolerance for correctness checks. |
+
+Unknown settings and non-finite numbers are rejected. Use JSON numbers, not
+strings, for counts and tolerances.
+
+`bench.py` defines input generation and the correctness reference:
+
+```python
+import torch
+
+
+def make_inputs(case):
+    generator = torch.Generator(device="cuda").manual_seed(0)
+    x = torch.randn(case["n"], device="cuda", generator=generator)
+    y = torch.randn(case["n"], device="cuda", generator=generator)
+    return x, y
+
+
+def reference(x, y):
+    return x + y
+```
+
+| Function | Contract |
+| --- | --- |
+| `make_inputs(case)` | Required. Return a tuple or list of positional arguments. Tensor allocation, file loading, and input generation happen once per case, outside timing. |
+| `reference(*inputs)` | Required. Return the expected output: a tensor, scalar, or nested list, tuple, or dictionary of comparable values. It must not return `None`. |
+| `baseline(*inputs)` | Optional. Return outputs with the same structure as the reference. Defaults to `reference`; use it to measure an optimized baseline while keeping an independent correctness reference. |
+
+KCoral passes separate copies of inputs to the reference, baseline, and candidate.
+Tensor views and shared storage are not preserved across those copies. Choose
+inputs accordingly, and construct any required views in your implementation.
+Seed input generation explicitly if cases must be reproducible across invocations.
+
+A candidate such as `v0.py` can define a simple `run` function:
+
+```python
+def run(x, y):
+    return x + y
+```
+
+For compilation or reusable output buffers, define `prepare` instead:
+
+```python
+import torch
+
+
+def prepare(x, y):
+    output = torch.empty_like(x)
+
+    def run():
+        torch.add(x, y, out=output)
+        return output
+
+    return run
+```
+
+`prepare(*inputs)` runs once per case and returns a zero-argument callable. If it
+is present, KCoral uses it instead of the module's `run(*inputs)`. The returned
+callable must return the outputs to check, including buffers written in place.
+Preparation is excluded from timing; work performed inside the callable is
+included. Baseline and candidate calls reuse their own input copies, so each
+call must produce the same result without accumulating changes in input state.
+
+Helper modules and data may live alongside these files. Imports such as
+`from .helper import make_data` are supported. The whole benchmark directory is
+uploaded, retaining its own name. Use `Path(__file__).parent` for paths relative
+to a definition file, or paths relative to the request working directory for
+extra inputs and outputs.
+
+### Run and compare candidates
+
+The repository includes the complete example above under
+`examples/benchmarks/vector_add`:
 
 ```bash
-kcoral run bench -- kda/decode
-kcoral run bench -- kda/decode v0 --warmup 3 --repeat 50
+kcoral run bench -- examples/benchmarks/vector_add
+kcoral run bench --out artifacts/bench -- examples/benchmarks/vector_add v0
 kcoral run bench --host gpu.example.com --port 8000 \
-  -- kda/decode v0 --repo /path/to/TIRx-kernel-agent
+  -- vector_add v0 --repo /path/to/benchmarks --warmup 3 --repeat 50
 ```
 
-No explicit upload is needed for the adapter-selected candidate source,
-benchmark harness, task definition, or tensor inputs. The candidate's additional
-runtime imports must be installed on the worker or included with `--send`.
+The client reads the JSON configuration and snapshots the benchmark directory
+without importing its Python files. Every case gets a separate, self-contained
+request with the same files and its own input generation. A Router may send
+successive cases to different workers. The timeout and output limits apply to
+each request separately.
 
-### Extra inputs and environment
-
-Use `--send` for additional data files or Python modules read by the candidate.
-The common input layout applies: sending `experiment` creates an `experiment/`
-directory under the remote working directory. A candidate can read
-`experiment/data/input.json` or import `experiment.helper` from that upload.
-The snapshot is prepared once and included in every workload request. Each
-request starts with a fresh copy; files created by one workload are not
-available to the next.
+Use `--send` for files outside the benchmark directory and `--env` for remote
+configuration. For example, `--send experiment` makes `experiment/data/input.json`
+available from the remote working directory. Avoid uploading the benchmark
+directory again with `--send`; duplicate paths are rejected.
 
 ```bash
 kcoral run bench --send experiment -e MODE=debug -e MY_LOCAL_VARIABLE \
-  -- kda/decode v0
+  -- examples/benchmarks/vector_add v0
 ```
 
-Environment overrides apply before the harness and candidate are loaded.
-`KCORAL_DIR` points to the uploaded input directory, which is also the working
-directory and is added to Python's module search path. The worker's environment,
-working directory, and module search path are restored after the workload ends;
-uploaded support modules are removed from the import cache. These options do
-not change the environment used by the local adapter to prepare inputs.
+Environment overrides apply before definitions are imported. `KCORAL_DIR` points
+to the request's input directory, which contains both the benchmark directory
+and additional uploads. That input directory and the benchmark directory are
+added to Python's module search path. The worker's environment, working directory,
+and search path are restored afterward, and uploaded modules are removed from
+the import cache. Files created by one case are not available to the next.
+
+### Correctness and timing
+
+KCoral computes the reference output once and snapshots it. It checks the
+baseline twice and, when selected, the candidate twice before timing. It checks
+both again after timing to catch changes in state. Checks use
+`torch.testing.assert_close` with the configured absolute and relative tolerances;
+dtype and device differences are allowed, output shapes and structure must match,
+and NaNs do not compare equal. A failed pre-timing check skips timing for that
+case and continues with the next case.
+
+Reference, baseline, and candidate calls run with PyTorch gradient recording
+disabled. Timing uses
+`kcoral.builtins.benchmark` with CUPTI, NVIDIA's GPU activity tracing interface.
+After the configured warmup calls, each measured call runs with the GPU's L2
+cache flushed. KCoral waits for GPU work to complete and measures the interval
+from the first to the last GPU activity associated with that call. The reported
+latency is the median duration in milliseconds; host gaps between GPU activities
+are included. Input creation and candidate preparation are outside timing.
+
+CUPTI and a CUDA GPU are required. CUPTI failures stop the run; there is no
+fallback to a different timer. See [GPU benchmarking](../tutorials/benchmark-kernel.md#measuring-gpu-activity)
+for details of the timing method. The full `baseline_timing` and `kernel_timing`
+reports include median, mean, minimum, maximum, iteration counts, `flush_l2`,
+and `activities_stable`. A false `activities_stable` means different iterations
+launched different sets of GPU activities, so their timings mix different work.
+
+`speedup` is `baseline_ms / kernel_ms`. A baseline-only run reports the same
+latency in both columns and a speedup of `1`. A correctness failure has
+`passed=false` and a diagnostic message. Latencies are `null` when timing was
+skipped; a failure discovered after timing retains the measured latencies but
+has no speedup.
 
 ### Returned results and files
 
-`--out` alone saves structured results. Add `--fetch` to collect files created
-by the harness or candidate; repeat it to select multiple paths. Collection
-runs after each workload, including when the benchmark raises a normal Python
-exception. `--fetch` requires `--out`.
+`--out` alone saves structured results. Add `--fetch` to collect files created by
+the definition or candidate; repeat it for multiple paths. Collection runs after
+each case, including after a normal Python exception. `--fetch` requires `--out`.
 
 ```bash
-kcoral run bench --out artifacts/bench -- kda/decode v0
-kcoral run bench --send experiment --fetch results --out artifacts/bench-debug \
-  -e MODE=debug -- kda/decode v0 --warmup 3 --repeat 50
+kcoral run bench --out artifacts/bench -- examples/benchmarks/vector_add v0
+kcoral run bench --fetch results --out artifacts/bench-debug \
+  -- my_benchmark v0
 ```
 
-The output directory must not already exist. It is created after local benchmark
-preparation succeeds. Workloads are numbered from one in the adapter's selected
-order, and each has a separate destination:
+The second example assumes your benchmark writes a `results` directory. The
+output directory must be new and is created after local configuration and upload
+preparation succeed. Cases are numbered in their `bench.json` order:
 
 ```text
 artifacts/bench-debug/
@@ -681,61 +785,46 @@ artifacts/bench-debug/
           ...
 ```
 
-`files/` contains only the outputs selected with `--fetch`, preserving their
-relative paths. It is omitted when no files are requested. The numbered
-`result.json` contains `index`, worker metadata in `worker`, benchmark `rows`,
-a list of `missing` output paths, and an `error` traceback or `null`.
+`files/` preserves selected paths and is omitted when no files are requested.
+Each `result.json` contains `index`, `worker` metadata, `rows`, a list of `missing`
+paths, and an `error` traceback or `null`.
 
-`summary.json` contains:
-
-| Field | Meaning |
+| Summary field | Meaning |
 | --- | --- |
-| `workload`, `version` | Adapter-normalized workload key and requested version. |
-| `completed` | Whether all selected workloads and the combined summary finished. This can be true even when correctness checks fail or selected files are missing. |
-| `passed` | True only after completion, with no row reporting `passed=false` and no missing requested files. |
-| `results` | Combined benchmark rows from responses received so far. Their columns are defined by the adapter. |
-| `workloads` | The numbered per-workload records also saved in `result.json`. |
-| `error` | Command error description, or `null` when execution completed. |
+| `workload`, `version` | Requested local benchmark path and version. |
+| `config` | Effective warmup, repeat, and correctness tolerances. |
+| `completed` | All cases and the text summary finished; may be true despite incorrect results or missing requested files. |
+| `passed` | All cases completed, correctness checks passed, and requested files were present. |
+| `results` | Combined rows with `id`, `case`, `passed`, `baseline_ms`, `kernel_ms`, `speedup`, full `baseline_timing` and `kernel_timing` reports, and a diagnostic `message`. |
+| `workloads` | Numbered per-case records also saved in `result.json`. |
+| `error` | Command error description, or `null` after normal completion. |
 
-Non-finite numeric results are stored as the strings `NaN`, `Infinity`, and
-`-Infinity` so that the files remain valid JSON. They are converted back to
-numbers for the harness's text summary only.
+Once the output directory exists, KCoral attempts to save the summary even when
+execution stops early. A Python execution exception stops further requests;
+previous results and returned files remain saved. A hard timeout, worker failure,
+or response-size error can prevent the current case from returning anything.
 
-Once the output directory has been created, KCoral attempts to save the summary
-even if execution stops early. An execution exception stops further requests;
-previously received results and returned files remain saved. A hard timeout,
-worker failure, or response-size error may prevent the current workload from
-returning any results or files. The summary then describes the partial run.
+### Output, exit status, and troubleshooting
 
-### Requests, output, and exit status
-
-One invocation can cover multiple selected input shapes. KCoral sends a separate
-request for each workload entry, with the required code, tensors, extra uploads,
-and environment overrides included in **every request**. Through a Router,
-successive requests may execute on different workers. The timeout applies
-separately to each request, not to the total command.
-
-Stdout includes the selected server and workload progress, worker information
-when it changes, the harness's captured output, and the combined summary. Summary
-columns and timing units are defined by the adapter's benchmark harness. To
-retain text output in addition to structured results, redirect it locally:
+Stdout includes request progress, worker information, captured benchmark output,
+and a table of correctness, baseline latency, candidate latency, and speedup.
+The final line reports how many cases passed. Save text output locally as needed:
 
 ```bash
-kcoral run bench --out artifacts/bench -- kda/decode v0 > bench.log 2> bench.err
+kcoral run bench -- examples/benchmarks/vector_add v0 > bench.log 2> bench.err
 ```
 
-The command returns `0` when all requests complete, no correctness row reports
-`passed=false`, and all selected files are available. A correctness failure or
-missing output returns `1` after continuing through the remaining workloads and
-printing the combined summary. Preparation, execution, transport, and output
-saving errors return `1` and stop the run. Invalid arguments return `2`.
+The exit code is `0` when all cases and requested file returns succeed.
+Incorrect results and missing files yield `1` after the remaining cases finish.
+Configuration, import, execution, transport, and output-saving errors yield `1`
+and stop the run. Invalid CLI arguments yield `2`.
 
-If the adapter is not found, run from the checkout or pass `--repo` after `--`.
-If the benchmark package or tensor files are missing, complete the checkout's
-dependency and data setup. For an unknown workload, use a key registered by that
-adapter. For a missing candidate, check `WORKLOAD/VERSION/lowered.py`. For remote
-import or GPU errors, check the worker environment and extra uploads; the client's
-installed packages are not automatically transferred.
+For a missing definition, check `WORKLOAD/bench.json` and `WORKLOAD/bench.py`
+relative to `--repo` or the current directory. For a missing candidate, check
+`WORKLOAD/VERSION.py`. For import errors, upload helper files or install the
+required library on the worker. CUDA errors require a compatible GPU and
+CUDA-enabled PyTorch on the worker. There is no automatic task discovery or
+conversion of benchmark definitions from other frameworks.
 
 ## shell
 

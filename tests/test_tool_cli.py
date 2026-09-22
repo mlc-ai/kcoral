@@ -6,7 +6,6 @@ import sys
 import tarfile
 from contextlib import nullcontext
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -539,41 +538,3 @@ main()
     )
     assert result.returncode == 0, result.stderr
     assert "--send" in result.stdout and "--out" in result.stdout
-
-
-def test_bench_command_roundtrip(remote, monkeypatch, tmp_path, capsys):
-    from test_bench_cli import SOURCES
-
-    from kcoral import bench_cli
-
-    evolution = tmp_path / "kernel-evolution"
-    evolution.mkdir()
-    candidate = evolution / "kda/decode/v0/lowered.py"
-    candidate.parent.mkdir(parents=True)
-    candidate.write_text("def setup(x): return x + 1\n")
-    (evolution / "bench_adapter.py").write_text(
-        "from pathlib import Path\n"
-        "KERNEL_EVOLUTION_ROOT = Path(__file__).parent\n"
-        "PACKAGED = {'kda/decode': ('test', 1, 1, 'all')}\n"
-        "def workload_key(key): return key\n"
-        "def plan(task, path, version, **kwargs):\n"
-        "    candidate = (path / version / 'lowered.py').read_bytes()\n"
-        "    return {'warmup': kwargs['warmup']}, [{'value': 41}, {'value': 42}], candidate\n"
-        "def blobs(rows): return [], []\n"
-        f"def harness_sources(task): return {SOURCES!r}\n"
-    )
-    summaries = []
-    monkeypatch.setitem(
-        sys.modules,
-        "flashinfer_bench_evolve.benchmark_common",
-        SimpleNamespace(summarize=lambda rows, label: summaries.append(rows)),
-    )
-    monkeypatch.chdir(tmp_path)
-    assert bench_cli.main(["--", "kda/decode", "v0"]) == 0
-    assert summaries == [
-        [
-            {"passed": True, "value": 42, "warmup": 1},
-            {"passed": True, "value": 43, "warmup": 1},
-        ]
-    ]
-    assert "workload 2/2" in capsys.readouterr().out

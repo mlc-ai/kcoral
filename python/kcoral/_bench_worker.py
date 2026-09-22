@@ -1,187 +1,136 @@
-#!/usr/bin/env python3
-"""Worker-side benchmark bundle, derived from TIRx-kernel-agent.
-
-The adapter appends ``SOURCES = {...}``: the pinned flashinfer-bench-evolve harness
-and one task's modules and definition, verbatim. Inside the worker everything stays in memory —
-the harness is imported through an in-memory finder, the workload blobs arrive as
-kcoral tensor uploads and are served to the harness's ``load_safetensor``, and the
-candidate ``lowered.py`` is exec'd as a module. ``execute`` initializes and scores
-one workload through the task's own ``run_suite``, then collects selected files.
-"""
+"""Self-contained worker-side correctness checks and CUPTI timing."""
 
 from __future__ import annotations
 
-import importlib
-import importlib.abc
-import importlib.machinery
-import importlib.metadata
+import copy
 import importlib.util
-import json
-import linecache
-import math
 import os
 import sys
 import traceback
-import types
-from dataclasses import replace
-from functools import cache
+from functools import partial
 from pathlib import Path
 
-SOURCES: dict[str, str] = {}  # package-relative path -> source or JSON, appended by the adapter
-_STATE: dict = {}
+
+def _load(path, name):
+    # Treat each entry point as a package so relative helper imports also work.
+    spec = importlib.util.spec_from_file_location(
+        name, path, submodule_search_locations=[str(path.parent)]
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
-class _BundleImporter(importlib.abc.MetaPathFinder, importlib.abc.Loader):
-    def __init__(self, sources):
-        self._modules = {}
-        for path, source in sources.items():
-            if not path.endswith(".py"):
-                continue
-            parts = path[: -len(".py")].split("/")
-            is_package = parts[-1] == "__init__"
-            self._modules[".".join(parts[:-1] if is_package else parts)] = (
-                path,
-                source,
-                is_package,
-            )
-
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname not in self._modules:
-            return None
-        path, _, is_package = self._modules[fullname]
-        return importlib.machinery.ModuleSpec(
-            fullname, self, origin=f"<bundle:{path}>", is_package=is_package
-        )
-
-    def create_module(self, spec):
-        return None
-
-    def exec_module(self, module):
-        path, source, _ = self._modules[module.__name__]
-        module.__file__ = "/bundle/" + path  # never read; keeps Path(__file__) arithmetic alive
-        _exec(source, f"<bundle:{path}>", module.__dict__)
-
-
-def _exec(source: str, filename: str, namespace: dict) -> None:
-    _STATE.setdefault("linecache", {}).setdefault(filename, linecache.cache.get(filename))
-    linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
-    # dont_inherit: this file's `from __future__ import annotations` must not leak into
-    # the compiled source — tirx-lite reads live annotation objects at decoration time.
-    exec(compile(source, filename, "exec", dont_inherit=True), namespace)
-
-
-def _sanitize(value):
-    """kcoral's JSON refuses NaN/Infinity; carry them as strings."""
-
-    if isinstance(value, float) and not math.isfinite(value):
-        return "NaN" if math.isnan(value) else ("Infinity" if value > 0 else "-Infinity")
+def _clone(value, torch):
+    if isinstance(value, torch.Tensor):
+        return value.detach().clone()
+    if isinstance(value, tuple):
+        return tuple(_clone(item, torch) for item in value)
+    if isinstance(value, list):
+        return [_clone(item, torch) for item in value]
     if isinstance(value, dict):
-        return {key: _sanitize(child) for key, child in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_sanitize(child) for child in value]
+        return {key: _clone(item, torch) for key, item in value.items()}
+    return copy.deepcopy(value)
+
+
+def _measure(call, warmup, repeat):
+    from kcoral.builtins import benchmark
+
+    return benchmark(call, {"warmup": warmup, "repeat": repeat, "flush_l2": True})
+
+
+def _callable(module, name):
+    value = getattr(module, name, None)
+    if not callable(value):
+        raise ValueError(f"{Path(module.__file__).name} must define callable {name}()")
     return value
 
 
-def _init(task, overrides, workloads, blob_keys, lowered_source, *blob_tensors):
-    _STATE["saved_modules"] = {
-        name: module
-        for name, module in sys.modules.items()
-        if name.split(".")[0] == "flashinfer_bench_evolve" or name == "lowered"
-    }
-    for name in _STATE["saved_modules"]:
-        del sys.modules[name]  # a reused worker must not keep an earlier bundle's modules
-    _STATE["importer"] = _BundleImporter(SOURCES)
-    sys.meta_path.insert(0, _STATE["importer"])
-    common = importlib.import_module("flashinfer_bench_evolve.benchmark_common")
-    blobs = {
-        (key["path"], key["tensor_key"]): tensor for key, tensor in zip(blob_keys, blob_tensors)
-    }
-    common.load_safetensor = lambda spec, device: (
-        blobs[(spec["path"], spec["tensor_key"])].to(device).clone()
-    )
+def _run(directory, candidate, case, config):
+    import torch
 
-    @cache
-    def load_task_reference(task_name, entrypoint="run"):
-        # Keep the pinned oracle in memory, just like the uploaded workload blobs.
-        path = f"flashinfer_bench_evolve/tasks/{task_name}/definition.json"
-        namespace = {}
-        _exec(json.loads(SOURCES[path])["reference"], f"<bundle:{path}>", namespace)
-        return namespace[entrypoint]
-
-    common.load_task_reference = load_task_reference
-    module = importlib.import_module(
-        f"flashinfer_bench_evolve.tasks.{task}.benchmark"
-    )  # binds the patched name
-    lowered = None
-    if lowered_source is not None:
-        lowered = sys.modules["lowered"] = types.ModuleType("lowered")
-        _exec(lowered_source.decode(), "<lowered.py>", lowered.__dict__)
-    _STATE.update(
-        module=module,
-        config=replace(module.default_config(), **overrides),
-        lowered=lowered,
-        workloads=workloads,
-    )
-    kernels = importlib.util.find_spec("tirx_kernels")
-    versions = {}
-    for name, distribution in (
-        ("torch", "torch"),
-        ("tvm", "apache-tvm"),
-        ("flashinfer", "flashinfer-python"),
-    ):
-        try:
-            versions[name] = importlib.metadata.version(distribution)
-        except importlib.metadata.PackageNotFoundError:
-            pass
-    return {"versions": versions, "tirx_kernels": kernels and kernels.origin}
-
-
-def _run(index: int):
-    module, config, lowered = _STATE["module"], _STATE["config"], _STATE["lowered"]
-    workloads = [_STATE["workloads"][index]]
-    if lowered is None:
-        rows = module.run_suite(config, workloads=workloads)
-    else:
-        rows = module.run_suite(
-            config,
-            candidate_fn=module.tirx_run,
-            candidate_prepare_fn=lambda *args: module.tirx_prepare(lowered, *args),
-            workloads=workloads,
-        )
-    return _sanitize(rows)
-
-
-def _cleanup():
-    importer = _STATE.get("importer")
-    if importer in sys.meta_path:
-        sys.meta_path.remove(importer)
-    if "saved_modules" in _STATE:
-        for name in list(sys.modules):
-            if name.split(".")[0] == "flashinfer_bench_evolve" or name == "lowered":
-                del sys.modules[name]
-        sys.modules.update(_STATE["saved_modules"])
-    for filename, previous in _STATE.get("linecache", {}).items():
-        if previous is None:
-            linecache.cache.pop(filename, None)
+    if not torch.cuda.is_available():
+        raise RuntimeError("bench requires PyTorch with CUDA on the worker")
+    bench = _load(directory / "bench.py", "_kcoral_benchmark")
+    reference_fn = _callable(bench, "reference")
+    baseline_fn = getattr(bench, "baseline", reference_fn)
+    if not callable(baseline_fn):
+        raise ValueError("bench.py baseline must be callable")
+    candidate_module = _load(directory / candidate, "_kcoral_candidate") if candidate else None
+    inputs = _callable(bench, "make_inputs")(case)
+    if not isinstance(inputs, (tuple, list)):
+        raise ValueError("make_inputs(case) must return a tuple or list of positional arguments")
+    with torch.no_grad():
+        expected = _clone(reference_fn(*_clone(inputs, torch)), torch)
+        if expected is None:
+            raise ValueError("reference() must return the outputs to check, not None")
+        baseline_inputs = _clone(inputs, torch)
+        baseline = partial(baseline_fn, *baseline_inputs)
+        if candidate_module is None:
+            run = baseline
         else:
-            linecache.cache[filename] = previous
-    _STATE.clear()
+            candidate_inputs = _clone(inputs, torch)
+            if hasattr(candidate_module, "prepare"):
+                run = _callable(candidate_module, "prepare")(*candidate_inputs)
+                if not callable(run):
+                    raise ValueError("candidate prepare() must return a zero-argument callable")
+            else:
+                candidate_fn = _callable(candidate_module, "run")
+                run = partial(candidate_fn, *candidate_inputs)
+        row = {
+            "id": case.get("id"),
+            "case": case,
+            "passed": True,
+            "baseline_ms": None,
+            "baseline_timing": None,
+            "kernel_ms": None,
+            "kernel_timing": None,
+            "speedup": None,
+            "message": None,
+        }
+
+        def check(call, label):
+            actual = call()
+            torch.cuda.synchronize()
+            try:
+                torch.testing.assert_close(
+                    actual,
+                    expected,
+                    atol=config["atol"],
+                    rtol=config["rtol"],
+                    check_dtype=False,
+                    check_device=False,
+                    equal_nan=False,
+                )
+            except AssertionError as exc:
+                row.update(passed=False, message=f"{label}: {exc}")
+                return False
+            return True
+
+        # Repeated checks catch stateful outputs before and after timing.
+        if not check(baseline, "baseline") or not check(baseline, "baseline repeat"):
+            return row
+        if candidate and (not check(run, "candidate") or not check(run, "candidate repeat")):
+            return row
+        row["baseline_timing"] = _measure(baseline, config["warmup"], config["repeat"])
+        row["kernel_timing"] = (
+            _measure(run, config["warmup"], config["repeat"])
+            if candidate
+            else row["baseline_timing"]
+        )
+        row["baseline_ms"] = row["baseline_timing"]["latency_ms_median"]
+        row["kernel_ms"] = row["kernel_timing"]["latency_ms_median"]
+        if not check(baseline, "baseline after timing") or not check(run, "candidate after timing"):
+            return row
+        row["speedup"] = row["baseline_ms"] / row["kernel_ms"]
+        return row
 
 
 def execute(
-    task,
-    overrides,
-    entry,
-    blob_keys,
-    lowered_source,
-    archive,
-    environment,
-    fetch,
-    unpack_inputs,
-    collect_files,
-    *blob_tensors,
+    directory, candidate, case, config, archive, environment, fetch, unpack_inputs, collect_files
 ):
-    """Run one workload with request-local files and environment, then collect outputs."""
+    """Run one case with request-local files and environment, then collect outputs."""
     workdir = Path("inputs").absolute()
     reports = Path("outputs").absolute()
     workdir.mkdir()
@@ -189,21 +138,25 @@ def execute(
     original_cwd = Path.cwd()
     original_environment = dict(os.environ)
     original_path = list(sys.path)
+    original_modules = dict(sys.modules)
     outcome = {"worker": None, "rows": [], "missing": [], "error": None}
     try:
         try:
             unpack_inputs(archive, workdir)
             os.chdir(workdir)
-            sys.path.insert(0, str(workdir))
+            directory = workdir / directory
+            sys.path[:0] = [str(directory), str(workdir)]
             os.environ.update(environment)
             os.environ["KCORAL_DIR"] = str(workdir)
             os.environ["PATH"] = (
                 str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
             )
-            outcome["worker"] = _init(
-                task, overrides, [entry], blob_keys, lowered_source, *blob_tensors
-            )
-            outcome["rows"] = _run(0)
+            import torch
+
+            outcome["worker"] = {"python": sys.version.split()[0], "torch": torch.__version__}
+            if torch.cuda.is_available():
+                outcome["worker"]["device"] = torch.cuda.get_device_name()
+            outcome["rows"] = [_run(directory, candidate, case, config)]
         except Exception:
             outcome["error"] = traceback.format_exc()
         try:
@@ -212,28 +165,15 @@ def execute(
             outcome["error"] = (outcome["error"] or "") + traceback.format_exc()
         return outcome
     finally:
-        _cleanup()
-        # Uploaded support modules must not leak into a reused worker.
         for name, module in list(sys.modules.items()):
-            filename = getattr(module, "__file__", None)
-            if isinstance(filename, str) and Path(filename).is_relative_to(workdir):
-                del sys.modules[name]
+            namespace = getattr(module, "__dict__", {})
+            paths = [namespace.get("__file__"), *namespace.get("__path__", ())]
+            if any(isinstance(path, str) and Path(path).is_relative_to(workdir) for path in paths):
+                if name in original_modules:
+                    sys.modules[name] = original_modules[name]
+                else:
+                    del sys.modules[name]
         sys.path[:] = original_path
         os.environ.clear()
         os.environ.update(original_environment)
         os.chdir(original_cwd)
-
-
-def main(command, *args):
-    if command == "init":
-        try:
-            return _init(*args)
-        except BaseException:
-            _cleanup()
-            raise
-    if command == "run":
-        try:
-            return _run(*args)
-        finally:
-            _cleanup()
-    raise ValueError(f"unknown driver command {command!r}")

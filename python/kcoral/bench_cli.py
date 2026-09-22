@@ -1,10 +1,10 @@
-"""Run a checkout's pinned TIRx benchmark adapter through KCoral."""
+"""Run standalone benchmark definitions through KCoral."""
 
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -15,51 +15,66 @@ from .tool_cli import execute, require_completed
 from .tool_cli import parse_args as parse_tool_args
 
 
-def decode_rows(rows):
-    # The wire protocol disallows non-finite JSON numbers. Restore only the
-    # harness's numeric result columns before giving its summary function rows.
-    columns = (
-        "max_abs",
-        "max_rel",
-        "max_rms_ratio",
-        "matched",
-        "baseline_ms",
-        "kernel_ms",
-        "speedup",
-    )
-    rows = [dict(row) for row in rows]
-    for row in rows:
-        for column in columns:
-            value = row.get(column)
-            if isinstance(value, str) and value in {"NaN", "Infinity", "-Infinity"}:
-                row[column] = float(value)
-    return rows
+def load_benchmark(workload, version, repo, warmup, repeat):
+    directory = ((repo or Path.cwd()) / workload).absolute()
+    manifest = directory / "bench.json"
+    config = json.loads(manifest.read_text())
+    if not isinstance(config, dict):
+        raise ValueError("bench.json must be an object")
+    unknown = config.keys() - {"cases", "warmup", "repeat", "atol", "rtol"}
+    if unknown:
+        raise ValueError(f"unknown bench.json settings: {', '.join(sorted(unknown))}")
+    cases = config.pop("cases", None)
+    if (
+        not isinstance(cases, list)
+        or not cases
+        or not all(isinstance(case, dict) for case in cases)
+    ):
+        raise ValueError("bench.json cases must be a nonempty list of objects")
+    # Reject non-finite numbers anywhere, including case data, before contacting a server.
+    json.dumps(cases, allow_nan=False)
+    config = {"warmup": 3, "repeat": 50, "atol": 1e-5, "rtol": 1e-5, **config}
+    if warmup is not None:
+        config["warmup"] = warmup
+    if repeat is not None:
+        config["repeat"] = repeat
+    for key, minimum in (("warmup", 0), ("repeat", 1)):
+        if type(config[key]) is not int or config[key] < minimum:
+            raise ValueError(f"{key} must be an integer >= {minimum}")
+    for key in ("atol", "rtol"):
+        value = config[key]
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            raise ValueError(f"{key} must be a finite nonnegative number")
+    if not (directory / "bench.py").is_file():
+        raise FileNotFoundError(f"benchmark definition not found: {directory / 'bench.py'}")
+    candidate = None
+    if version != "baseline":
+        if Path(version).name != version or version in {".", ".."} or "\\" in version:
+            raise ValueError("VERSION must be a filename or name within the benchmark directory")
+        candidate = version if version.endswith(".py") else version + ".py"
+        if not (directory / candidate).is_file():
+            raise FileNotFoundError(f"candidate not found: {directory / candidate}")
+    return directory, cases, candidate, config
 
 
-def load_adapter(repo):
-    if repo is None:
-        candidates = [Path.cwd(), *Path.cwd().parents]
-    else:
-        candidates = [repo.absolute()]
-    for root in candidates:
-        for path in (root / "kernel-evolution" / "bench_adapter.py", root / "bench_adapter.py"):
-            if path.is_file():
-                spec = importlib.util.spec_from_file_location("_kcoral_bench_adapter", path)
-                adapter = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(adapter)
-                return adapter
-    raise FileNotFoundError(
-        "cannot find kernel-evolution/bench_adapter.py; run inside a TIRx-kernel-agent "
-        "checkout or pass --repo PATH (with its flashinfer-bench-evolve submodule initialized)"
-    )
+def summarize(rows):
+    print("case | status | baseline_ms | kernel_ms | speedup")
+    for index, row in enumerate(rows, start=1):
+        values = [row[key] for key in ("baseline_ms", "kernel_ms", "speedup")]
+        timing = " | ".join("-" if value is None else f"{value:.6g}" for value in values)
+        status = "PASS" if row["passed"] else "FAIL"
+        print(f"{row['id'] if row['id'] is not None else index} | {status} | {timing}")
+        if row["message"]:
+            print(row["message"])
+    passed = sum(row["passed"] for row in rows)
+    print(f"{passed}/{len(rows)} cases passed")
 
 
-def build_request(
-    adapter, source, task, overrides, entry, candidate, *, inputs, environment, fetch
-):
-    keys, tensors = adapter.blobs([entry])
+def build_request(directory, candidate, case, config, *, inputs, environment, fetch):
     program = Program()
-    module = program.upload(id="bundle", kind="module", source=source)
+    module = program.upload(
+        id="bundle", kind="module", source=Path(__file__).with_name("_bench_worker.py").read_text()
+    )
     runner = program.get_function(id="runner", module=module, name="execute")
     files = program.upload(
         id="files", kind="module", source=Path(__file__).with_name("_tool_worker.py").read_text()
@@ -67,29 +82,10 @@ def build_request(
     unpack = program.get_function(id="unpack", module=files, name="unpack_inputs")
     collect = program.get_function(id="collect", module=files, name="collect_files")
     archive = program.upload(id="inputs", kind="bytes", value=inputs)
-    lowered = (
-        None if candidate is None else program.upload(id="lowered", kind="bytes", value=candidate)
-    )
-    handles = [
-        program.upload(id=f"blob{i}", kind="tensor", value=tensor)
-        for i, tensor in enumerate(tensors)
-    ]
     outcome = program.run(
         id="run",
         fn=runner,
-        args=[
-            task,
-            overrides,
-            entry,
-            keys,
-            lowered,
-            archive,
-            environment,
-            fetch,
-            unpack,
-            collect,
-            *handles,
-        ],
+        args=[directory, candidate, case, config, archive, environment, fetch, unpack, collect],
     )
     program.return_(key="outcome", value=outcome)
     if fetch:
@@ -103,15 +99,19 @@ def parse_args(argv):
         allow_abbrev=False,
         description="Benchmark arguments (place these after '--').",
     )
-    parser.add_argument("workload", help="registered workload, e.g. kda/decode")
+    parser.add_argument(
+        "workload", help="local benchmark directory containing bench.json and bench.py"
+    )
     parser.add_argument(
         "version",
         nargs="?",
         default="baseline",
-        help="candidate directory, e.g. v0; default: baseline",
+        help="candidate file or stem, e.g. v0 for v0.py; default: baseline",
     )
     parser.add_argument(
-        "--repo", type=Path, help="TIRx-kernel-agent checkout; default: find from current directory"
+        "--repo",
+        type=Path,
+        help="local root for relative WORKLOAD paths; default: current directory",
     )
     parser.add_argument("--warmup", type=int, help="override the workload's warmup count")
     parser.add_argument(
@@ -149,37 +149,21 @@ def main(argv):
     try:
         if args.out is not None and os.path.lexists(args.out):
             raise ValueError(f"output already exists; choose a new --out directory: {args.out}")
-        inputs = pack_inputs(args.send)
-        adapter = load_adapter(args.repo)
-        key = adapter.workload_key(args.workload)
-        summary["workload"] = key
-        task, warmup, repeat, shape_mode = adapter.PACKAGED[key]
-        overrides, workloads, candidate = adapter.plan(
-            task,
-            adapter.KERNEL_EVOLUTION_ROOT / key,
-            args.version,
-            warmup=warmup if args.warmup is None else args.warmup,
-            repeat=repeat if args.repeat is None else args.repeat,
-            shape_mode=shape_mode,
+        benchmark_dir, workloads, candidate, config = load_benchmark(
+            args.workload, args.version, args.repo, args.warmup, args.repeat
         )
-        if not workloads:
-            raise ValueError("the benchmark adapter selected no workloads")
-        source = Path(__file__).with_name("_bench_worker.py").read_text()
-        source += "\nSOURCES = " + repr(adapter.harness_sources(task)) + "\n"
-        from flashinfer_bench_evolve.benchmark_common import summarize
-
+        inputs = pack_inputs([benchmark_dir, *args.send])
+        summary["config"] = config
         if args.out is not None:
             args.out.mkdir(parents=True)
             output_created = True
         seen = None
         for index, entry in enumerate(workloads, start=1):
             program = build_request(
-                adapter,
-                source,
-                task,
-                overrides,
-                entry,
+                benchmark_dir.resolve().name,
                 candidate,
+                entry,
+                config,
                 inputs=inputs,
                 environment=args.env,
                 fetch=args.fetch,
@@ -209,7 +193,7 @@ def main(argv):
             require_completed(result)
             if "outcome" not in result.results:
                 raise RuntimeError("benchmark response has no outcome")
-        summarize(decode_rows(summary["results"]), "")
+        summarize(summary["results"])
         summary["completed"] = True
         summary["passed"] = not (
             any(row.get("passed") is False for row in summary["results"])
