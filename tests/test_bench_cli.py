@@ -308,9 +308,10 @@ def test_benchmark_files_and_environment_are_request_local(monkeypatch, tmp_path
     monkeypatch.setenv("MODE", "original")
     inputs = tmp_path / "experiment"
     inputs.mkdir()
+    (inputs / "__init__.py").write_text("")
     (inputs / "provided_helper.py").write_text("VALUE = 'uploaded'\n")
     candidate = (
-        "import os\nfrom pathlib import Path\nimport provided_helper\n"
+        "import os\nfrom pathlib import Path\nfrom experiment import provided_helper\n"
         "assert os.environ['MODE'] == 'remote'\n"
         "assert Path(os.environ['KCORAL_DIR']) == Path.cwd()\n"
         "Path('results').mkdir()\n"
@@ -339,7 +340,8 @@ def test_benchmark_files_and_environment_are_request_local(monkeypatch, tmp_path
         assert outcome["error"] is None and outcome["rows"][0]["passed"] is True
     assert Path.cwd() == tmp_path
     assert dict(os.environ) == environment and sys.path == search_path
-    assert "provided_helper" not in sys.modules
+    assert "experiment.provided_helper" not in sys.modules
+    assert "experiment" not in sys.modules
     assert worker._STATE == {}
 
 
@@ -379,7 +381,7 @@ def test_bench_roundtrip_files_and_summary(benchmark_remote, monkeypatch, tmp_pa
             "    raise RuntimeError('candidate failed')\n"
             if mode == "error"
             else f"    return x {'-' if mode == 'incorrect' else '+'} "
-            "int(Path('factor.txt').read_text())\n"
+            "int(Path('experiment/factor.txt').read_text())\n"
         )
     ).encode()
     summaries = []

@@ -67,7 +67,7 @@ kcoral run python -- -c 'print("hello from the worker")'
 Or specify the address on the invocation:
 
 ```bash
-kcoral run python --host gpu.example.com --port 8000 --send experiment -- check.py
+kcoral run python --host gpu.example.com --port 8000 --send experiment -- experiment/check.py
 kcoral run bench --host gpu.example.com --port 8000 -- kda/decode v0
 ```
 
@@ -92,7 +92,7 @@ prepares its inputs and collects its results.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--send PATH` | No uploaded files | Upload a file or a directory's contents. Repeat for additional inputs. |
+| `--send PATH` | No uploaded files | Upload a file or directory, preserving its name. Repeat for additional inputs. |
 | `-e NAME[=VALUE]`, `--env NAME[=VALUE]` | Worker environment | Set one remote environment variable, or copy one local variable by name. Repeat for additional variables. |
 | `--fetch PATH` | No selected outputs | Return a file or directory relative to the remote working directory. Repeat for additional outputs; requires `--out`. |
 | `--out DIRECTORY` | No download directory | New local destination for returned files or benchmark results. Required by profilers and by `--fetch`; bench can save results without `--fetch`. |
@@ -105,15 +105,30 @@ files in a fresh working directory; `KCORAL_DIR` points to that directory.
 | Local selection | Remote path |
 | --- | --- |
 | `--send experiment/check.py` | `check.py` |
-| `--send experiment` containing `check.py` | `check.py` |
-| `--send experiment` containing `data/input.json` | `data/input.json` |
+| `--send experiment` containing `check.py` | `experiment/check.py` |
+| `--send experiment` containing `data/input.json` | `experiment/data/input.json` |
+| `--send /local/path/experiment` containing `check.py` | `experiment/check.py` |
+| `--send .` from a directory named `experiment` | `experiment/...` |
 
-A directory's own name is not included. Multiple `--send` selections are
-combined into the same working directory, so overlapping destination names
-are rejected. Symbolic links and special files are rejected. Python
+A directory keeps its own name and internal layout; local parent directories
+are not included. A trailing slash does not change this behavior. Selecting `.`
+uses the current directory's name. The filesystem root cannot be selected
+because it has no directory name. A selected file uses its filename alone.
+Multiple `--send` selections share one remote working directory: differently
+named directories can contain identically named files, while duplicate or
+conflicting remote file paths are rejected. Symbolic links and special files
+are rejected. Python
 `__pycache__` entries are skipped; other hidden files are included. Empty input
 directories are not uploaded. Executable bits are preserved, but full original
 permission modes are not.
+
+The command runs from the remote working directory, **not** from inside the
+uploaded directory. For `--send experiment`, pass `experiment/check.py` to Python
+and `experiment/data/input.json` for a data path relative to the working
+directory. `KCORAL_DIR` points to the parent of `experiment/`. Running a script
+does not automatically change the working directory to the script's location.
+Files written as `results/report.json` are still selected with `--fetch results`;
+files written as `experiment/results/report.json` need `--fetch experiment/results`.
 
 Send the files your program needs, including local modules and configuration.
 Sending a script does not discover its imports or upload its parent directory.
@@ -131,8 +146,8 @@ directory is prepended to `PATH` when locating programs.
 Use one `-e` or `--env` per variable:
 
 ```bash
-kcoral run python --send experiment --env MODE=debug --env MY_LOCAL_VARIABLE -- check.py
-kcoral run shell --send experiment -e MODE=debug -e LABEL='trial one' -- sh setup.sh
+kcoral run python --send experiment --env MODE=debug --env MY_LOCAL_VARIABLE -- experiment/check.py
+kcoral run shell --send experiment -e MODE=debug -e LABEL='trial one' -- sh experiment/setup.sh
 ```
 
 | Form | Behavior |
@@ -186,7 +201,7 @@ worker information, and a summary to stdout. Local redirection and pipelines
 still work, for example:
 
 ```bash
-kcoral run python --send experiment -- check.py > run.log 2> run.err
+kcoral run python --send experiment -- experiment/check.py > run.log 2> run.err
 ```
 
 ### Returned files, limits, and exit status
@@ -265,9 +280,9 @@ experiment/
 Run the script with its own arguments, or run the package module:
 
 ```bash
-kcoral run python --send experiment -- check.py --input data/input.json
-kcoral run python --send experiment -- -m my_package.check
-kcoral run python --send experiment -- -W ignore -X dev check.py
+kcoral run python --send experiment -- experiment/check.py --input experiment/data/input.json
+kcoral run python --send experiment -- -m experiment.my_package.check
+kcoral run python --send experiment -- -W ignore -X dev experiment/check.py
 kcoral run python -- -c 'import sys; print(sys.version)'
 ```
 
@@ -276,7 +291,7 @@ kcoral run python -- -c 'import sys; print(sys.version)'
 If `check.py` writes `results/report.json`, download its containing directory:
 
 ```bash
-kcoral run python --send experiment --fetch results --out artifacts/python -- check.py
+kcoral run python --send experiment --fetch results --out artifacts/python -- experiment/check.py
 ```
 
 The local result is `artifacts/python/results/report.json`. For exact binary
@@ -288,7 +303,7 @@ provided execution reaches normal subprocess completion.
 a traceback on stderr and a nonzero code. A missing module usually means it was
 neither uploaded nor installed on the worker; installing it only on the client
 does not make it available remotely. A missing script often means the command
-used `experiment/check.py` after uploading the **contents** of `experiment/`.
+used `check.py` instead of `experiment/check.py` after `--send experiment`.
 
 To inspect native Python help on the worker, use
 `kcoral run shell -- python --help`. Python's
@@ -324,18 +339,18 @@ the remaining arguments follow Compute Sanitizer's native syntax.
 
 These are native options placed **after** `--`. Other options supported by the
 installed Compute Sanitizer are also forwarded. The application can be a program
-installed on the worker or an uploaded executable such as `./check`.
+installed on the worker or an uploaded executable such as `./experiment/check`.
 
 ### Check a Python or compiled application
 
 Run the default checker, select a race check, or check an uploaded executable:
 
 ```bash
-kcoral run compute-sanitizer --send experiment -- python check.py
+kcoral run compute-sanitizer --send experiment -- python experiment/check.py
 kcoral run compute-sanitizer --send experiment \
-  -- --tool racecheck --error-exitcode 1 python check.py
+  -- --tool racecheck --error-exitcode 1 python experiment/check.py
 kcoral run compute-sanitizer --send experiment \
-  -- --tool memcheck --error-exitcode 1 ./check
+  -- --tool memcheck --error-exitcode 1 ./experiment/check
 ```
 
 A compiled program must target the worker's platform and preserve its executable
@@ -347,7 +362,7 @@ information recommended by Compute Sanitizer.
 ```bash
 kcoral run compute-sanitizer --send experiment \
   --fetch sanitizer.log --out artifacts/check \
-  -- --tool memcheck --error-exitcode 1 --log-file sanitizer.log python check.py
+  -- --tool memcheck --error-exitcode 1 --log-file sanitizer.log python experiment/check.py
 ```
 
 The returned log is `artifacts/check/sanitizer.log`. Selecting `--log-file`
@@ -409,17 +424,17 @@ Collect one launch with the basic set:
 
 ```bash
 kcoral run ncu --send experiment --out artifacts/ncu \
-  -- --set basic --launch-count 1 -- python capture.py
+  -- --set basic --launch-count 1 -- python experiment/capture.py
 ```
 
 Use the native defaults, or select a kernel and skip warmup launches:
 
 ```bash
 kcoral run ncu --send experiment --out artifacts/ncu-default \
-  -- -- python capture.py
+  -- -- python experiment/capture.py
 kcoral run ncu --send experiment --out artifacts/ncu-filtered --timeout 600 \
   -- --kernel-name 'regex:my_kernel.*' --launch-skip 5 --launch-count 1 \
-  -- python capture.py
+  -- python experiment/capture.py
 ```
 
 Native filtering and replay behavior are controlled by the installed profiler.
@@ -491,14 +506,14 @@ postprocessing subcommands.
 
 ```bash
 kcoral run run-iket --send experiment --out artifacts/iket \
-  -- profile --postprocess json -- python capture.py
+  -- profile --postprocess json -- python experiment/capture.py
 ```
 
 To retain intermediate files as well as the processed trace:
 
 ```bash
 kcoral run run-iket --send experiment --out artifacts/iket-debug --timeout 600 \
-  -- profile --postprocess json --keep -- python capture.py
+  -- profile --postprocess json --keep -- python experiment/capture.py
 ```
 
 All files left in the profiler's managed output directory are downloaded under
@@ -614,10 +629,12 @@ runtime imports must be installed on the worker or included with `--send`.
 ### Extra inputs and environment
 
 Use `--send` for additional data files or Python modules read by the candidate.
-The common input layout applies: sending `experiment` places its contents in
-the remote working directory. The snapshot is prepared once and included in
-every workload request. Each request starts with a fresh copy; files created by
-one workload are not available to the next.
+The common input layout applies: sending `experiment` creates an `experiment/`
+directory under the remote working directory. A candidate can read
+`experiment/data/input.json` or import `experiment.helper` from that upload.
+The snapshot is prepared once and included in every workload request. Each
+request starts with a fresh copy; files created by one workload are not
+available to the next.
 
 ```bash
 kcoral run bench --send experiment -e MODE=debug -e MY_LOCAL_VARIABLE \
@@ -740,9 +757,9 @@ are supported. `EXECUTABLE` is required; this command does not open a prompt.
 
 | Command form | How it is executed |
 | --- | --- |
-| `sh setup.sh` | Find `sh` in the worker's executable search path and pass it the uploaded script. |
-| `python setup.py` | Find `python` in the worker environment and run the script. |
-| `./setup.sh` | Execute the uploaded file directly; it needs an executable bit and a valid interpreter declaration. |
+| `sh experiment/setup.sh` | Find `sh` in the worker's executable search path and pass it the uploaded script. |
+| `python experiment/setup.py` | Find `python` in the worker environment and run the script. |
+| `./experiment/setup.sh` | Execute the uploaded file directly; it needs an executable bit and a valid interpreter declaration. |
 | `/path/to/program` | Execute that path on the worker, if visible under its filesystem isolation settings. |
 | `bash -c 'COMMANDS'` | Let the remote Bash process interpret pipelines, redirections, variable expansion, or multiple commands. |
 
@@ -756,10 +773,10 @@ select an uploaded executable in the current directory.
 These forms use different interpreters or direct execution:
 
 ```bash
-kcoral run shell --send experiment -- bash setup.sh
-kcoral run shell --send experiment -- sh setup.sh
-kcoral run shell --send experiment -- python setup.py
-kcoral run shell --send experiment -- ./setup.sh
+kcoral run shell --send experiment -- bash experiment/setup.sh
+kcoral run shell --send experiment -- sh experiment/setup.sh
+kcoral run shell --send experiment -- python experiment/setup.py
+kcoral run shell --send experiment -- ./experiment/setup.sh
 ```
 
 The same `--fetch` and `--out` options work for all of them. If the script creates
@@ -768,7 +785,7 @@ The same `--fetch` and `--out` options work for all of them. If the script creat
 
 ```bash
 kcoral run shell --send experiment --fetch results --out artifacts/setup \
-  -- sh setup.sh
+  -- sh experiment/setup.sh
 ```
 
 For direct execution, make the script executable before uploading it and use a
@@ -782,16 +799,16 @@ quoted so the local shell does not expand them first:
 
 ```bash
 kcoral run shell --send experiment --env MODE=debug \
-  -- bash -c 'printf "%s\n" "$MODE"; python check.py > check.log; cat check.log'
+  -- bash -c 'printf "%s\n" "$MODE"; python experiment/check.py > check.log; cat check.log'
 kcoral run shell --send experiment \
-  -- sh -c 'sh setup.sh && python check.py'
+  -- sh -c 'sh experiment/setup.sh && python experiment/check.py'
 ```
 
 The second example keeps setup and execution in the same request. For a batch
 program that expects stdin, upload its input file and redirect it remotely:
 
 ```bash
-kcoral run shell --send experiment -- sh -c './process < input.txt'
+kcoral run shell --send experiment -- sh -c './experiment/process < experiment/input.txt'
 ```
 
 A later `kcoral run` invocation receives a fresh workspace; variables exported or files

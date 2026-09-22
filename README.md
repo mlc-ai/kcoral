@@ -43,18 +43,18 @@ for server, GPU and compiler dependencies.
 
 ```bash
 export KCORAL_URL='http://SERVER_HOST:PORT'
-kcoral run python --send experiment -- check.py
-kcoral run compute-sanitizer --send experiment -- python check.py
+kcoral run python --send experiment -- experiment/check.py
+kcoral run compute-sanitizer --send experiment -- python experiment/check.py
 kcoral run ncu --send experiment --out artifacts/ncu \
-  -- --set basic --launch-count 1 -- python capture.py
+  -- --set basic --launch-count 1 -- python experiment/capture.py
 kcoral run run-iket --send experiment --out artifacts/iket \
-  -- profile --postprocess json -- python capture.py
+  -- profile --postprocess json -- python experiment/capture.py
 kcoral run bench -- kda/decode v0
-kcoral run shell --send experiment -- bash setup.sh
+kcoral run shell --send experiment -- bash experiment/setup.sh
 ```
 
 Any remote tool also accepts `--host HOST --port PORT`, for example
-`kcoral run python --host localhost --port 8000 --send experiment -- check.py`.
+`kcoral run python --host localhost --port 8000 --send experiment -- experiment/check.py`.
 These options override `KCORAL_URL`, with a warning showing the address used.
 
 See [Builtin CLI Tools](docs/client-guide/builtin-cli-tools.md) for common options and a

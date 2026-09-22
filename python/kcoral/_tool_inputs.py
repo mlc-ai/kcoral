@@ -13,7 +13,7 @@ def relative_path(name):
 
 
 def pack_inputs(paths=()):
-    """Stable archives: directory contents and file basenames."""
+    """Stable archives: preserve each selected file or directory's basename."""
     buffer, names = io.BytesIO(), set()
     with tarfile.open(fileobj=buffer, mode="w") as tar:
 
@@ -32,7 +32,11 @@ def pack_inputs(paths=()):
         for path in paths:
             if path.is_symlink() or not path.exists():
                 raise ValueError(f"input must exist and not be a symlink: {path}")
-            for entry in sorted(path.rglob("*")) if path.is_dir() else [path]:
+            directory = path.is_dir()
+            basename = path.resolve().name if directory else path.name
+            if not basename:
+                raise ValueError(f"input directory must have a name: {path}")
+            for entry in sorted(path.rglob("*")) if directory else [path]:
                 if "__pycache__" in entry.parts:
                     continue
                 if entry.is_symlink():
@@ -41,6 +45,6 @@ def pack_inputs(paths=()):
                     continue
                 if not entry.is_file():
                     raise ValueError(f"input is not a regular file: {entry}")
-                name = entry.relative_to(path).as_posix() if path.is_dir() else entry.name
+                name = f"{basename}/{entry.relative_to(path).as_posix()}" if directory else basename
                 add(name, entry.read_bytes(), bool(entry.stat().st_mode & 0o111))
     return buffer.getvalue()

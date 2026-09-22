@@ -88,12 +88,21 @@ def test_python_roundtrip_and_exit_code(remote, tmp_path, capsys):
     (experiment / "check.py").write_text(
         "import os, sys\nfrom pathlib import Path\n"
         "assert Path(os.environ['KCORAL_DIR']) == Path.cwd()\n"
-        "print(Path('value.txt').read_text(), os.environ['TEST_VALUE'], sys.argv[1:])\n"
+        "print(Path('experiment/value.txt').read_text(), os.environ['TEST_VALUE'], sys.argv[1:])\n"
         "print('remote stderr', file=sys.stderr)\nsys.exit(7)\n"
     )
     code = cli.main(
         "python",
-        ["--send", str(experiment), "-e", "TEST_VALUE=a b", "--", "check.py", "--url", "literal"],
+        [
+            "--send",
+            str(experiment),
+            "-e",
+            "TEST_VALUE=a b",
+            "--",
+            "experiment/check.py",
+            "--url",
+            "literal",
+        ],
     )
     output = capsys.readouterr()
     assert code == 7
@@ -126,11 +135,16 @@ def test_shell_fetches_binary_and_empty_directory_on_failure(remote, tmp_path):
     assert (out / "result/empty").is_dir()
 
 
-def test_executable_inputs_and_missing_artifacts(remote, tmp_path, capsys):
-    script = tmp_path / "run.sh"
+@pytest.mark.parametrize("send_directory", [False, True])
+def test_executable_inputs_and_missing_artifacts(remote, tmp_path, capsys, send_directory):
+    directory = tmp_path / "experiment"
+    directory.mkdir()
+    script = directory / "run.sh"
     script.write_text("#!/bin/sh\necho executable\n")
     script.chmod(0o700)
-    assert cli.main("shell", ["--send", str(script), "--", "./run.sh"]) == 0
+    selection = directory if send_directory else script
+    command = "./experiment/run.sh" if send_directory else "./run.sh"
+    assert cli.main("shell", ["--send", str(selection), "--", command]) == 0
     assert "executable" in capsys.readouterr().out
     assert (
         cli.main(
@@ -139,6 +153,16 @@ def test_executable_inputs_and_missing_artifacts(remote, tmp_path, capsys):
         == 1
     )
     assert "missing artifacts: missing" in capsys.readouterr().err
+
+
+def test_python_runs_uploaded_package(remote, tmp_path, capsys):
+    package = tmp_path / "experiment"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "helper.py").write_text("VALUE = 'package import works'\n")
+    (package / "check.py").write_text("from .helper import VALUE\nprint(VALUE)\n")
+    assert cli.main("python", ["--send", str(package), "--", "-m", "experiment.check"]) == 0
+    assert capsys.readouterr().out == "package import works\n"
 
 
 @pytest.fixture
@@ -429,12 +453,59 @@ def test_input_snapshots_are_stable_and_reject_conflicts(tmp_path):
     out = tmp_path / "out"
     out.mkdir()
     unpack_inputs(archive, out)
-    assert (out / "run.sh").stat().st_mode & 0o100
+    assert (out / "inputs/run.sh").stat().st_mode & 0o100
     with pytest.raises(ValueError, match="conflicting"):
-        pack_inputs([source, file])
+        pack_inputs([source, source])
     (source / "link").symlink_to(file)
     with pytest.raises(ValueError, match="symlink"):
         pack_inputs([source])
+
+
+@pytest.mark.parametrize(
+    "selection", ["experiment", "experiment/", "./experiment", ".", "absolute"]
+)
+def test_input_directory_name_is_preserved(monkeypatch, tmp_path, selection):
+    source = tmp_path / "experiment"
+    (source / "data").mkdir(parents=True)
+    (source / "data/input.txt").write_text("uploaded")
+    monkeypatch.chdir(source if selection == "." else tmp_path)
+    selected = source if selection == "absolute" else Path(selection)
+    out = tmp_path / "out"
+    out.mkdir()
+    unpack_inputs(pack_inputs([selected]), out)
+    assert (out / "experiment/data/input.txt").read_text() == "uploaded"
+    assert sorted(entry.name for entry in out.iterdir()) == ["experiment"]
+
+
+def test_distinct_directories_and_individual_files_keep_their_names(tmp_path):
+    sources = [tmp_path / name for name in ("first", "second")]
+    for directory in sources:
+        directory.mkdir()
+        (directory / "check.py").write_text(directory.name)
+    out = tmp_path / "out"
+    out.mkdir()
+    unpack_inputs(pack_inputs([*sources, sources[0] / "check.py"]), out)
+    assert (out / "first/check.py").read_text() == "first"
+    assert (out / "second/check.py").read_text() == "second"
+    assert (out / "check.py").read_text() == "first"
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_input_directory_conflicts_with_a_file_of_the_same_name(tmp_path, reverse):
+    source = tmp_path / "experiment"
+    source.mkdir()
+    (source / "check.py").write_text("pass")
+    file = tmp_path / "other/experiment"
+    file.parent.mkdir()
+    file.write_text("conflict")
+    paths = [source, file]
+    with pytest.raises(ValueError, match="conflicting"):
+        pack_inputs(paths[::-1] if reverse else paths)
+
+
+def test_filesystem_root_has_no_upload_directory_name():
+    with pytest.raises(ValueError, match="must have a name"):
+        pack_inputs([Path("/")])
 
 
 @pytest.mark.parametrize(

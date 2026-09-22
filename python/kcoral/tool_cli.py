@@ -154,7 +154,7 @@ def parse_args(tool, argv, *, epilog=None):
         type=Path,
         action="append",
         default=[],
-        help="upload a file or directory's contents; repeatable",
+        help="upload a file or directory, preserving its name; repeatable",
     )
     parser.add_argument(
         "-e",
