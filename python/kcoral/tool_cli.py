@@ -140,9 +140,13 @@ def validate_python_args(parser, arguments):
     parser.error("a script, -c command, or -m module is required; stdin execution is unsupported")
 
 
-def parse_args(tool, argv):
+def parse_args(tool, argv, *, epilog=None):
     parser = argparse.ArgumentParser(
-        prog=f"kcoral run {tool}", allow_abbrev=False, description=f"Run {tool} on a KCoral worker."
+        prog=f"kcoral run {tool}",
+        allow_abbrev=False,
+        description=f"Run {tool} on a KCoral worker.",
+        epilog=epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     add_connection_args(parser)
     parser.add_argument(
@@ -158,7 +162,7 @@ def parse_args(tool, argv):
         action="append",
         default=[],
         metavar="NAME[=VALUE]",
-        help="set a subprocess variable; NAME copies its local value",
+        help="set a remote environment variable; NAME copies its local value",
     )
     profiling = tool in {"ncu", "run-iket"}
     parser.add_argument(
@@ -198,7 +202,9 @@ def parse_args(tool, argv):
             parser.error(f"environment variable {name} contains NUL")
         environment[name] = value
     args.env = environment
-    if not profiling and bool(args.fetch) != bool(args.out):
+    if tool == "bench" and args.fetch and args.out is None:
+        parser.error("--fetch requires --out")
+    if tool != "bench" and not profiling and bool(args.fetch) != bool(args.out):
         parser.error("--fetch and --out must be used together")
     for name in args.fetch:
         try:

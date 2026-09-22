@@ -5,8 +5,8 @@ The adapter appends ``SOURCES = {...}``: the pinned flashinfer-bench-evolve harn
 and one task's modules and definition, verbatim. Inside the worker everything stays in memory —
 the harness is imported through an in-memory finder, the workload blobs arrive as
 kcoral tensor uploads and are served to the harness's ``load_safetensor``, and the
-candidate ``lowered.py`` is exec'd as a module. ``main("init", ...)`` runs once per
-request; ``main("run", i)`` scores workload ``i`` through the task's own ``run_suite``.
+candidate ``lowered.py`` is exec'd as a module. ``execute`` initializes and scores
+one workload through the task's own ``run_suite``, then collects selected files.
 """
 
 from __future__ import annotations
@@ -19,10 +19,13 @@ import importlib.util
 import json
 import linecache
 import math
+import os
 import sys
+import traceback
 import types
 from dataclasses import replace
 from functools import cache
+from pathlib import Path
 
 SOURCES: dict[str, str] = {}  # package-relative path -> source or JSON, appended by the adapter
 _STATE: dict = {}
@@ -163,6 +166,62 @@ def _cleanup():
         else:
             linecache.cache[filename] = previous
     _STATE.clear()
+
+
+def execute(
+    task,
+    overrides,
+    entry,
+    blob_keys,
+    lowered_source,
+    archive,
+    environment,
+    fetch,
+    unpack_inputs,
+    collect_files,
+    *blob_tensors,
+):
+    """Run one workload with request-local files and environment, then collect outputs."""
+    workdir = Path("inputs").absolute()
+    reports = Path("outputs").absolute()
+    workdir.mkdir()
+    reports.mkdir()
+    original_cwd = Path.cwd()
+    original_environment = dict(os.environ)
+    original_path = list(sys.path)
+    outcome = {"worker": None, "rows": [], "missing": [], "error": None}
+    try:
+        try:
+            unpack_inputs(archive, workdir)
+            os.chdir(workdir)
+            sys.path.insert(0, str(workdir))
+            os.environ.update(environment)
+            os.environ["KCORAL_DIR"] = str(workdir)
+            os.environ["PATH"] = (
+                str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
+            )
+            outcome["worker"] = _init(
+                task, overrides, [entry], blob_keys, lowered_source, *blob_tensors
+            )
+            outcome["rows"] = _run(0)
+        except Exception:
+            outcome["error"] = traceback.format_exc()
+        try:
+            outcome["missing"] = collect_files(workdir, reports, fetch)
+        except Exception:
+            outcome["error"] = (outcome["error"] or "") + traceback.format_exc()
+        return outcome
+    finally:
+        _cleanup()
+        # Uploaded support modules must not leak into a reused worker.
+        for name, module in list(sys.modules.items()):
+            filename = getattr(module, "__file__", None)
+            if isinstance(filename, str) and Path(filename).is_relative_to(workdir):
+                del sys.modules[name]
+        sys.path[:] = original_path
+        os.environ.clear()
+        os.environ.update(original_environment)
+        os.chdir(original_cwd)
 
 
 def main(command, *args):

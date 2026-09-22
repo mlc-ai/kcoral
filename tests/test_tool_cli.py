@@ -26,7 +26,7 @@ def test_run_command_preserves_tool_arguments(monkeypatch, tool, explicit_argv):
     from kcoral.__main__ import main
 
     arguments = (
-        ["kda/decode", "v0"]
+        ["--host", "gpu.example", "--", "kda/decode", "v0", "--repo", "checkout"]
         if tool == "bench"
         else ["--send", "experiment", "--", "--flag", "--", "script.py", "a b"]
     )
@@ -498,7 +498,7 @@ def test_bench_command_roundtrip(remote, monkeypatch, tmp_path, capsys):
         SimpleNamespace(summarize=lambda rows, label: summaries.append(rows)),
     )
     monkeypatch.chdir(tmp_path)
-    assert bench_cli.main(["kda/decode", "v0"]) == 0
+    assert bench_cli.main(["--", "kda/decode", "v0"]) == 0
     assert summaries == [
         [
             {"passed": True, "value": 42, "warmup": 1},

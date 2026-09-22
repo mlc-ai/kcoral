@@ -49,7 +49,7 @@ kcoral run ncu --send experiment --out artifacts/ncu \
   -- --set basic --launch-count 1 -- python capture.py
 kcoral run run-iket --send experiment --out artifacts/iket \
   -- profile --postprocess json -- python capture.py
-kcoral run bench kda/decode v0
+kcoral run bench -- kda/decode v0
 kcoral run shell --send experiment -- bash setup.sh
 ```
 

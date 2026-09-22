@@ -21,7 +21,7 @@ arguments, returned files, and failure handling.
 
 ### Command structure and help
 
-The five subprocess tools use this structure:
+All tools use this structure:
 
 ```text
 kcoral run TOOL [KCoral options] -- [native arguments]
@@ -30,7 +30,7 @@ kcoral run TOOL [KCoral options] -- [native arguments]
 Put connection, upload, environment, and download options **before** the first
 `--`. Everything after it belongs to the selected tool. For `ncu` and
 `run-iket`, a second `--` separates profiler options from the application.
-`bench` has its own workload and version arguments and does not require a
+`bench` places its workload, version, and benchmark options after the same
 separator.
 
 ```bash
@@ -68,7 +68,7 @@ Or specify the address on the invocation:
 
 ```bash
 kcoral run python --host gpu.example.com --port 8000 --send experiment -- check.py
-kcoral run bench kda/decode v0 --host gpu.example.com --port 8000
+kcoral run bench --host gpu.example.com --port 8000 -- kda/decode v0
 ```
 
 If either `--host` or `--port` is present, KCoral constructs `http://HOST:PORT`
@@ -86,16 +86,16 @@ local argument error.
 
 ### Input, environment, and output options
 
-These options control uploaded files, subprocess variables, and returned files.
+These options control uploaded files, remote environment variables, and returned files.
 Use them before the first `--`; the tool sections describe how each command
 prepares its inputs and collects its results.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--send PATH` | No uploaded files | Upload a file or a directory's contents. Repeat for additional inputs. |
-| `-e NAME[=VALUE]`, `--env NAME[=VALUE]` | Worker environment | Set one subprocess variable, or copy one local variable by name. Repeat for additional variables. |
+| `-e NAME[=VALUE]`, `--env NAME[=VALUE]` | Worker environment | Set one remote environment variable, or copy one local variable by name. Repeat for additional variables. |
 | `--fetch PATH` | No selected outputs | Return a file or directory relative to the remote working directory. Repeat for additional outputs; requires `--out`. |
-| `--out DIRECTORY` | No download directory | New local destination for returned files. Profilers require it for their reports; explicit file selection pairs it with `--fetch`. |
+| `--out DIRECTORY` | No download directory | New local destination for returned files or benchmark results. Required by profilers and by `--fetch`; bench can save results without `--fetch`. |
 
 ### Input layout and working directory
 
@@ -117,13 +117,14 @@ permission modes are not.
 
 Send the files your program needs, including local modules and configuration.
 Sending a script does not discover its imports or upload its parent directory.
-Without `--send`, the subprocess starts in an empty working directory. Relative
-paths in its arguments are resolved there; absolute paths refer to the worker's
+Without `--send`, the tool starts in an empty working directory. Bench separately
+uploads its adapter-selected code and tensors. Relative paths in tool arguments
+are resolved in the working directory; absolute paths refer to the worker's
 filesystem, subject to the server's isolation settings.
 
 ### Environment variables and executable lookup
 
-Environment overrides are optional. Without them, the subprocess inherits the
+Environment overrides are optional. Without them, execution uses the
 worker's environment, including its assigned GPU. The worker's Python executable
 directory is prepended to `PATH` when locating programs.
 
@@ -136,7 +137,7 @@ kcoral run shell --send experiment -e MODE=debug -e LABEL='trial one' -- sh setu
 
 | Form | Behavior |
 | --- | --- |
-| `--env MODE=debug` | Set `MODE` to `debug` in the remote subprocess. |
+| `--env MODE=debug` | Set `MODE` to `debug` for remote execution. |
 | `--env MY_LOCAL_VARIABLE` | Read this variable from the client's environment and send its value. An unset local variable is an argument error. |
 | `--env EMPTY=` | Set a variable to an empty string. |
 | Repeated assignments to the same name | The last assignment wins. |
@@ -144,7 +145,9 @@ kcoral run shell --send experiment -e MODE=debug -e LABEL='trial one' -- sh setu
 Variable names must start with a letter or underscore and contain only letters,
 digits, or underscores. `CUDA_VISIBLE_DEVICES` and `KCORAL_DIR` are managed by
 KCoral and cannot be overridden. Setting `PATH` with `--env` still leaves the
-worker's Python executable directory first in the subprocess search path.
+worker's Python executable directory first in the executable search path.
+Overrides apply to this invocation; bench applies them separately to each
+workload and restores the worker environment afterward.
 
 Local variables are not copied automatically. For example, putting
 `MODE=debug` before the local `kcoral` command sets the client's environment;
@@ -194,8 +197,8 @@ Symbolic links and special files cannot be returned. `--out` must name a new
 local directory; parent directories are created automatically, and existing
 output is never overwritten.
 
-Files are collected after the subprocess finishes, even when it exits with an
-error. A hard timeout, worker failure, or response-size error can prevent their
+Files are collected after execution, including a subprocess failure or a normal
+Python exception from a benchmark. A hard timeout, worker failure, or response-size error can prevent their
 return. Each request has its own workspace; a later invocation is not a
 continuation of the earlier one. Keep related setup and execution steps in one
 invocation, or explicitly download and resend the needed files.
@@ -542,20 +545,24 @@ dependencies and compatible GPU, including any libraries imported by the candida
 ### Command format and parameters
 
 ```text
-kcoral run bench WORKLOAD [VERSION] [connection and execution options]
+kcoral run bench [KCoral options] -- WORKLOAD [VERSION]
     [--repo PATH] [--warmup N] [--repeat N]
 ```
 
-There is no required native-argument separator. Use the
-[connection and execution options](#connection-and-execution-options) to select
-the server, timeout, and capture limit. Code and input preparation are automatic,
-as described below.
+Put shared connection, execution, upload, environment, and output options before
+`--`. Put the workload, version, and all benchmark-specific options after it.
+The separator is required. For example:
+
+```bash
+kcoral run bench --host gpu.example.com --port 8000 -- kda/decode v0
+kcoral run bench --out artifacts/bench -- kda/decode v0 --repo /path/to/TIRx-kernel-agent
+```
 
 | Argument or option | Default | Meaning |
 | --- | --- | --- |
 | `WORKLOAD` | Required | Workload registered by the selected adapter, for example `kda/decode`. It is not an arbitrary Python filename. |
 | `VERSION` | `baseline` | Candidate directory name such as `v0`, or `baseline` for the adapter's baseline run. |
-| `--repo PATH` | Search current directory and parents | Checkout containing `kernel-evolution/bench_adapter.py`, or the directory containing `bench_adapter.py` directly. |
+| `--repo PATH` | Search current directory and parents | Local checkout containing `kernel-evolution/bench_adapter.py`, or the directory containing `bench_adapter.py` directly. This benchmark-specific option belongs after `--`. |
 | `--warmup N` | Adapter's workload default | Nonnegative number of warmup iterations. |
 | `--repeat N` | Adapter's workload default | Positive number of measured iterations. |
 
@@ -564,11 +571,20 @@ belong to the checkout's adapter and may change with its revision. Inspect
 that adapter's `PACKAGED` mapping for its workload keys and defaults. KCoral
 does not maintain a separate fixed workload list.
 
+Both help forms run locally without a configured server. The first shows the
+shared options and benchmark arguments; the second shows benchmark arguments:
+
+```bash
+kcoral run bench --help
+kcoral run bench -- --help
+```
+
 ### Checkout discovery and candidate selection
 
 Without `--repo`, KCoral searches the current directory and each parent for
 `kernel-evolution/bench_adapter.py` or `bench_adapter.py`. With `--repo`, it checks
-only the supplied directory in those two forms.
+only the supplied directory in those two forms. This selects the source of the
+benchmark definitions; it does not upload the entire checkout.
 
 For the standard adapter, this layout makes `kda/decode v0` select the shown
 candidate:
@@ -585,44 +601,124 @@ TIRx-kernel-agent/
 Run the baseline, a candidate, or a checkout elsewhere on your machine:
 
 ```bash
-kcoral run bench kda/decode
-kcoral run bench kda/decode v0 --warmup 3 --repeat 50
-kcoral run bench kda/decode v0 --repo /path/to/TIRx-kernel-agent \
-  --host gpu.example.com --port 8000
+kcoral run bench -- kda/decode
+kcoral run bench -- kda/decode v0 --warmup 3 --repeat 50
+kcoral run bench --host gpu.example.com --port 8000 \
+  -- kda/decode v0 --repo /path/to/TIRx-kernel-agent
 ```
 
-No explicit upload is needed. The adapter provides the candidate source,
-benchmark harness, task definition, and tensor inputs. The candidate's additional
-runtime imports must be available on the worker.
+No explicit upload is needed for the adapter-selected candidate source,
+benchmark harness, task definition, or tensor inputs. The candidate's additional
+runtime imports must be installed on the worker or included with `--send`.
+
+### Extra inputs and environment
+
+Use `--send` for additional data files or Python modules read by the candidate.
+The common input layout applies: sending `experiment` places its contents in
+the remote working directory. The snapshot is prepared once and included in
+every workload request. Each request starts with a fresh copy; files created by
+one workload are not available to the next.
+
+```bash
+kcoral run bench --send experiment -e MODE=debug -e MY_LOCAL_VARIABLE \
+  -- kda/decode v0
+```
+
+Environment overrides apply before the harness and candidate are loaded.
+`KCORAL_DIR` points to the uploaded input directory, which is also the working
+directory and is added to Python's module search path. The worker's environment,
+working directory, and module search path are restored after the workload ends;
+uploaded support modules are removed from the import cache. These options do
+not change the environment used by the local adapter to prepare inputs.
+
+### Returned results and files
+
+`--out` alone saves structured results. Add `--fetch` to collect files created
+by the harness or candidate; repeat it to select multiple paths. Collection
+runs after each workload, including when the benchmark raises a normal Python
+exception. `--fetch` requires `--out`.
+
+```bash
+kcoral run bench --out artifacts/bench -- kda/decode v0
+kcoral run bench --send experiment --fetch results --out artifacts/bench-debug \
+  -e MODE=debug -- kda/decode v0 --warmup 3 --repeat 50
+```
+
+The output directory must not already exist. It is created after local benchmark
+preparation succeeds. Workloads are numbered from one in the adapter's selected
+order, and each has a separate destination:
+
+```text
+artifacts/bench-debug/
+  summary.json
+  workloads/
+    0001/
+      result.json
+      files/
+        results/
+          ...
+    0002/
+      result.json
+      files/
+        results/
+          ...
+```
+
+`files/` contains only the outputs selected with `--fetch`, preserving their
+relative paths. It is omitted when no files are requested. The numbered
+`result.json` contains `index`, worker metadata in `worker`, benchmark `rows`,
+a list of `missing` output paths, and an `error` traceback or `null`.
+
+`summary.json` contains:
+
+| Field | Meaning |
+| --- | --- |
+| `workload`, `version` | Adapter-normalized workload key and requested version. |
+| `completed` | Whether all selected workloads and the combined summary finished. This can be true even when correctness checks fail or selected files are missing. |
+| `passed` | True only after completion, with no row reporting `passed=false` and no missing requested files. |
+| `results` | Combined benchmark rows from responses received so far. Their columns are defined by the adapter. |
+| `workloads` | The numbered per-workload records also saved in `result.json`. |
+| `error` | Command error description, or `null` when execution completed. |
+
+Non-finite numeric results are stored as the strings `NaN`, `Infinity`, and
+`-Infinity` so that the files remain valid JSON. They are converted back to
+numbers for the harness's text summary only.
+
+Once the output directory has been created, KCoral attempts to save the summary
+even if execution stops early. An execution exception stops further requests;
+previously received results and returned files remain saved. A hard timeout,
+worker failure, or response-size error may prevent the current workload from
+returning any results or files. The summary then describes the partial run.
 
 ### Requests, output, and exit status
 
 One invocation can cover multiple selected input shapes. KCoral sends a separate
-request for each workload entry, with the required code and tensors included in
-**every request**. Through a Router, successive requests may execute on different
-workers. The timeout applies separately to each request, not to the total command.
+request for each workload entry, with the required code, tensors, extra uploads,
+and environment overrides included in **every request**. Through a Router,
+successive requests may execute on different workers. The timeout applies
+separately to each request, not to the total command.
 
 Stdout includes the selected server and workload progress, worker information
 when it changes, the harness's captured output, and the combined summary. Summary
-columns and timing units are defined by the adapter's benchmark harness. The
-command returns `1` if any returned correctness row has `passed=false`, and `0`
-when execution completes without such a failure. Setup and execution errors are
-nonzero. A correctness failure is different from an execution error: completed
-rows can be summarized even when a candidate fails a correctness check.
-
-`bench` does not write a results directory. To retain its text output, redirect
-it locally:
+columns and timing units are defined by the adapter's benchmark harness. To
+retain text output in addition to structured results, redirect it locally:
 
 ```bash
-kcoral run bench kda/decode v0 > bench.log 2> bench.err
+kcoral run bench --out artifacts/bench -- kda/decode v0 > bench.log 2> bench.err
 ```
 
-If the adapter is not found, run from the checkout or pass `--repo`. If the
-benchmark package or tensor files are missing, complete the checkout's dependency
-and data setup. For an unknown workload, use a key registered by that adapter.
-For a missing candidate, check `WORKLOAD/VERSION/lowered.py`. For remote import
-or GPU errors, check the worker environment; the client's installed packages
-are not automatically transferred.
+The command returns `0` when all requests complete, no correctness row reports
+`passed=false`, and all selected files are available. A correctness failure or
+missing output returns `1` after continuing through the remaining workloads and
+printing the combined summary. Preparation, execution, transport, and output
+saving errors return `1` and stop the run. Invalid arguments return `2`.
+
+If the adapter is not found, run from the checkout or pass `--repo` after `--`.
+If the benchmark package or tensor files are missing, complete the checkout's
+dependency and data setup. For an unknown workload, use a key registered by that
+adapter. For a missing candidate, check `WORKLOAD/VERSION/lowered.py`. For remote
+import or GPU errors, check the worker environment and extra uploads; the client's
+installed packages are not automatically transferred.
 
 ## shell
 
