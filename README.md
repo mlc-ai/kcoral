@@ -57,7 +57,7 @@ Any remote tool also accepts `--host HOST --port PORT`, for example
 `kcoral run python --host localhost --port 8000 --send experiment -- check.py`.
 These options override `KCORAL_URL`, with a warning showing the address used.
 
-See [Builtin CLI Tools](docs/builtin-cli-tools.md) for common options and a
+See [Builtin CLI Tools](docs/client-guide/builtin-cli-tools.md) for common options and a
 separate guide to each tool, including dependencies, examples, and returned files.
 
 ## Run the server

@@ -49,8 +49,8 @@ def add_connection_args(parser):
     parser.add_argument(
         "--output-limit-bytes",
         type=int,
-        default=16 * 1024**2,
-        help="capture limit per stream; server caps apply",
+        default=256 * 1024**2,
+        help="capture limit per stream (default: 256 MiB; server caps apply)",
     )
 
 

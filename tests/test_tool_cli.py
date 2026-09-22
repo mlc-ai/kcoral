@@ -21,7 +21,8 @@ from kcoral.testing import fake_runtime_factory
 
 
 @pytest.mark.parametrize("tool", cli.COMMANDS)
-def test_run_command_preserves_tool_arguments(monkeypatch, tool):
+@pytest.mark.parametrize("explicit_argv", [False, True])
+def test_run_command_preserves_tool_arguments(monkeypatch, tool, explicit_argv):
     from kcoral.__main__ import main
 
     arguments = (
@@ -33,7 +34,7 @@ def test_run_command_preserves_tool_arguments(monkeypatch, tool):
     monkeypatch.setattr(cli, "main", lambda name, argv: calls.append((name, argv)) or 7)
     monkeypatch.setattr(sys, "argv", ["kcoral", "run", tool, *arguments])
     with pytest.raises(SystemExit) as exc:
-        main()
+        main(["run", tool, *arguments]) if explicit_argv else main()
     assert exc.value.code == 7
     assert calls == [(tool, arguments)]
 

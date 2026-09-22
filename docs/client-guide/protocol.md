@@ -598,14 +598,14 @@ and collection limits fail that return with `serialization`. Failed returns add
 no result or binary parts; earlier returns survive ordinary instruction failures.
 
 Contents are buffered in the execution response. The existing `max_response_bytes`
-limit (default 256 MiB) applies. `output_limit_bytes` controls only stdout/stderr.
+limit (default 1 GiB) applies. `output_limit_bytes` controls only stdout/stderr.
 
 ## Options
 
 | Field | Type | Required | Default | Notes |
 |---|---|---:|---|---|
 | `timeout_seconds` | number | no | `300` | Worker execution deadline; maximum `900` |
-| `output_limit_bytes` | integer | no | `1048576` | Maximum bytes returned for each of stdout and stderr; maximum `16777216`; `0` disables capture |
+| `output_limit_bytes` | integer | no | `1048576` | Maximum bytes returned for each of stdout and stderr; default server maximum `268435456` (256 MiB); `0` disables capture |
 
 A value above either maximum is clamped to it, not rejected.
 

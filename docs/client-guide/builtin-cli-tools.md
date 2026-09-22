@@ -14,10 +14,9 @@ existing server through `kcoral run TOOL`. They also work through a KCoral Route
 
 ## Common usage
 
-Install the client from a KCoral checkout:
+List the available tools and inspect a tool's options:
 
 ```bash
-pip install .
 kcoral run --help
 kcoral run python --help
 ```
@@ -62,7 +61,7 @@ Every tool accepts these request options:
 | Option | Default | Behavior |
 | --- | --- | --- |
 | `--timeout SECONDS` | `300` | Execution deadline for each request, capped by the server's configured maximum. |
-| `--output-limit-bytes N` | `16777216` (16 MiB) | Capture limit per output stream, also capped by the server. |
+| `--output-limit-bytes N` | `268435456` (256 MiB) | Capture limit per output stream, also capped by the server. |
 
 Remote output is replayed when a request completes. The client reports output
 truncation. A timeout kills the worker and its subprocess group, and can prevent
@@ -72,7 +71,7 @@ a nonzero exit code.
 Commands run as the configured worker user, with the server's filesystem
 isolation settings. Each request has a fresh workspace; files needed afterward
 must be returned explicitly. Upload and result sizes are subject to the server's
-[transfer limits](client-guide/protocol.md).
+[transfer limits](protocol.md).
 
 ### Uploads and subprocess arguments
 
@@ -245,12 +244,16 @@ working directory:
 
 ```bash
 kcoral run shell --send experiment -- bash setup.sh
+kcoral run shell --send experiment -- sh setup.sh
+kcoral run shell --send experiment -- python setup.py
+kcoral run shell --send experiment -- ./setup.sh
 kcoral run shell --send experiment --fetch results --out artifacts/setup \
   -- bash setup.sh
 ```
 
-`shell` executes the command given to it directly. For shell syntax such as
-pipes, redirection, or multiple commands, invoke a shell explicitly:
+`shell` executes the command given to it directly and is not limited to Bash.
+The same `--fetch` and `--out` options apply to each command. For shell syntax
+such as pipes, redirection, or multiple commands, invoke a shell explicitly:
 
 ```bash
 kcoral run shell --send experiment -- bash -c 'python check.py > check.log && cat check.log'
@@ -259,8 +262,3 @@ kcoral run shell --send experiment -- bash -c 'python check.py > check.log && ca
 Install the selected shell and other executables on the server. Uploaded
 scripts retain their executable bits, so `-- ./setup.sh` also works for an
 executable script with a suitable interpreter line.
-
----
-
-These tools adapt the remote runners and benchmark driver from
-[TIRx-kernel-agent](https://github.com/mlc-ai/TIRx-kernel-agent/tree/e25825057c1abbc9bf8676d0e0c2bfa24a1dff59/kernel-evolution).
