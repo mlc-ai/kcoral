@@ -9,13 +9,15 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from kcoral import Client, bench_cli, builtins, tool_cli
-from kcoral import _bench_worker as worker
-from kcoral._tool_inputs import pack_inputs
-from kcoral._tool_worker import collect_files, unpack_inputs
+from kcoral import Client, builtins
 from kcoral.app import create_app
 from kcoral.config import ServerConfig
 from kcoral.testing import FakeRuntime
+from kcoral.tools import _common
+from kcoral.tools import bench as bench_cli
+from kcoral.tools import cli as tool_cli
+from kcoral.tools._inputs import pack_inputs
+from kcoral.tools._worker import collect_files, unpack_inputs
 
 # Comparison double: timing uses a deterministic KCoral benchmark substitute.
 FAKE_TORCH = """
@@ -97,7 +99,7 @@ def remote(monkeypatch, tmp_path):
         client = Client("http://testserver")
         client.close()
         client._http = server
-        monkeypatch.setattr(tool_cli, "Client", lambda url: nullcontext(client))
+        monkeypatch.setattr(_common, "Client", lambda url: nullcontext(client))
         monkeypatch.setenv("KCORAL_URL", "http://testserver")
         yield server
 
@@ -378,7 +380,7 @@ def test_worker_restores_environment_and_imports(monkeypatch, benchmark, tmp_pat
     (benchmark / "bench.py").write_text(extra + BENCH)
     environment, search_path = dict(os.environ), list(sys.path)
     modules = dict(sys.modules)
-    outcome = worker.execute(
+    outcome = bench_cli.run(
         "test",
         "v0.py",
         {"value": 1},
@@ -399,7 +401,7 @@ def test_worker_restores_environment_and_imports(monkeypatch, benchmark, tmp_pat
 def test_measure_uses_builtin_cupti_and_preserves_zero_warmup(monkeypatch):
     calls = []
     monkeypatch.setattr(builtins, "benchmark", fake_benchmark)
-    result = worker._measure(lambda: calls.append(True), 0, 3)
+    result = bench_cli._measure(lambda: calls.append(True), 0, 3)
     assert result["latency_ms_median"] == 0.5
     assert result["warmup"] == 0 and result["repeat"] == 3 and result["flush_l2"] is True
     assert len(calls) == 3

@@ -57,53 +57,32 @@ def collect_files(workdir, reports, paths):
     return missing
 
 
-def run(archive, tool, arguments, overrides, fetch):
+def run(archive, tool_run, arguments, overrides, fetch):
     workdir = Path("inputs").absolute()
     reports = Path("outputs").absolute()
     workdir.mkdir()
-    # run-iket creates its output directory and prompts if it already exists.
-    if tool != "run-iket":
-        reports.mkdir()
     unpack_inputs(archive, workdir)
     env = {**os.environ, **overrides, "KCORAL_DIR": str(workdir)}
     env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
-    if tool == "python":
-        command = [sys.executable, *arguments]
-    elif tool == "shell":
-        command = arguments
-    elif tool == "ncu":
-        boundary = arguments.index("--")
-        env.setdefault("NCU_PROFILE", "1")
-        command = [
-            "ncu",
-            "--config-file",
-            "0",
-            "--export",
-            str(reports / "capture.ncu-rep"),
-            *arguments[:boundary],
-            *arguments[boundary + 1 :],
-        ]
-    elif tool == "run-iket":
-        command = ["run-iket", "--output-dir", str(reports), *arguments]
-    else:
-        command = [tool, *arguments]
-    target = command[0]
-    if "/" in target and not os.path.isabs(target):
-        target = str(workdir / target)
-    executable = shutil.which(target, path=env["PATH"])
-    if executable is None:
-        raise RuntimeError(f"{command[0]} is not installed in the remote server environment")
-    # Stay in the worker's process group so its timeout also kills subprocesses.
-    completed = subprocess.run(
-        [executable, *command[1:]],
-        cwd=workdir,
-        env=env,
-        stdin=subprocess.DEVNULL,
-    )
+
+    def execute(command, *, create_reports=True):
+        if create_reports:
+            reports.mkdir(exist_ok=True)
+        target = command[0]
+        if "/" in target and not os.path.isabs(target):
+            target = str(workdir / target)
+        executable = shutil.which(target, path=env["PATH"])
+        if executable is None:
+            raise RuntimeError(f"{command[0]} is not installed in the remote server environment")
+        # Stay in the worker's process group so its timeout also kills subprocesses.
+        return subprocess.run(
+            [executable, *command[1:]],
+            cwd=workdir,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        ).returncode
+
+    outcome = tool_run(arguments, env, reports, execute)
     reports.mkdir(exist_ok=True)
-    missing = collect_files(workdir, reports, fetch)
-    if tool == "ncu" and not (reports / "capture.ncu-rep").is_file():
-        missing.append("capture.ncu-rep")
-    if tool == "run-iket" and not any(path.is_file() for path in reports.rglob("*")):
-        missing.append("run-iket output")
-    return {"returncode": completed.returncode, "missing": missing}
+    outcome["missing"].extend(collect_files(workdir, reports, fetch))
+    return outcome

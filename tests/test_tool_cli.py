@@ -11,12 +11,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from kcoral import Client
-from kcoral import tool_cli as cli
-from kcoral._tool_inputs import pack_inputs
-from kcoral._tool_worker import unpack_inputs
 from kcoral.app import create_app
 from kcoral.config import ServerConfig
 from kcoral.testing import fake_runtime_factory
+from kcoral.tools import _common, cli
+from kcoral.tools._inputs import pack_inputs
+from kcoral.tools._worker import unpack_inputs
 
 
 @pytest.mark.parametrize("tool", cli.COMMANDS)
@@ -75,7 +75,7 @@ def remote(monkeypatch, tmp_path):
         client = Client("http://testserver")
         client.close()
         client._http = server
-        monkeypatch.setattr(cli, "Client", lambda url: nullcontext(client))
+        monkeypatch.setattr(_common, "Client", lambda url: nullcontext(client))
         monkeypatch.setenv("KCORAL_URL", "http://testserver")
         yield server
 
@@ -277,7 +277,7 @@ def test_truncated_output_signal_and_remote_exception(remote, capsys):
 
 def test_output_collision_does_not_execute(monkeypatch, tmp_path):
     monkeypatch.setenv("KCORAL_URL", "http://unused")
-    monkeypatch.setattr(cli, "execute", lambda *args: pytest.fail("must not contact server"))
+    monkeypatch.setattr(_common, "execute", lambda *args: pytest.fail("must not contact server"))
     assert cli.main("ncu", ["--out", str(tmp_path), "--", "--", "python", "capture.py"]) == 1
 
 
@@ -316,17 +316,16 @@ def test_return_rejects_symlinks(remote, tmp_path, capsys):
 def test_invalid_arguments(monkeypatch, tool, args):
     monkeypatch.setenv("KCORAL_URL", "http://unused")
     with pytest.raises(SystemExit) as exc:
-        cli.parse_args(tool, args)
+        cli.get_tool(tool).parse_args(args)
     assert exc.value.code == 2
 
 
 def test_url_and_environment_defaults(monkeypatch):
     monkeypatch.delenv("KCORAL_URL", raising=False)
     with pytest.raises(SystemExit):
-        cli.parse_args("python", ["--", "check.py"])
+        cli.get_tool("python").parse_args(["--", "check.py"])
     monkeypatch.setenv("LOCAL_VALUE", "a b")
-    args, forwarded = cli.parse_args(
-        "python",
+    args, forwarded = cli.get_tool("python").parse_args(
         [
             "--url",
             "http://server",
@@ -365,7 +364,7 @@ def test_explicit_address_overrides_environment(
         monkeypatch.delenv("KCORAL_URL", raising=False)
     else:
         monkeypatch.setenv("KCORAL_URL", environment_url)
-    args, forwarded = cli.parse_args("python", [*options, "--", "check.py"])
+    args, forwarded = cli.get_tool("python").parse_args([*options, "--", "check.py"])
     assert args.url == expected_url
     assert forwarded == ["check.py"]
     captured = capsys.readouterr()
@@ -382,7 +381,7 @@ def test_url_selection_preserves_native_host_and_port(monkeypatch, capsys, expli
     monkeypatch.setenv("KCORAL_URL", "https://environment.example/prefix")
     options = ["--url", explicit_url] if explicit_url else []
     native_args = ["check.py", "--host", "native-host", "--port", "invalid-for-kcoral"]
-    args, forwarded = cli.parse_args("python", [*options, "--", *native_args])
+    args, forwarded = cli.get_tool("python").parse_args([*options, "--", *native_args])
     assert args.url == (explicit_url or "https://environment.example/prefix")
     assert forwarded == native_args
     assert capsys.readouterr().err == ""
@@ -403,7 +402,7 @@ def test_all_tools_accept_connection_flags(monkeypatch, tool, native_args):
     options = ["--host", "gpu.example", "--port", "9000"]
     if tool in {"ncu", "run-iket"}:
         options += ["--out", "artifacts"]
-    args, forwarded = cli.parse_args(tool, [*options, "--", *native_args])
+    args, forwarded = cli.get_tool(tool).parse_args([*options, "--", *native_args])
     assert args.url == "http://gpu.example:9000"
     assert forwarded == native_args
 
@@ -435,7 +434,7 @@ def test_all_tools_accept_connection_flags(monkeypatch, tool, native_args):
 def test_invalid_connection_flags(monkeypatch, capsys, options, message):
     monkeypatch.setenv("KCORAL_URL", "http://environment.example")
     with pytest.raises(SystemExit) as exc:
-        cli.parse_args("python", [*options, "--", "check.py"])
+        cli.get_tool("python").parse_args([*options, "--", "check.py"])
     assert exc.value.code == 2
     assert message in capsys.readouterr().err
 

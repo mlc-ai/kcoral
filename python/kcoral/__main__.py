@@ -9,7 +9,7 @@ import sys
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["run"]:
-        from .tool_cli import run_main
+        from .tools.cli import run_main
 
         raise SystemExit(run_main(argv[1:]))
     if argv[:1] == ["server"]:

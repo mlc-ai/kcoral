@@ -1,4 +1,4 @@
-"""Client-only command line tools for remote kernel development."""
+"""Shared argument parsing, request construction, and output handling for tools."""
 
 from __future__ import annotations
 
@@ -9,22 +9,9 @@ import re
 import sys
 from pathlib import Path
 
-from ._tool_inputs import pack_inputs, relative_path
-from .client import Client, Program
-
-COMMANDS = ("python", "compute-sanitizer", "ncu", "run-iket", "bench", "shell")
-
-
-def run_main(argv):
-    parser = argparse.ArgumentParser(
-        prog="kcoral run", description="Run a tool on a remote server.", allow_abbrev=False
-    )
-    commands = parser.add_subparsers(dest="tool", required=True)
-    for name in COMMANDS:
-        commands.add_parser(name, add_help=False, help=f"run {name} remotely")
-    # Each tool owns its arguments, including --help and native -- separators.
-    args = parser.parse_args(argv[:1])
-    return main(args.tool, argv[1:])
+from ..client import Client, Program
+from . import COMMANDS
+from ._inputs import pack_inputs, relative_path
 
 
 def add_connection_args(parser):
@@ -111,36 +98,7 @@ def require_completed(result):
         )
 
 
-def validate_python_args(parser, arguments):
-    remaining = iter(arguments)
-    for token in remaining:
-        if token == "--":
-            if next(remaining, "-") != "-":
-                return
-            break
-        if token == "-":
-            break
-        if not token.startswith("-"):
-            return
-        if token == "--check-hash-based-pycs":
-            next(remaining, None)
-            continue
-        if token.startswith("--"):
-            continue
-        for index, option in enumerate(token[1:], start=1):
-            if option == "i":
-                parser.error("interactive Python execution is unsupported")
-            if option in "cmWX":
-                value = token[index + 1 :] or next(remaining, None)
-                if value is None:
-                    parser.error(f"Python -{option} requires an argument")
-                if option in "cm":
-                    return
-                break
-    parser.error("a script, -c command, or -m module is required; stdin execution is unsupported")
-
-
-def parse_args(tool, argv, *, epilog=None):
+def parse_args(tool, argv, *, validate=None, profiling=False, allow_out=False, epilog=None):
     parser = argparse.ArgumentParser(
         prog=f"kcoral run {tool}",
         allow_abbrev=False,
@@ -164,7 +122,6 @@ def parse_args(tool, argv, *, epilog=None):
         metavar="NAME[=VALUE]",
         help="set a remote environment variable; NAME copies its local value",
     )
-    profiling = tool in {"ncu", "run-iket"}
     parser.add_argument(
         "--out", type=Path, required=profiling, help="new local directory for returned artifacts"
     )
@@ -202,43 +159,33 @@ def parse_args(tool, argv, *, epilog=None):
             parser.error(f"environment variable {name} contains NUL")
         environment[name] = value
     args.env = environment
-    if tool == "bench" and args.fetch and args.out is None:
+    if allow_out and args.fetch and args.out is None:
         parser.error("--fetch requires --out")
-    if tool != "bench" and not profiling and bool(args.fetch) != bool(args.out):
+    if not allow_out and not profiling and bool(args.fetch) != bool(args.out):
         parser.error("--fetch and --out must be used together")
     for name in args.fetch:
         try:
             relative_path(name)
         except ValueError as exc:
             parser.error(str(exc))
-    if tool == "python":
-        validate_python_args(parser, forwarded)
-    if profiling:
-        if "--" not in forwarded:
-            parser.error("separate profiler options from the application with another '--'")
-        split = forwarded.index("--")
-        options = forwarded[:split]
-        if not forwarded[split + 1 :] or (tool == "run-iket" and "profile" not in options):
-            parser.error("expected profiler options followed by '-- application [args]'")
-        managed = (
-            ("--output-dir", "--working-dir")
-            if tool == "run-iket"
-            else (
-                "--export",
-                "--import",
-                "--mode",
-                "--config-file",
-                "--config-file-path",
-            )
-        )
-        short = ("-o",) if tool == "run-iket" else ("-o", "-i")
-        for token in options:
-            option = token.split("=", 1)[0]
-            if (option.startswith("--") and any(flag.startswith(option) for flag in managed)) or (
-                not option.startswith("--") and any(option.startswith(flag) for flag in short)
-            ):
-                parser.error(f"{option} conflicts with managed remote capture paths or mode")
+    if validate is not None:
+        validate(parser, forwarded)
     return args, forwarded
+
+
+def validate_profiler_args(parser, forwarded, *, managed, short, subcommand=None):
+    if "--" not in forwarded:
+        parser.error("separate profiler options from the application with another '--'")
+    split = forwarded.index("--")
+    options = forwarded[:split]
+    if not forwarded[split + 1 :] or (subcommand is not None and subcommand not in options):
+        parser.error("expected profiler options followed by '-- application [args]'")
+    for token in options:
+        option = token.split("=", 1)[0]
+        if (option.startswith("--") and any(flag.startswith(option) for flag in managed)) or (
+            not option.startswith("--") and any(option.startswith(flag) for flag in short)
+        ):
+            parser.error(f"{option} conflicts with managed remote capture paths or mode")
 
 
 def build_program(args, tool, forwarded):
@@ -246,11 +193,19 @@ def build_program(args, tool, forwarded):
     module = program.upload(
         id="tool_runner",
         kind="module",
-        source=Path(__file__).with_name("_tool_worker.py").read_text(),
+        source=Path(__file__).with_name("_worker.py").read_text(),
     )
     runner = program.get_function(id="runner", module=module, name="run")
+    definition = program.upload(
+        id="definition",
+        kind="module",
+        source=Path(__file__).with_name(COMMANDS[tool] + ".py").read_text(),
+    )
+    tool_run = program.get_function(id="tool_run", module=definition, name="run")
     inputs = program.upload(id="inputs", kind="bytes", value=pack_inputs(args.send))
-    outcome = program.run(id="run", fn=runner, args=[inputs, tool, forwarded, args.env, args.fetch])
+    outcome = program.run(
+        id="run", fn=runner, args=[inputs, tool_run, forwarded, args.env, args.fetch]
+    )
     # Preserve the exit status even when a subsequent artifact collection fails.
     program.return_(key="outcome", value=outcome)
     if args.out is not None:
@@ -258,12 +213,7 @@ def build_program(args, tool, forwarded):
     return program
 
 
-def main(tool, argv):
-    if tool == "bench":
-        from .bench_cli import main as bench_main
-
-        return bench_main(argv)
-    args, forwarded = parse_args(tool, argv)
+def run_tool(tool, args, forwarded):
     try:
         if args.out is not None:
             if os.path.lexists(args.out):
