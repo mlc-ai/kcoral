@@ -1,5 +1,7 @@
 """Sphinx configuration for the KCoral documentation."""
 
+import json
+import os
 from importlib.metadata import version as package_version
 
 project = "KCoral"
@@ -27,13 +29,32 @@ nitpick_ignore_regex = [
 ]
 
 html_theme = "furo"
+templates_path = ["_templates"]
+docs_version = os.environ.get("KCORAL_DOC_VERSION", "latest")
+html_baseurl = f"https://kcoral.mlc.ai/docs/{docs_version}/"
+html_context = {
+    "docs_version": docs_version,
+    "docs_versions": json.loads(os.environ.get("KCORAL_DOC_VERSIONS", "[]")),
+}
+html_sidebars = {
+    "**": [
+        "sidebar/brand.html",
+        "sidebar/version-switcher.html",
+        "sidebar/search.html",
+        "sidebar/scroll-start.html",
+        "sidebar/navigation.html",
+        "sidebar/ethical-ads.html",
+        "sidebar/scroll-end.html",
+        "sidebar/variant-selector.html",
+    ]
+}
 html_title = "KCoral documentation"
 html_favicon = "_static/brand/kcoral-icon.png"
 html_theme_options = {
     "light_logo": "brand/kcoral-logo-light.png",
     "dark_logo": "brand/kcoral-logo-dark.png",
     "source_repository": "https://github.com/mlc-ai/kcoral/",
-    "source_branch": "main",
+    "source_branch": os.environ.get("KCORAL_DOC_REF", "main"),
     "source_directory": "docs/",
     "light_css_variables": {
         "color-brand-primary": "#0f766e",

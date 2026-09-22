@@ -18,6 +18,7 @@ venv/
 build/
 dist/
 docs/_build/
+_site/
 .docs-venv/
 target/
 
