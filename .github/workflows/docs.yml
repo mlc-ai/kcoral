@@ -47,3 +47,34 @@ jobs:
           path: _site
           include-hidden-files: true
           if-no-files-found: error
+
+  deploy:
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: mlc-ai/kcoral-docs
+          ref: main
+          ssh-key: ${{ secrets.DOCS_DEPLOY_KEY }}
+          path: public-docs
+      - uses: actions/download-artifact@v8
+        with:
+          name: documentation-html
+          path: _site
+      - name: Publish the static website
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          rsync -a --delete --exclude=.git --exclude=.kcoral-docs-site _site/ public-docs/
+          printf '%s\n' 'kcoral.mlc.ai' > public-docs/CNAME
+          git -C public-docs config user.name 'github-actions[bot]'
+          git -C public-docs config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C public-docs add --all
+          if ! git -C public-docs diff --cached --quiet; then
+            git -C public-docs commit -m "Publish documentation from $SOURCE_SHA"
+            git -C public-docs push origin HEAD:main
+          fi
