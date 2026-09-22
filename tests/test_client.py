@@ -82,6 +82,28 @@ def test_execute_module_and_return_value(server_url):
     assert outcome.request_id and outcome.queue_ms >= 0 and outcome.elapsed_ms >= 0
 
 
+@pytest.mark.parametrize("id_kwargs", [{}, {"id": None}], ids=["omitted", "none"])
+def test_execute_with_generated_ids(server_url, id_kwargs):
+    program = Program()
+    module = program.upload(kind="module", source="def main(x): return x + b'!'", **id_kwargs)
+    fn = program.get_function(module=module, name="main", **id_kwargs)
+    data = program.upload(kind="bytes", value=b"data", **id_kwargs)
+    answer = program.run(fn=fn, args=[data], **id_kwargs)
+    program.return_(key="answer", value=answer)
+
+    assert [module.id, fn.id, data.id, answer.id] == [
+        "upload_0",
+        "get_function_1",
+        "upload_2",
+        "run_3",
+    ]
+    with Client(server_url) as client:
+        for _ in range(2):
+            outcome = client.execute(program)
+            assert outcome.completed
+            assert outcome["answer"] == b"data!"
+
+
 def test_tensor_cache_retry_and_numpy_result(server_url):
     value = np.arange(6, dtype=np.float32).reshape(2, 3)
     program = Program()
@@ -454,6 +476,89 @@ def test_program_builder_validates_ids_and_tensor_metadata():
     with pytest.raises(ValueError, match="expects 4 bytes"):
         reusable.upload(id="tensor", kind="tensor", value=b"abc", dtype="float32", shape=[1])
     reusable.upload(id="tensor", kind="tensor", value=b"\x00" * 4, dtype="float32", shape=[1])
+
+
+@pytest.mark.parametrize("id_kwargs", [{}, {"id": None}], ids=["omitted", "none"])
+@pytest.mark.parametrize(
+    "upload_kwargs",
+    [
+        {"kind": "module", "source": ""},
+        {"kind": "module", "source": "", "language": "cuda"},
+        {"kind": "tensor", "value": b"\x00" * 4, "dtype": "float32", "shape": [1]},
+        {"kind": "bytes", "value": b"data"},
+        {"kind": "library", "value": b"library"},
+    ],
+    ids=["python", "cuda", "tensor", "bytes", "library"],
+)
+def test_upload_generates_ids_for_each_kind(id_kwargs, upload_kwargs):
+    program = Program()
+    register = program.upload(**upload_kwargs, **id_kwargs)
+    assert register == Register("upload_0")
+    assert program.instructions[0]["id"] == register.id
+
+
+def test_generated_ids_skip_explicit_ids_and_ignore_instructions_without_ids():
+    program = Program()
+    module = program.upload(id="module", kind="module", source="def main(): return 42")
+    for reserved_id in ("upload_0", "get_function_2", "run_4"):
+        program.upload(id=reserved_id, kind="bytes", value=b"reserved")
+    assert program.upload(kind="bytes", value=b"data").id == "upload_1"
+    program.upload_file(blob=b"data", path="input.txt")
+    fn = program.get_function(module=module, name="main")
+    assert fn.id == "get_function_3"
+    answer = program.run(fn=fn)
+    assert answer.id == "run_5"
+    program.return_(key="answer", value=answer)
+    program.return_file(key="input", path="input.txt")
+    assert program.run(fn=fn).id == "run_6"
+    assert Program().upload(kind="bytes", value=b"fresh").id == "upload_0"
+
+
+@pytest.mark.parametrize("op", ["upload", "get_function", "run"])
+@pytest.mark.parametrize("id_kwargs", [{"id": "module"}, {}], ids=["explicit", "generated"])
+def test_explicit_ids_cannot_duplicate_existing_ids(op, id_kwargs):
+    program = Program()
+    module = program.upload(kind="module", source="def main(): pass", **id_kwargs)
+    fn = program.get_function(id="fn", module=module, name="main")
+    kwargs = {
+        "upload": {"kind": "module", "source": ""},
+        "get_function": {"module": module, "name": "main"},
+        "run": {"fn": fn},
+    }[op]
+    before = program.instructions
+    with pytest.raises(ValueError, match="duplicate instruction id"):
+        getattr(program, op)(id=module.id, **kwargs)
+    assert program.instructions == before
+
+
+@pytest.mark.parametrize("op", ["upload", "get_function", "run"])
+@pytest.mark.parametrize("invalid_id", ["", 0, False])
+def test_explicit_ids_must_be_nonempty_strings(op, invalid_id):
+    program = Program()
+    module = program.upload(kind="module", source="def main(): pass")
+    fn = program.get_function(module=module, name="main")
+    kwargs = {
+        "upload": {"kind": "module", "source": ""},
+        "get_function": {"module": module, "name": "main"},
+        "run": {"fn": fn},
+    }[op]
+    with pytest.raises(ValueError, match="instruction id must be a non-empty string"):
+        getattr(program, op)(id=invalid_id, **kwargs)
+
+
+def test_failed_builder_validation_does_not_consume_generated_ids():
+    program = Program()
+    with pytest.raises(TypeError, match="requires string"):
+        program.upload(kind="module")
+    module = program.upload(kind="module", source="def main(): pass")
+    assert module.id == "upload_0"
+    with pytest.raises(ValueError, match="non-empty string"):
+        program.get_function(module=module, name="")
+    fn = program.get_function(module=module, name="main")
+    assert fn.id == "get_function_1"
+    with pytest.raises(ValueError, match="unknown handle"):
+        program.run(fn=Register("missing"))
+    assert program.run(fn=fn).id == "run_2"
 
 
 def test_cuda_module_builder_emits_language_and_get_function():

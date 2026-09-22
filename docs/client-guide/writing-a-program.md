@@ -73,19 +73,26 @@ name; it is not the value itself.
 
 | Method | Purpose | Returns |
 | --- | --- | --- |
-| `upload(id=..., kind=..., ...)` | Upload module source, a tensor, bytes or a compiled library | `Register` |
+| `upload(id=None, kind=..., ...)` | Upload module source, a tensor, bytes or a compiled library | `Register` |
 | `upload_file(blob=..., path=...)` | Snapshot bytes as a file in the request workspace | `None` |
 | `upload_folder(folder, path=...)` | Snapshot a local directory as file uploads | `None` |
-| `get_function(id=..., module=..., name=..., cpu_only=False)` | Select a function or object from an earlier module or library | `Register` |
-| `run(id=..., fn=..., args=None)` | Call a selected or computed callable | `Register` |
+| `get_function(id=None, module=..., name=..., cpu_only=False)` | Select a function or object from an earlier module or library | `Register` |
+| `run(id=None, fn=..., args=None)` | Call a selected or computed callable | `Register` |
 | `return_(key=..., value=...)` | Select an earlier value for the response | `None` |
 | `return_file(key=..., path=...)` | Select a workspace file for the response | `None` |
 | `return_folder(key=..., path=...)` | Select a workspace folder for the response | `None` |
 | `instructions` | Inspect a shallow copy of the wire instruction list | `list[dict]` |
 
-Instruction identifiers must be nonempty and unique. The name `return_` has a
-trailing underscore because `return` is a Python keyword. Use the
-[Python API](../python-api/index.rst) for complete signatures and parameter types.
+Omit `id` or pass `id=None` to generate `<op>_<index>`, using the operation type
+as the prefix: for example, `upload_0`, `get_function_1`, then `run_2`.
+Each `Program` has its own counter starting at zero, shared by `upload`,
+`get_function`, and `run`; generation skips IDs already in use. Explicit IDs
+must be nonempty strings and do not advance the counter. Reusing any existing ID explicitly,
+including a generated one, raises `ValueError`. The assigned ID is available
+as `register.id`. File uploads and returns do not consume IDs.
+
+The name `return_` has a trailing underscore because `return` is a Python keyword.
+Use the [Python API](../python-api/index.rst) for complete signatures and parameter types.
 
 ### Upload and select a function
 
@@ -96,12 +103,12 @@ from kcoral import Program
 
 program = Program()
 module = program.upload(
-    id="module", kind="module", source="def scale(x, factor): return x * factor"
+    kind="module", source="def scale(x, factor): return x * factor"
 )
-scale = program.get_function(id="scale", module=module, name="scale")
+scale = program.get_function(module=module, name="scale")
 values = np.zeros(4, dtype=np.float32)
-x = program.upload(id="x", kind="tensor", value=values)
-y = program.run(id="y", fn=scale, args=[x, 2])
+x = program.upload(kind="tensor", value=values)
+y = program.run(fn=scale, args=[x, 2])
 program.return_(key="output", value=y)
 ```
 

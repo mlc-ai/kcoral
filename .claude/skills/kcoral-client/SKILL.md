@@ -70,14 +70,14 @@ an earlier callable; a callable returned by a `run` can be used by a later call.
 API surface:
 
 ```python
-Program.upload(id=..., kind="module", source=..., language="python") -> Register
-Program.upload(id=..., kind="tensor", value=..., dtype=None, shape=None) -> Register
-Program.upload(id=..., kind="bytes", value=...) -> Register
-Program.upload(id=..., kind="library", value=...) -> Register
+Program.upload(id=None, kind="module", source=..., language="python") -> Register
+Program.upload(id=None, kind="tensor", value=..., dtype=None, shape=None) -> Register
+Program.upload(id=None, kind="bytes", value=...) -> Register
+Program.upload(id=None, kind="library", value=...) -> Register
 Program.upload_file(blob=..., path=...) -> None
 Program.upload_folder(folder, *, path=...) -> None
-Program.get_function(id=..., module=..., name=..., cpu_only=False) -> Register
-Program.run(id=..., fn=..., args=[]) -> Register
+Program.get_function(id=None, module=..., name=..., cpu_only=False) -> Register
+Program.run(id=None, fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
 Program.return_file(key=..., path=...) -> None    # str or Register resolving to str
 Program.return_folder(key=..., path=...) -> None  # str or Register resolving to str
@@ -88,6 +88,12 @@ Client.health() -> dict
 Client.target() -> dict   # e.g. {"arch": "sm_100a"}
 Client.close() -> None
 ```
+
+Omit `id` or pass `None` to generate `<op>_<index>`, for example `upload_0`,
+`get_function_1`, then `run_2`. All operations share a per-program counter
+starting at zero, skipping IDs already in use. Explicit IDs do not advance the
+counter and still raise `ValueError` on duplicates, including collisions with
+generated IDs. The returned register exposes the assigned name as `.id`.
 
 The client derives `blob`, `dtype`, and `shape` from a tensor `value`. It sends
 no blob parts at first, retries a `CACHE_MISS` with the missing parts, and falls
