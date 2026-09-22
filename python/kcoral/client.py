@@ -93,9 +93,9 @@ class Program:
     be unique within this program. Only values selected by :meth:`return_`
     appear in the response.
 
-    Omit ``id`` or pass ``None`` to assign ``<op>_<index>`` automatically, such
-    as ``upload_0``, ``get_function_1``, and ``run_2``, skipping identifiers already
-    in use. The counter is shared by all operations within this program.
+    Each value-producing instruction automatically receives an ID such as
+    ``upload_0``, ``get_function_1``, or ``run_2``. Use the optional ``id`` field
+    to customize it.
     """
 
     _instructions: list[dict[str, Any]] = field(default_factory=list, init=False)
@@ -182,8 +182,6 @@ class Program:
     ) -> Register:
         """Upload source or binary content and return its request-local register.
 
-        :param id: Unique, nonempty instruction identifier, or ``None`` (default)
-            to assign one automatically.
         :param kind: One of ``module``, ``tensor``, ``bytes`` or ``library``.
         :param source: Source text for a module upload.
         :param language: Module language, ``python`` or ``cuda``.
@@ -192,6 +190,7 @@ class Program:
             the DLPack tensor exchange protocol, or raw bytes.
         :param dtype: Element type for a tensor supplied as raw bytes.
         :param shape: Dimensions for a tensor supplied as raw bytes.
+        :param id: Optional custom instruction identifier. Must be nonempty and unique.
         :returns: A register usable by later instructions.
         :raises TypeError: If the input does not match the upload kind.
         :raises ValueError: If the kind, identifier or tensor metadata is invalid.
@@ -273,11 +272,10 @@ class Program:
     ) -> Register:
         """Select a named function from an earlier module or library upload.
 
-        :param id: Unique identifier for the selected function, or ``None`` (default)
-            to assign one automatically.
         :param module: An earlier upload register or ``{"$ref": "id"}`` reference.
         :param name: Nonempty function name exported by the module or library.
         :param cpu_only: Declare that the function does not access the GPU.
+        :param id: Optional custom instruction identifier. Must be nonempty and unique.
         :returns: A function register for a later :meth:`run` instruction.
         :raises TypeError: If the reference or flag has an invalid type.
         :raises ValueError: If an identifier, reference or function name is invalid.
@@ -311,13 +309,12 @@ class Program:
     ) -> Register:
         """Append a function call and return a register for its result.
 
-        :param id: Unique identifier for the computed result, or ``None`` (default)
-            to assign one automatically.
         :param fn: The :class:`Register` returned by :meth:`get_function`,
             or by an earlier :meth:`run` that returned a callable.
         :param args: Positional arguments; omitted or ``None`` means no arguments.
             Top-level registers are encoded automatically. Nested lists and
             dictionaries remain JSON literals, including reference-shaped objects.
+        :param id: Optional custom instruction identifier. Must be nonempty and unique.
         :returns: A register, without automatically returning the value to the client.
         :raises TypeError: If ``fn`` is not a :class:`Register`.
         :raises ValueError: If an identifier is invalid or a reference is unknown.

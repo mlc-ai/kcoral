@@ -73,23 +73,18 @@ name; it is not the value itself.
 
 | Method | Purpose | Returns |
 | --- | --- | --- |
-| `upload(id=None, kind=..., ...)` | Upload module source, a tensor, bytes or a compiled library | `Register` |
+| `upload(kind=..., ...)` | Upload module source, a tensor, bytes or a compiled library | `Register` |
 | `upload_file(blob=..., path=...)` | Snapshot bytes as a file in the request workspace | `None` |
 | `upload_folder(folder, path=...)` | Snapshot a local directory as file uploads | `None` |
-| `get_function(id=None, module=..., name=..., cpu_only=False)` | Select a function or object from an earlier module or library | `Register` |
-| `run(id=None, fn=..., args=None)` | Call a selected or computed callable | `Register` |
+| `get_function(module=..., name=..., cpu_only=False)` | Select a function or object from an earlier module or library | `Register` |
+| `run(fn=..., args=None)` | Call a selected or computed callable | `Register` |
 | `return_(key=..., value=...)` | Select an earlier value for the response | `None` |
 | `return_file(key=..., path=...)` | Select a workspace file for the response | `None` |
 | `return_folder(key=..., path=...)` | Select a workspace folder for the response | `None` |
 | `instructions` | Inspect a shallow copy of the wire instruction list | `list[dict]` |
 
-Omit `id` or pass `id=None` to generate `<op>_<index>`, using the operation type
-as the prefix: for example, `upload_0`, `get_function_1`, then `run_2`.
-Each `Program` has its own counter starting at zero, shared by `upload`,
-`get_function`, and `run`; generation skips IDs already in use. Explicit IDs
-must be nonempty strings and do not advance the counter. Reusing any existing ID explicitly,
-including a generated one, raises `ValueError`. The assigned ID is available
-as `register.id`. File uploads and returns do not consume IDs.
+`Program` automatically generates an ID for each value-producing instruction.
+Use the optional `id` field to customize it.
 
 The name `return_` has a trailing underscore because `return` is a Python keyword.
 Use the [Python API](../python-api/index.rst) for complete signatures and parameter types.
@@ -122,12 +117,12 @@ precompiled library follows the same selection step.
 Pass the value returned by `get_function` as the `fn` argument to `run`:
 
 ```python
-scale = program.get_function(id="scale", module=module, name="scale")
-y = program.run(id="scaled", fn=scale, args=[x, 2])
+scale = program.get_function(module=module, name="scale")
+y = program.run(fn=scale, args=[x, 2])
 ```
 
-`scale` is a `Register`, a Python object holding the ID `"scale"`. The client
-serializes it as `{"$ref": "scale"}` in the request. The same applies to a
+`scale` is a `Register`, a Python object holding the generated instruction ID.
+The client serializes it as `{"$ref": scale.id}` in the request. The same applies to a
 `Register` returned by a `run` that produced another callable.
 
 Top-level `Register` arguments in `args` are encoded the same way. Ordinary
@@ -193,14 +188,14 @@ created locally.
 For remote initialization:
 
 ```python
-module = program.upload(id="allocator", kind="module", source="""
+module = program.upload(kind="module", source="""
 import torch
 
 def make_input():
     return torch.randn((4096, 4096), dtype=torch.bfloat16, device="cuda")
 """)
-make_input = program.get_function(id="make_input", module=module, name="make_input")
-x = program.run(id="x", fn=make_input)
+make_input = program.get_function(module=module, name="make_input")
+x = program.run(fn=make_input)
 ```
 
 For a local tensor:
@@ -209,7 +204,7 @@ For a local tensor:
 import numpy as np
 
 values = np.zeros((4, 4), dtype=np.float32)
-x = program.upload(id="x", kind="tensor", value=values)
+x = program.upload(kind="tensor", value=values)
 ```
 
 `kind="tensor"` accepts a NumPy array, a torch tensor, any object supporting
@@ -232,9 +227,9 @@ Use `upload_file` when uploaded Python code expects a relative file path:
 ```python
 program = Program()
 program.upload_file(blob=tensor_bytes, path="./inputs/tensor.bin")
-module = program.upload(id="reader_module", kind="module", source=READER_SOURCE)
-reader = program.get_function(id="reader", module=module, name="main")
-result = program.run(id="result", fn=reader)
+module = program.upload(kind="module", source=READER_SOURCE)
+reader = program.get_function(module=module, name="main")
+result = program.run(fn=reader)
 ```
 
 The module can use `open("inputs/tensor.bin", "rb")` unchanged. File uploads

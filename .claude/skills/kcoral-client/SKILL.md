@@ -46,7 +46,7 @@ Upload a harness, select its entry point, run it and return what you want to ins
 from kcoral import Client, Program
 
 program = Program()
-module = program.upload(id="harness", kind="module", source="""
+module = program.upload(kind="module", source="""
 import torch
 
 def main(n):
@@ -55,8 +55,8 @@ def main(n):
     torch.testing.assert_close(y, x + 1)
     return {"ok": True, "output": y}
 """)
-main = program.get_function(id="main", module=module, name="main")
-report = program.run(id="report", fn=main, args=[256])
+main = program.get_function(module=module, name="main")
+report = program.run(fn=main, args=[256])
 program.return_(key="report", value=report)
 with Client("http://localhost:8000") as client:
     result = client.execute(program, timeout_seconds=120)
@@ -70,14 +70,14 @@ an earlier callable; a callable returned by a `run` can be used by a later call.
 API surface:
 
 ```python
-Program.upload(id=None, kind="module", source=..., language="python") -> Register
-Program.upload(id=None, kind="tensor", value=..., dtype=None, shape=None) -> Register
-Program.upload(id=None, kind="bytes", value=...) -> Register
-Program.upload(id=None, kind="library", value=...) -> Register
+Program.upload(kind="module", source=..., language="python") -> Register
+Program.upload(kind="tensor", value=..., dtype=None, shape=None) -> Register
+Program.upload(kind="bytes", value=...) -> Register
+Program.upload(kind="library", value=...) -> Register
 Program.upload_file(blob=..., path=...) -> None
 Program.upload_folder(folder, *, path=...) -> None
-Program.get_function(id=None, module=..., name=..., cpu_only=False) -> Register
-Program.run(id=None, fn=..., args=[]) -> Register
+Program.get_function(module=..., name=..., cpu_only=False) -> Register
+Program.run(fn=..., args=[]) -> Register
 Program.return_(key=..., value=...) -> None
 Program.return_file(key=..., path=...) -> None    # str or Register resolving to str
 Program.return_folder(key=..., path=...) -> None  # str or Register resolving to str
@@ -89,11 +89,8 @@ Client.target() -> dict   # e.g. {"arch": "sm_100a"}
 Client.close() -> None
 ```
 
-Omit `id` or pass `None` to generate `<op>_<index>`, for example `upload_0`,
-`get_function_1`, then `run_2`. All operations share a per-program counter
-starting at zero, skipping IDs already in use. Explicit IDs do not advance the
-counter and still raise `ValueError` on duplicates, including collisions with
-generated IDs. The returned register exposes the assigned name as `.id`.
+`Program` automatically generates an ID for each value-producing instruction.
+Use the optional `id` field to customize it.
 
 The client derives `blob`, `dtype`, and `shape` from a tensor `value`. It sends
 no blob parts at first, retries a `CACHE_MISS` with the missing parts, and falls
@@ -154,7 +151,7 @@ Its content can remain in the disk cache across requests and server restarts.
 
 ### `get_function`
 
-Select an object from an uploaded module with `get_function(id=..., module=..., name=...)`.
+Select an object from an uploaded module with `get_function(module=..., name=...)`.
 The returned `Register` stores its instruction ID and can be passed as `fn` to `run`.
 
 `get_function(..., cpu_only=True)` declares that later calls to this function
