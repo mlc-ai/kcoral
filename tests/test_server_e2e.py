@@ -291,7 +291,7 @@ def test_uncached_file_upload_still_executes(tmp_path, disabled):
         workers_per_gpu=1,
         max_requests_per_worker=0,
         disk_cache_dir=None if disabled == "directory" else directory,
-        disk_cache_capacity_bytes=0 if disabled == "capacity" else 100,
+        disk_cache_capacity_mbytes=0 if disabled == "capacity" else 100,
     )
     data = b"uncached file"
     key = compute_blob_hash(data)
@@ -302,14 +302,14 @@ def test_uncached_file_upload_still_executes(tmp_path, disabled):
         assert post_program(client, program).json()["status"] == "CACHE_MISS"
 
 
-@pytest.mark.parametrize("size", [16, 17])
-def test_disk_cache_capacity_bytes(tmp_path, size):
+@pytest.mark.parametrize("size", [1024**2, 1024**2 + 1])
+def test_disk_cache_capacity_mbytes_uses_binary_megabytes(tmp_path, size):
     config = ServerConfig(
         sandbox="none",
         workers_per_gpu=1,
         max_requests_per_worker=0,
         disk_cache_dir=tmp_path,
-        disk_cache_capacity_bytes=16,
+        disk_cache_capacity_mbytes=1,
     )
     data = b"x" * size
     key = compute_blob_hash(data)
@@ -317,7 +317,7 @@ def test_disk_cache_capacity_bytes(tmp_path, size):
     with make_client(config) as client:
         assert post_program(client, program, {key: data}).json()["status"] == "COMPLETED"
         warm = post_program(client, program).json()
-        assert warm["status"] == ("COMPLETED" if size == 16 else "CACHE_MISS")
+        assert warm["status"] == ("COMPLETED" if size == 1024**2 else "CACHE_MISS")
 
 
 @pytest.mark.parametrize(

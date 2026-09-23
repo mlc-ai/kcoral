@@ -219,8 +219,8 @@ continuation of the earlier one. Keep related setup and execution steps in one
 invocation, or explicitly download and resend the needed files.
 
 The server caps execution time, captured output, and serialized responses.
-Its default maximum requested capture is 256 MiB per stream, and its default
-response limit is 1 GiB. A server may configure lower limits. See
+Its default maximum requested capture is 16 MiB per stream, and its default
+response limit is 256 MiB. A server may configure different limits. See
 [transfer limits](protocol.md) and [server configuration](../server-guide/launch-the-server.md#configuration).
 
 | Outcome | CLI exit behavior |
@@ -573,7 +573,7 @@ separator is required.
 | `WORKLOAD` | Required | Local directory containing `bench.json` and `bench.py`, for example `examples/benchmarks/vector_add`. Absolute paths are accepted. |
 | `VERSION` | `baseline` | Candidate file or filename stem inside that directory: `v0` selects `v0.py`. `baseline` checks and measures the baseline only. Subdirectory paths are not accepted. |
 | `--repo PATH` | Current local directory | Root for resolving a relative `WORKLOAD`. It has no effect on an absolute workload path and does not upload the whole root. |
-| `--warmup N` | `bench.json`, otherwise `3` | Nonnegative number of untimed warmup calls for each implementation. |
+| `--warmup N` | `bench.json`, otherwise `3` | Requested untimed warmup calls for each implementation; the timer runs at least one. |
 | `--repeat N` | `bench.json`, otherwise `50` | Positive number of measured calls for each implementation. |
 
 Paths are resolved directly; KCoral does not search parent directories or use a
@@ -614,7 +614,7 @@ vector_add/
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `cases` | Required | Nonempty list of JSON objects. Each object is passed unchanged to `make_inputs`; use any fields your input generator needs. An optional `id` is shown in the summary. |
-| `warmup` | `3` | Nonnegative integer; overridden by the command-line option. |
+| `warmup` | `3` | Nonnegative integer; the timer runs at least once. Overridden by the command-line option. |
 | `repeat` | `50` | Positive integer; overridden by the command-line option. |
 | `atol` | `1e-5` | Finite, nonnegative absolute tolerance for correctness checks. |
 | `rtol` | `1e-5` | Finite, nonnegative relative tolerance for correctness checks. |

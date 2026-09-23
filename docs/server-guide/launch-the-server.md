@@ -133,9 +133,9 @@ MiB means 1024 squared bytes; GiB means 1024 cubed bytes. All options ending in
 | `--default-timeout-seconds` | `300` | `default_timeout_seconds` | Execution limit when a request omits its timeout |
 | `--max-timeout-seconds` | `900` | `max_timeout_seconds` | Upper bound for a request's timeout |
 | `--max-request-bytes` | `268435456` (256 MiB) | `max_request_bytes` | Maximum request body size |
-| `--max-response-bytes` | `1073741824` (1 GiB) | `max_response_bytes` | Maximum serialized response size |
+| `--max-response-bytes` | `268435456` (256 MiB) | `max_response_bytes` | Maximum serialized response size |
 | `--output-limit-bytes` | `1048576` (1 MiB) | `output_limit_bytes` | Default captured stdout/stderr limit per stream |
-| `--max-output-limit-bytes` | `268435456` (256 MiB) | `max_output_limit_bytes` | Maximum requested captured output per stream |
+| `--max-output-limit-bytes` | `16777216` (16 MiB) | `max_output_limit_bytes` | Maximum requested captured output per stream |
 | `--cache-capacity-bytes` | `17179869184` (16 GiB) | `cache_capacity_bytes` | Memory cache capacity for tensors, bytes and libraries |
 
 Worker acquisition can wait up to 30 minutes by default. The execution budget
@@ -156,7 +156,7 @@ memory cache. The default directory is `$XDG_CACHE_HOME/kcoral/files` when
 | Option | Default | Configuration field |
 | --- | --- | --- |
 | `--disk-cache-dir` | The directory described above | `disk_cache_dir` |
-| `--disk-cache-capacity-bytes` | `17179869184` (16 GiB) | `disk_cache_capacity_bytes` |
+| `--disk-cache-capacity-mbytes` | `16384` MiB (16 GiB) | `disk_cache_capacity_mbytes` |
 
 An empty directory option (`None` in `ServerConfig`) or zero capacity disables
 file caching without falling back to the memory cache. Cached content survives
@@ -195,7 +195,7 @@ app = create_app(
         gpus=[0],
         workers_per_gpu=8,
         log_dir=Path("logs"),
-        disk_cache_capacity_bytes=17179869184,
+        disk_cache_capacity_mbytes=16384,
     )
 )
 ```

@@ -138,7 +138,7 @@ def _iteration_counts(call: Callable, cfg: dict, flush: Any) -> tuple[int, int]:
 
     warmup, repeat = cfg.get("warmup"), cfg.get("repeat")
     if warmup is not None and repeat is not None:
-        return max(int(warmup), 0), max(int(repeat), 1)
+        return max(int(warmup), 1), max(int(repeat), 1)
     call()  # exclude one-time init from the estimate
     if flush is not None:
         # The buffer is freshly allocated and twice L2 (253 MiB on B200), so its
@@ -159,7 +159,7 @@ def _iteration_counts(call: Callable, cfg: dict, flush: Any) -> tuple[int, int]:
     def derive(budget_ms: float) -> int:
         return 1000 if est_ms == 0 else max(1, int(budget_ms / est_ms))
 
-    n_warmup = derive(float(cfg.get("warmup_ms", 25))) if warmup is None else max(int(warmup), 0)
+    n_warmup = derive(float(cfg.get("warmup_ms", 25))) if warmup is None else max(int(warmup), 1)
     n_repeat = derive(float(cfg.get("repeat_ms", 100))) if repeat is None else max(int(repeat), 1)
     return n_warmup, n_repeat
 

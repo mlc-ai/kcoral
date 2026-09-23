@@ -30,6 +30,7 @@ testing = SimpleNamespace(assert_close=assert_close)
 
 
 def fake_benchmark(call, config):
+    config = {**config, "warmup": max(config["warmup"], 1)}
     for _ in range(config["warmup"] + config["repeat"]):
         call()
     return {"latency_ms_median": 0.5, "activities_stable": True, **config}
@@ -161,7 +162,7 @@ def run(x):
     elif mode == "passed":
         for row in summary["results"]:
             assert row["speedup"] == 1
-            assert row["kernel_timing"]["warmup"] == 0 and row["kernel_timing"]["repeat"] == 2
+            assert row["kernel_timing"]["warmup"] == 1 and row["kernel_timing"]["repeat"] == 2
     capsys.readouterr()
     assert cli.main("python", ["--", "-c", "import os; print('MODE' in os.environ)"]) == 0
     assert capsys.readouterr().out == "False\n"
@@ -193,9 +194,9 @@ def prepare(x):
     assert summary["results"][0]["message"].startswith("candidate after timing")
 
 
-def test_cupti_delegation_and_zero_warmup(monkeypatch):
+def test_cupti_delegation(monkeypatch):
     calls = []
     monkeypatch.setattr(builtins, "benchmark", fake_benchmark)
     result = bench._measure(lambda: calls.append(True), 0, 3)
-    assert len(calls) == 3
-    assert result["warmup"] == 0 and result["repeat"] == 3 and result["flush_l2"] is True
+    assert len(calls) == 4
+    assert result["warmup"] == 1 and result["repeat"] == 3 and result["flush_l2"] is True

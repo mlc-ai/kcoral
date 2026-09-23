@@ -78,7 +78,7 @@ def create_app(
     config = config or ServerConfig()
     if config.device not in ("cpu", "gpu"):
         raise ValueError(f"device must be 'cpu' or 'gpu', got {config.device!r}")
-    if config.disk_cache_capacity_bytes < 0:
+    if config.disk_cache_capacity_mbytes < 0:
         raise ValueError("disk cache capacity must be non-negative")
     if config.sandbox not in ("none", "bubblewrap"):
         raise ValueError("sandbox must be 'none' or 'bubblewrap'")
@@ -114,7 +114,7 @@ def create_app(
         )
         app.state.cache = ByteCache(config.cache_capacity_bytes)
         app.state.file_cache = DiskFileCache(
-            config.disk_cache_dir, config.disk_cache_capacity_bytes
+            config.disk_cache_dir, config.disk_cache_capacity_mbytes * 1024**2
         )
         try:
             app.state.sandbox = config.sandbox

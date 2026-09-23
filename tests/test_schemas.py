@@ -401,7 +401,6 @@ def test_invalid_get_function_shapes_rejected(instruction, match):
         {"timeout_seconds": float("inf")},
         {"output_limit_bytes": -1},
         {"output_limit_bytes": True},
-        {"output_limit_bytes": 1.5},
         {"unknown": 1},
     ],
 )

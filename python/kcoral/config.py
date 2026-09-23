@@ -25,7 +25,7 @@ class ServerConfig:
     Python. The command-line interface instead defaults its log directory to
     ``logs``. The file-cache path defaults to an absolute ``XDG_CACHE_HOME``
     followed by ``kcoral/files``, or ``~/.cache/kcoral/files`` otherwise.
-    Set ``disk_cache_dir=None`` or ``disk_cache_capacity_bytes=0`` to disable it.
+    Set ``disk_cache_dir=None`` or ``disk_cache_capacity_mbytes=0`` to disable it.
 
     See the configuration guide for the meaning and unit of every field.
     """
@@ -36,7 +36,7 @@ class ServerConfig:
     log_programs: bool = True  # keep each request's program JSON beside the log
     cache_capacity_bytes: int = 16 * 1024**3  # 16 GB byte cache
     disk_cache_dir: Path | None = field(default_factory=_default_disk_cache_dir)
-    disk_cache_capacity_bytes: int = 16 * 1024**3  # 16 GiB; 0 disables file caching
+    disk_cache_capacity_mbytes: int = 16 * 1024  # MiB (1024**2 bytes); 0 disables file caching
     default_timeout_seconds: float = 300.0  # per-request execution timeout
     max_timeout_seconds: float = 900.0
     worker_wait_timeout_seconds: float = 1800.0  # wait for a free worker before 503
@@ -46,9 +46,9 @@ class ServerConfig:
     sandbox_readonly_paths: list[Path] = field(default_factory=list)
     worker_termination_grace_seconds: float = 5.0  # SIGTERM-to-SIGKILL window on kill
     max_request_bytes: int = 256 * 1024**2  # 256 MB request cap
-    max_response_bytes: int = 1024**3  # cap on the serialized results payload
+    max_response_bytes: int = 256 * 1024**2  # cap on the serialized results payload
     output_limit_bytes: int = 1024**2  # per-request stdout/stderr capture cap
-    max_output_limit_bytes: int = 256 * 1024**2  # cap on a client-requested limit
+    max_output_limit_bytes: int = 16 * 1024**2  # cap on a client-requested limit
     device: str = "gpu"
     num_workers: int = 1  # CPU workers; ignored in GPU mode
     router_endpoint: str | None = None  # enables outbound gRPC data slots

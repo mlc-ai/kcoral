@@ -90,9 +90,7 @@ def test_gpu_mount_uses_device_minor_number(monkeypatch, minor, expected):
     monkeypatch.setattr(
         Path,
         "exists",
-        lambda path: (
-            True if str(path) in ("/dev/nvidia0", "/dev/nvidia6") else original_exists(path)
-        ),
+        lambda path: True if str(path) in ("/dev/nvidia0", "/dev/nvidia6") else original_exists(path),
     )
     instance = Sandbox()
     try:
@@ -154,7 +152,7 @@ def test_server_startup_disables_unavailable_sandbox_and_warns(monkeypatch, tmp_
         max_requests_per_worker=1,
         log_dir=tmp_path / "logs",
         log_console=False,
-        disk_cache_capacity_bytes=0,
+        disk_cache_capacity_mbytes=0,
     )
     app = create_app(config)
     with pytest.warns(RuntimeWarning, match="filesystem isolation is disabled") as caught:
@@ -186,7 +184,7 @@ def test_explicitly_disabled_sandbox_skips_startup_probe(monkeypatch):
     from kcoral.app import create_app
 
     monkeypatch.setattr(sandboxing, "probe", lambda *args: pytest.fail("unexpected probe"))
-    app = create_app(ServerConfig(device="cpu", sandbox="none", disk_cache_capacity_bytes=0))
+    app = create_app(ServerConfig(device="cpu", sandbox="none", disk_cache_capacity_mbytes=0))
     with warnings.catch_warnings(record=True) as caught:
         with TestClient(app) as client:
             assert client.get("/health").status_code == 200
@@ -200,7 +198,7 @@ def test_server_rechecks_bubblewrap_on_next_start(require_bubblewrap, monkeypatc
     from kcoral import ServerConfig
     from kcoral.app import create_app
 
-    config = ServerConfig(device="cpu", log_console=False, disk_cache_capacity_bytes=0)
+    config = ServerConfig(device="cpu", log_console=False, disk_cache_capacity_mbytes=0)
     app = create_app(config)
     with monkeypatch.context() as unavailable:
         unavailable.setattr(shutil, "which", lambda name: None)
@@ -226,7 +224,7 @@ def test_successful_probe_does_not_hide_worker_runtime_failures(monkeypatch):
         raise RuntimeError("runtime initialization failed")
 
     monkeypatch.setattr(app_module, "WorkerPool", fail_pool)
-    app = app_module.create_app(ServerConfig(device="cpu", disk_cache_capacity_bytes=0))
+    app = app_module.create_app(ServerConfig(device="cpu", disk_cache_capacity_mbytes=0))
     with warnings.catch_warnings(record=True) as caught:
         with pytest.raises(RuntimeError, match="runtime initialization failed"):
             with TestClient(app):
