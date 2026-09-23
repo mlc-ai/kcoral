@@ -121,7 +121,5 @@ uploads and separate compilation/execution servers.
 ## Development
 
 See [development](docs/development-guide/build-the-docs.md) for tests and formatting checks.
-[Built-in tool definitions](docs/development-guide/builtin-tools.md) describes the
-`kcoral.tools` subpackage and its per-tool modules.
 [Build the documentation locally](docs/development-guide/build-the-docs.md#build-and-preview-the-documentation)
 to browse the full site with navigation and search at `http://127.0.0.1:8008`.

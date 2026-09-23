@@ -69,7 +69,6 @@ tutorials/agent-integration
 :hidden:
 
 development-guide/build-the-docs
-development-guide/builtin-tools
 ```
 
 ```{toctree}
