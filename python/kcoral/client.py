@@ -16,6 +16,7 @@ import httpx
 import ml_dtypes
 import numpy as np
 
+from ._units import mbytes_to_bytes
 from .artifacts import ReturnedFile, ReturnedFolder, validate_manifest
 from .keys import compute_blob_hash, is_blob_hash, verify_blob
 from .multipart import parse_multipart
@@ -484,13 +485,14 @@ class Client:
         self,
         *,
         timeout: float | None = None,
-        output_limit_bytes: int | None = None,
+        output_limit_mbytes: float | None = None,
         cpu_only: bool = False,
     ) -> Callable[[Callable[_Parameters, _ReturnType]], RemoteFunction[_Parameters, _ReturnType]]:
         """Decorate a self-contained Python function for this server.
 
         :param timeout: Server execution limit in seconds, subject to its maximum.
-        :param output_limit_bytes: Captured output limit per stream.
+        :param output_limit_mbytes: Captured output limit per stream in MiB (1024**2 bytes);
+            fractions are accepted and ``0`` disables capture.
         :param cpu_only: Whether the function touches no GPU.
         :returns: A decorator producing a :class:`RemoteFunction`. Its
             ``remote()`` method returns the decoded value; ``execute()`` returns
@@ -510,7 +512,7 @@ class Client:
                 fn,
                 client=self,
                 timeout=timeout,
-                output_limit_bytes=output_limit_bytes,
+                output_limit_mbytes=output_limit_mbytes,
                 cpu_only=cpu_only,
             )
 
@@ -521,18 +523,20 @@ class Client:
         program: Program,
         *,
         timeout_seconds: float | None = None,
-        output_limit_bytes: int | None = None,
+        output_limit_mbytes: float | None = None,
     ) -> ProgramResult:
         """Submit a program and decode the values it explicitly returns.
 
         :param program: Program built with the client-side :class:`Program`.
         :param timeout_seconds: Requested execution limit in seconds; ``None``
             uses the server default. The server clamps it to its configured maximum.
-        :param output_limit_bytes: Requested captured output limit per stream;
+        :param output_limit_mbytes: Requested captured output limit per stream in MiB
+            (1024**2 bytes); fractions are accepted and ``0`` disables capture;
             ``None`` uses the server default, subject to the server maximum.
         :returns: A completed or failed program outcome. Instruction failures do
             not raise an exception; inspect ``status`` and ``error``.
         :raises TypeError: If ``program`` is not a client-side program.
+        :raises ValueError: If ``output_limit_mbytes`` is not a valid non-negative size.
         :raises KCoralError: If the server returns an HTTP request error.
         :raises TransportError: If no HTTP response can be obtained.
         :raises ProtocolError: If the response is malformed or cache recovery fails.
@@ -547,8 +551,10 @@ class Client:
         options: dict[str, Any] = {}
         if timeout_seconds is not None:
             options["timeout_seconds"] = timeout_seconds
-        if output_limit_bytes is not None:
-            options["output_limit_bytes"] = output_limit_bytes
+        if output_limit_mbytes is not None:
+            options["output_limit_bytes"] = mbytes_to_bytes(
+                output_limit_mbytes, "output_limit_mbytes"
+            )
 
         body, binary_parts, route = self._post_program(
             program, options, include_blobs=set(), route=None

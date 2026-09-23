@@ -53,7 +53,7 @@ class RemoteFunction(Generic[_Parameters, _ReturnType]):
         *,
         client: Client,
         timeout: float | None = None,
-        output_limit_bytes: int | None = None,
+        output_limit_mbytes: float | None = None,
         cpu_only: bool = False,
     ) -> None:
         self._source, self._entry = _function_source(fn)
@@ -61,7 +61,7 @@ class RemoteFunction(Generic[_Parameters, _ReturnType]):
         self._fn = fn
         self._client = client
         self._timeout = timeout
-        self._output_limit_bytes = output_limit_bytes
+        self._output_limit_mbytes = output_limit_mbytes
         if not isinstance(cpu_only, bool):
             raise TypeError("cpu_only must be a bool")
         self._cpu_only = cpu_only
@@ -129,7 +129,7 @@ class RemoteFunction(Generic[_Parameters, _ReturnType]):
         return self._client.execute(
             program,
             timeout_seconds=self._timeout,
-            output_limit_bytes=self._output_limit_bytes,
+            output_limit_mbytes=self._output_limit_mbytes,
         )
 
     def remote(self, *args: _Parameters.args, **kwargs: _Parameters.kwargs) -> Any:

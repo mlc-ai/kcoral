@@ -229,7 +229,7 @@ def test_real_router_early_413_and_large_early_response_do_not_hang(tmp_path):
 
 async def _early_responses(tmp_path):
     async with running_router(tmp_path) as url:
-        async with running_app(url, "small", tmp_path / "small", max_request_bytes=1024):
+        async with running_app(url, "small", tmp_path / "small", max_request_mbytes=1 / 1024):
             await ready_nodes(url, 1)
             async with httpx.AsyncClient(timeout=5) as client:
                 response = await client.post(url + "/execute", content=b"x" * (4 * 1024**2))
@@ -271,7 +271,7 @@ def test_router_errors_share_ids_and_client_cancel_reconnects(tmp_path):
 
 async def _errors_and_cancel(tmp_path):
     async with running_router(
-        tmp_path, "--queue-wait-timeout-seconds", "0.05", "--max-request-bytes", "1024"
+        tmp_path, "--queue-wait-timeout-seconds", "0.05", "--max-request-mbytes", str(1 / 1024)
     ) as url:
         async with httpx.AsyncClient(timeout=5) as client:
             response = await client.post(url + "/execute", content=b"x" * 2048)
@@ -427,7 +427,7 @@ async def _cancel_reason(tmp_path, failure):
                 pass
             await asyncio.Event().wait()
 
-    async with running_router(tmp_path, "--max-request-bytes", "1024") as url:
+    async with running_router(tmp_path, "--max-request-mbytes", str(1 / 1024)) as url:
         manager = TunnelManager(
             application,
             endpoint=url,

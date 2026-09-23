@@ -119,7 +119,7 @@ boundary.
 | `--queue-wait-timeout-seconds` | `1800` | Maximum wait for capacity |
 | `--max-queued-requests` | `1024` | Bound on requests waiting for capacity |
 | `--node-retention-seconds` | `600` | Retention of disconnected, unused node records |
-| `--max-request-bytes` | `268435456` | Maximum accepted request body size |
+| `--max-request-mbytes` | `256` | Maximum accepted request body size in MiB (1024² bytes); fractions accepted, at least one byte |
 
 The Router uses the [health schema](../client-guide/protocol.md#get-health),
 with router-local request counts.

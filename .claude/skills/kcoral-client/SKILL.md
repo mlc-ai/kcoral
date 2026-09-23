@@ -83,7 +83,7 @@ Program.return_file(key=..., path=...) -> None    # str or Register resolving to
 Program.return_folder(key=..., path=...) -> None  # str or Register resolving to str
 
 Client(base_url, *, headers=None, connect_timeout_seconds=10)
-Client.execute(program, *, timeout_seconds=None, output_limit_bytes=None) -> ProgramResult
+Client.execute(program, *, timeout_seconds=None, output_limit_mbytes=None) -> ProgramResult
 Client.health() -> dict
 Client.target() -> dict   # e.g. {"arch": "sm_100a"}
 Client.close() -> None
@@ -91,6 +91,10 @@ Client.close() -> None
 
 `Program` automatically generates an ID for each value-producing instruction.
 Use the optional `id` field to customize it.
+
+`output_limit_mbytes` is a per-stream capture limit in MiB (1024² bytes);
+fractions are accepted, `0` disables capture, and `None` uses the server default.
+The client converts it to the protocol field `options.output_limit_bytes`.
 
 The client derives `blob`, `dtype`, and `shape` from a tensor `value`. It sends
 no blob parts at first, retries a `CACHE_MISS` with the missing parts, and falls

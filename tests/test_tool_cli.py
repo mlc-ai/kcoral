@@ -265,7 +265,12 @@ def test_no_report_and_missing_tool_are_failures(remote, tmp_path, capsys):
 
 
 def test_truncated_output_signal_and_remote_exception(remote, capsys):
-    assert cli.main("python", ["--output-limit-bytes", "8", "--", "-c", "print('x' * 100)"]) == 0
+    assert (
+        cli.main(
+            "python", ["--output-limit-mbytes", str(8 / 1024**2), "--", "-c", "print('x' * 100)"]
+        )
+        == 0
+    )
     assert "remote output was truncated" in capsys.readouterr().err
     assert (
         cli.main("python", ["--", "-c", "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"])
@@ -273,6 +278,14 @@ def test_truncated_output_signal_and_remote_exception(remote, capsys):
     )
     assert cli.main("python", ["--", "-c", "raise RuntimeError('bad kernel')"]) == 1
     assert "bad kernel" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "0.0000001", str(2**44)])
+def test_invalid_output_limit_mbytes(monkeypatch, value):
+    monkeypatch.setenv("KCORAL_URL", "http://unused")
+    with pytest.raises(SystemExit) as exc:
+        cli.get_tool("python").parse_args([f"--output-limit-mbytes={value}", "--", "check.py"])
+    assert exc.value.code == 2
 
 
 def test_output_collision_does_not_execute(monkeypatch, tmp_path):

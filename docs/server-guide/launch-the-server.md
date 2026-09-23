@@ -124,27 +124,31 @@ Record this setting when comparing throughput.
 
 ### Time and size limits
 
-MiB means 1024 squared bytes; GiB means 1024 cubed bytes. All options ending in
-`-bytes` take an integer number of bytes, not a value with a unit suffix.
+MiB means 1024 squared bytes; GiB means 1024 cubed bytes. All size options and configuration
+fields use `mbytes` to mean MiB. They accept fractions such as `0.5` for 512 KiB
+and round down to whole bytes. Positive sizes must be at least one byte.
+Request and response caps must be positive; zero disables output capture or
+the corresponding cache.
 
 | Option | Default | Configuration field | Meaning |
 | --- | --- | --- | --- |
 | `--worker-wait-timeout-seconds` | `1800` | `worker_wait_timeout_seconds` | Time to wait for a free worker before a 503 response |
 | `--default-timeout-seconds` | `300` | `default_timeout_seconds` | Execution limit when a request omits its timeout |
 | `--max-timeout-seconds` | `900` | `max_timeout_seconds` | Upper bound for a request's timeout |
-| `--max-request-bytes` | `268435456` (256 MiB) | `max_request_bytes` | Maximum request body size |
-| `--max-response-bytes` | `1073741824` (1 GiB) | `max_response_bytes` | Maximum serialized response size |
-| `--output-limit-bytes` | `1048576` (1 MiB) | `output_limit_bytes` | Default captured stdout/stderr limit per stream |
-| `--max-output-limit-bytes` | `268435456` (256 MiB) | `max_output_limit_bytes` | Maximum requested captured output per stream |
-| `--cache-capacity-bytes` | `17179869184` (16 GiB) | `cache_capacity_bytes` | Memory cache capacity for tensors, bytes and libraries |
+| `--max-request-mbytes` | `256` | `max_request_mbytes` | Maximum request body size |
+| `--max-response-mbytes` | `1024` (1 GiB) | `max_response_mbytes` | Maximum serialized response size |
+| `--output-limit-mbytes` | `1` | `output_limit_mbytes` | Default captured stdout/stderr limit per stream |
+| `--max-output-limit-mbytes` | `256` | `max_output_limit_mbytes` | Maximum requested captured output per stream |
+| `--cache-capacity-mbytes` | `16384` (16 GiB) | `cache_capacity_mbytes` | Memory cache capacity for tensors, bytes and libraries |
 
 Worker acquisition can wait up to 30 minutes by default. The execution budget
 starts after worker assignment and excludes time waiting for another worker's
 GPU lease. It defaults to 5 minutes and is capped at 15 minutes, so a long queue
 wait does not give a running program a longer execution budget.
 
-Request `timeout_seconds` and `output_limit_bytes` override their respective
-defaults, up to these server maximums. See [protocol options](../client-guide/protocol.md#options)
+Client arguments `timeout_seconds` and `output_limit_mbytes` override their
+respective defaults, up to these server maximums. The client converts MiB to
+bytes for the protocol field `options.output_limit_bytes`. See [protocol options](../client-guide/protocol.md#options)
 for clamping and [errors](../client-guide/protocol.md#errors) for request failures.
 
 ### File upload cache

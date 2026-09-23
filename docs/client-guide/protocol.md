@@ -409,8 +409,8 @@ keyed by the raw content's SHA-256. Module source is carried in the program and
 does not use this blob cache. Reusing bytes does not reuse a previous tensor,
 compiled module or execution: instructions still create request-local values.
 
-The memory budget is `cache_capacity_bytes` (`--cache-capacity-bytes`, default
-16 GiB). GiB means 1024 cubed bytes. Less recently used, unpinned entries may
+The memory budget is `cache_capacity_mbytes` (`--cache-capacity-mbytes`, default
+16384 MiB / 16 GiB). GiB means 1024 cubed bytes. Less recently used, unpinned entries may
 be evicted. Referenced cached bytes are pinned while requests execute. An object
 larger than one quarter of the budget is not retained by default, but supplied
 bytes still work for that request. Restarting the Python server loses this cache.
@@ -597,8 +597,10 @@ are rejected. Missing paths, wrong types, invalid runtime paths, read failures,
 and collection limits fail that return with `serialization`. Failed returns add
 no result or binary parts; earlier returns survive ordinary instruction failures.
 
-Contents are buffered in the execution response. The existing `max_response_bytes`
-limit (default 1 GiB) applies. `output_limit_bytes` controls only stdout/stderr.
+Contents are buffered in the execution response. The server's `max_response_mbytes`
+limit (default 1024 MiB / 1 GiB) applies. `output_limit_bytes` controls only stdout/stderr.
+The Python client and CLI accept `output_limit_mbytes` / `--output-limit-mbytes`
+and convert MiB (1024² bytes) to this integer byte count.
 
 ## Options
 

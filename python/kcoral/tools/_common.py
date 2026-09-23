@@ -9,6 +9,7 @@ import re
 import sys
 from pathlib import Path
 
+from .._units import mbytes_to_bytes
 from ..client import Client, Program
 from . import COMMANDS
 from ._inputs import pack_inputs, relative_path
@@ -34,10 +35,10 @@ def add_connection_args(parser):
         help="execution timeout in seconds (default: 300; server caps apply)",
     )
     parser.add_argument(
-        "--output-limit-bytes",
-        type=int,
-        default=256 * 1024**2,
-        help="capture limit per stream (default: 256 MiB; server caps apply)",
+        "--output-limit-mbytes",
+        type=float,
+        default=256,
+        help="capture limit per stream in MiB (1024**2 bytes; default: 256; server caps apply)",
     )
 
 
@@ -74,14 +75,18 @@ def validate_connection_args(parser, args):
         args.url = environment_url
     if not args.url:
         parser.error("set KCORAL_URL or pass --url, --host or --port")
-    if args.timeout <= 0 or args.output_limit_bytes <= 0:
-        parser.error("--timeout and --output-limit-bytes must be positive")
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
+    try:
+        mbytes_to_bytes(args.output_limit_mbytes, "--output-limit-mbytes", positive=True)
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 def execute(args, program):
     with Client(args.url) as client:
         result = client.execute(
-            program, timeout_seconds=args.timeout, output_limit_bytes=args.output_limit_bytes
+            program, timeout_seconds=args.timeout, output_limit_mbytes=args.output_limit_mbytes
         )
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)

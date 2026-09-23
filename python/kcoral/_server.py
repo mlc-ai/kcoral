@@ -82,7 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=_DEFAULTS.num_workers,
         help="CPU worker processes; used only with --device cpu (default: 1)",
     )
-    parser.add_argument("--cache-capacity-bytes", type=int, default=_DEFAULTS.cache_capacity_bytes)
+    parser.add_argument(
+        "--cache-capacity-mbytes",
+        type=float,
+        default=_DEFAULTS.cache_capacity_mbytes,
+        help="memory cache budget in MiB (1024**2 bytes); 0 disables caching",
+    )
     parser.add_argument(
         "--disk-cache-dir",
         default=str(_DEFAULTS.disk_cache_dir),
@@ -90,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--disk-cache-capacity-mbytes",
-        type=int,
+        type=float,
         default=_DEFAULTS.disk_cache_capacity_mbytes,
         help="file cache budget in MiB (1024**2 bytes; default: 16384); 0 disables file caching",
     )
@@ -152,16 +157,29 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="additional runtime dependency visible read-only to isolated workers; repeatable",
     )
-    parser.add_argument("--max-request-bytes", type=int, default=_DEFAULTS.max_request_bytes)
-    parser.add_argument("--max-response-bytes", type=int, default=_DEFAULTS.max_response_bytes)
     parser.add_argument(
-        "--output-limit-bytes",
-        type=int,
-        default=_DEFAULTS.output_limit_bytes,
-        help="default request-level stdout/stderr capture cap",
+        "--max-request-mbytes",
+        type=float,
+        default=_DEFAULTS.max_request_mbytes,
+        help="maximum request size in MiB (1024**2 bytes)",
     )
     parser.add_argument(
-        "--max-output-limit-bytes", type=int, default=_DEFAULTS.max_output_limit_bytes
+        "--max-response-mbytes",
+        type=float,
+        default=_DEFAULTS.max_response_mbytes,
+        help="maximum response size in MiB (1024**2 bytes)",
+    )
+    parser.add_argument(
+        "--output-limit-mbytes",
+        type=float,
+        default=_DEFAULTS.output_limit_mbytes,
+        help="default capture per stream in MiB (1024**2 bytes); 0 disables capture",
+    )
+    parser.add_argument(
+        "--max-output-limit-mbytes",
+        type=float,
+        default=_DEFAULTS.max_output_limit_mbytes,
+        help="maximum captured output per stream in MiB (1024**2 bytes)",
     )
     return parser
 
@@ -187,32 +205,35 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         raise SystemExit("--router and --node-id must be configured together")
     if args.sandbox_readonly_path and args.sandbox == "none":
         raise SystemExit("--sandbox-readonly-path requires --sandbox bubblewrap")
-    return ServerConfig(
-        device=args.device,
-        gpus=gpus,
-        num_workers=args.num_workers,
-        cache_capacity_bytes=args.cache_capacity_bytes,
-        disk_cache_dir=Path(args.disk_cache_dir) if args.disk_cache_dir else None,
-        disk_cache_capacity_mbytes=args.disk_cache_capacity_mbytes,
-        log_dir=Path(args.log_dir) if args.log_dir else None,
-        log_console=args.log_console,
-        log_programs=args.log_programs,
-        default_timeout_seconds=args.default_timeout_seconds,
-        max_timeout_seconds=args.max_timeout_seconds,
-        worker_wait_timeout_seconds=args.worker_wait_timeout_seconds,
-        workers_per_gpu=args.workers_per_gpu,
-        max_requests_per_worker=args.max_requests_per_worker,
-        sandbox=args.sandbox,
-        sandbox_readonly_paths=args.sandbox_readonly_path,
-        worker_termination_grace_seconds=args.worker_termination_grace_seconds,
-        max_request_bytes=args.max_request_bytes,
-        max_response_bytes=args.max_response_bytes,
-        output_limit_bytes=args.output_limit_bytes,
-        max_output_limit_bytes=args.max_output_limit_bytes,
-        router_endpoint=args.router_endpoint,
-        node_id=args.node_id,
-        node_token=args.node_token,
-    )
+    try:
+        return ServerConfig(
+            device=args.device,
+            gpus=gpus,
+            num_workers=args.num_workers,
+            cache_capacity_mbytes=args.cache_capacity_mbytes,
+            disk_cache_dir=Path(args.disk_cache_dir) if args.disk_cache_dir else None,
+            disk_cache_capacity_mbytes=args.disk_cache_capacity_mbytes,
+            log_dir=Path(args.log_dir) if args.log_dir else None,
+            log_console=args.log_console,
+            log_programs=args.log_programs,
+            default_timeout_seconds=args.default_timeout_seconds,
+            max_timeout_seconds=args.max_timeout_seconds,
+            worker_wait_timeout_seconds=args.worker_wait_timeout_seconds,
+            workers_per_gpu=args.workers_per_gpu,
+            max_requests_per_worker=args.max_requests_per_worker,
+            sandbox=args.sandbox,
+            sandbox_readonly_paths=args.sandbox_readonly_path,
+            worker_termination_grace_seconds=args.worker_termination_grace_seconds,
+            max_request_mbytes=args.max_request_mbytes,
+            max_response_mbytes=args.max_response_mbytes,
+            output_limit_mbytes=args.output_limit_mbytes,
+            max_output_limit_mbytes=args.max_output_limit_mbytes,
+            router_endpoint=args.router_endpoint,
+            node_id=args.node_id,
+            node_token=args.node_token,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def main(argv: list[str] | None = None) -> None:

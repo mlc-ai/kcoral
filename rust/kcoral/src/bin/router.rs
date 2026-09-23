@@ -33,8 +33,10 @@ struct Args {
     queue_wait_timeout_seconds: f64,
     #[arg(long, default_value_t = 1024)]
     max_queued_requests: usize,
-    #[arg(long, default_value_t = DEFAULT_MAX_REQUEST_BYTES)]
-    max_request_bytes: u64,
+    /// Maximum request size in MiB (1024^2 bytes); fractions are accepted.
+    #[arg(long, default_value_t = DEFAULT_MAX_REQUEST_BYTES as f64 / 1048576.0,
+          value_parser = parse_mbytes)]
+    max_request_mbytes: f64,
     #[arg(long, env = "KCORAL_NODE_TOKEN", hide_env_values = true)]
     node_token: Option<String>,
 }
@@ -58,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
             "queue wait timeout",
         )?,
         max_queued_requests: args.max_queued_requests,
-        max_request_bytes: args.max_request_bytes,
+        max_request_bytes: (args.max_request_mbytes * 1048576.0) as u64,
         node_token: args.node_token,
     };
     let pool = NodePool::new(config)?;
@@ -68,4 +70,37 @@ async fn main() -> anyhow::Result<()> {
     let _ = shutdown_tx.send(true);
     health_task.await?;
     Ok(())
+}
+
+fn parse_mbytes(value: &str) -> Result<f64, String> {
+    let size: f64 = value.parse().map_err(|_| "expected a size in MiB")?;
+    if !size.is_finite() || size * 1048576.0 < 1.0 || size >= 2_f64.powi(44) {
+        return Err("size must be at least one byte and below 2^44 MiB".into());
+    }
+    Ok(size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_limit_accepts_binary_megabytes() {
+        let args = Args::try_parse_from(["router", "--max-request-mbytes", "0.5"]).unwrap();
+        assert_eq!((args.max_request_mbytes * 1048576.0) as u64, 524288);
+        let args = Args::try_parse_from(["router"]).unwrap();
+        assert_eq!(
+            (args.max_request_mbytes * 1048576.0) as u64,
+            DEFAULT_MAX_REQUEST_BYTES
+        );
+    }
+
+    #[test]
+    fn request_limit_rejects_invalid_sizes() {
+        for size in ["0", "-1", "NaN", "inf", "0.0000001", "17592186044416"] {
+            assert!(
+                Args::try_parse_from(["router", &format!("--max-request-mbytes={size}")]).is_err()
+            );
+        }
+    }
 }

@@ -6,6 +6,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ._units import mbytes_to_bytes
+
 
 def _default_disk_cache_dir() -> Path:
     base = os.environ.get("XDG_CACHE_HOME")
@@ -27,16 +29,17 @@ class ServerConfig:
     followed by ``kcoral/files``, or ``~/.cache/kcoral/files`` otherwise.
     Set ``disk_cache_dir=None`` or ``disk_cache_capacity_mbytes=0`` to disable it.
 
-    See the configuration guide for the meaning and unit of every field.
+    Size fields ending in ``_mbytes`` use MiB (1024**2 bytes) and accept
+    fractions. See the configuration guide for the meaning of every field.
     """
 
     gpus: list[int] = field(default_factory=lambda: [0])
     log_dir: Path | None = None  # structured event logs; None disables logging
     log_console: bool = True  # mirror events to stderr as well as the log file
     log_programs: bool = True  # keep each request's program JSON beside the log
-    cache_capacity_bytes: int = 16 * 1024**3  # 16 GB byte cache
+    cache_capacity_mbytes: float = 16 * 1024  # MiB (1024**2 bytes)
     disk_cache_dir: Path | None = field(default_factory=_default_disk_cache_dir)
-    disk_cache_capacity_mbytes: int = 16 * 1024  # MiB (1024**2 bytes); 0 disables file caching
+    disk_cache_capacity_mbytes: float = 16 * 1024  # MiB (1024**2 bytes); 0 disables file caching
     default_timeout_seconds: float = 300.0  # per-request execution timeout
     max_timeout_seconds: float = 900.0
     worker_wait_timeout_seconds: float = 1800.0  # wait for a free worker before 503
@@ -45,12 +48,27 @@ class ServerConfig:
     sandbox: str = "bubblewrap"  # "none" explicitly disables filesystem isolation
     sandbox_readonly_paths: list[Path] = field(default_factory=list)
     worker_termination_grace_seconds: float = 5.0  # SIGTERM-to-SIGKILL window on kill
-    max_request_bytes: int = 256 * 1024**2  # 256 MB request cap
-    max_response_bytes: int = 1024**3  # cap on the serialized results payload
-    output_limit_bytes: int = 1024**2  # per-request stdout/stderr capture cap
-    max_output_limit_bytes: int = 256 * 1024**2  # cap on a client-requested limit
+    max_request_mbytes: float = 256  # maximum request size in MiB
+    max_response_mbytes: float = 1024  # cap on the serialized results payload
+    output_limit_mbytes: float = 1  # per-request stdout/stderr capture cap
+    max_output_limit_mbytes: float = 256  # cap on a client-requested limit
     device: str = "gpu"
     num_workers: int = 1  # CPU workers; ignored in GPU mode
     router_endpoint: str | None = None  # enables outbound gRPC data slots
     node_id: str | None = None
     node_token: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in (
+            "cache_capacity_mbytes",
+            "disk_cache_capacity_mbytes",
+            "max_request_mbytes",
+            "max_response_mbytes",
+            "output_limit_mbytes",
+            "max_output_limit_mbytes",
+        ):
+            mbytes_to_bytes(
+                getattr(self, name),
+                name,
+                positive=name in {"max_request_mbytes", "max_response_mbytes"},
+            )

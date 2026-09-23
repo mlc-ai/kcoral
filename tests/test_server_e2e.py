@@ -451,7 +451,7 @@ def test_strict_json_and_unknown_instruction_are_400():
 def test_request_and_response_size_limits():
     with TestClient(
         create_app(
-            ServerConfig(sandbox="none", gpus=[0], max_request_bytes=100),
+            ServerConfig(sandbox="none", gpus=[0], max_request_mbytes=100 / 1024**2),
             runtime_factory=fake_runtime_factory,
         )
     ) as client:
@@ -474,7 +474,7 @@ def test_request_and_response_size_limits():
     }
     with TestClient(
         create_app(
-            ServerConfig(sandbox="none", gpus=[0], max_response_bytes=300),
+            ServerConfig(sandbox="none", gpus=[0], max_response_mbytes=300 / 1024**2),
             runtime_factory=fake_runtime_factory,
         )
     ) as client:
@@ -1219,7 +1219,7 @@ def test_server_supplies_file_collection_byte_limit():
     config = ServerConfig(
         sandbox="none",
         max_requests_per_worker=0,
-        max_response_bytes=4096,
+        max_response_mbytes=4096 / 1024**2,
     )
     source = """
 from pathlib import Path
@@ -1244,7 +1244,7 @@ def make():
     assert body["status"] == "FAILED"
     assert body["results"] == {"kept": {"type": "integer", "value": 7}}
     assert body["error"]["kind"] == "serialization"
-    assert "max_response_bytes" in body["error"]["message"]
+    assert "max_response_mbytes" in body["error"]["message"]
 
 
 def test_file_return_still_obeys_final_serialized_response_cap():
@@ -1256,7 +1256,7 @@ def test_file_return_still_obeys_final_serialized_response_cap():
         ]
     }
     with make_client(
-        ServerConfig(sandbox="none", max_requests_per_worker=0, max_response_bytes=4096)
+        ServerConfig(sandbox="none", max_requests_per_worker=0, max_response_mbytes=4096 / 1024**2)
     ) as client:
         response = post_program(client, program)
     assert response.status_code == 500
