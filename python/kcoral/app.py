@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, Response
 
 from . import sandbox
 from .cache import ByteCache, DiskFileCache
-from .config import ServerConfig, mbytes_to_bytes
+from .config import ServerConfig
 from .errors import ValidationError
 from .events import EventLogger
 from .health import HealthResponse
@@ -76,11 +76,9 @@ def create_app(
     this function is imported. Install the ``server`` extra to use it.
     """
     config = config or ServerConfig()
-    max_request_bytes = mbytes_to_bytes(config.max_request_mbytes, "max_request_mbytes")
-    max_response_bytes = mbytes_to_bytes(config.max_response_mbytes, "max_response_mbytes")
     if config.device not in ("cpu", "gpu"):
         raise ValueError(f"device must be 'cpu' or 'gpu', got {config.device!r}")
-    if config.disk_cache_capacity_mbytes < 0:
+    if config.disk_cache_capacity_bytes < 0:
         raise ValueError("disk cache capacity must be non-negative")
     if config.sandbox not in ("none", "bubblewrap"):
         raise ValueError("sandbox must be 'none' or 'bubblewrap'")
@@ -114,12 +112,9 @@ def create_app(
             run_dir=str(events.run_dir) if events.run_dir else None,
             config=_describe(config),
         )
-        app.state.cache = ByteCache(
-            mbytes_to_bytes(config.cache_capacity_mbytes, "cache_capacity_mbytes")
-        )
+        app.state.cache = ByteCache(config.cache_capacity_bytes)
         app.state.file_cache = DiskFileCache(
-            config.disk_cache_dir,
-            mbytes_to_bytes(config.disk_cache_capacity_mbytes, "disk_cache_capacity_mbytes"),
+            config.disk_cache_dir, config.disk_cache_capacity_bytes
         )
         try:
             app.state.sandbox = config.sandbox
@@ -296,13 +291,13 @@ def create_app(
             )
 
         declared_length = request.headers.get("content-length", "")
-        if declared_length.isdigit() and int(declared_length) > max_request_bytes:
+        if declared_length.isdigit() and int(declared_length) > config.max_request_bytes:
             finished(413, finish_reason="rejected", error_kind="request_too_large")
             return _error_response(
                 413, "request_too_large", "request exceeds the configured size limit", request_id
             )
         body_bytes = await request.body()
-        if len(body_bytes) > max_request_bytes:
+        if len(body_bytes) > config.max_request_bytes:
             finished(413, finish_reason="rejected", error_kind="request_too_large")
             return _error_response(
                 413, "request_too_large", "request exceeds the configured size limit", request_id
@@ -332,9 +327,9 @@ def create_app(
                 headers=headers,
             )
 
-        program.max_return_bytes = max_response_bytes
+        program.max_return_bytes = config.max_response_bytes
         timeout = _resolve_timeout(program, config)
-        program.options["output_limit_mbytes"] = _resolve_output_limit(program, config)
+        program.options["output_limit_bytes"] = _resolve_output_limit(program, config)
         if events.enabled:  # describing the workload is the one cost worth a branch
             events.emit(
                 "request_accepted",
@@ -459,7 +454,7 @@ def create_app(
             payload["error"] = execution.error
 
         response_body, content_type = _encode_response(payload, execution.binary_parts)
-        if len(response_body) > max_response_bytes:
+        if len(response_body) > config.max_response_bytes:
             finished(
                 500,
                 finish_reason="server_error",
@@ -652,10 +647,10 @@ def _resolve_timeout(program: Program, config: ServerConfig) -> float:
     )
 
 
-def _resolve_output_limit(program: Program, config: ServerConfig) -> float:
+def _resolve_output_limit(program: Program, config: ServerConfig) -> int:
     return min(
-        program.options.get("output_limit_mbytes", config.output_limit_mbytes),
-        config.max_output_limit_mbytes,
+        int(program.options.get("output_limit_bytes", config.output_limit_bytes)),
+        config.max_output_limit_bytes,
     )
 
 

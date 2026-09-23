@@ -409,8 +409,8 @@ keyed by the raw content's SHA-256. Module source is carried in the program and
 does not use this blob cache. Reusing bytes does not reuse a previous tensor,
 compiled module or execution: instructions still create request-local values.
 
-The memory budget is `cache_capacity_mbytes` (`--cache-capacity-mbytes`, default
-16384 MiB / 16 GiB). GiB means 1024 cubed bytes. Less recently used, unpinned entries may
+The memory budget is `cache_capacity_bytes` (`--cache-capacity-bytes`, default
+16 GiB). GiB means 1024 cubed bytes. Less recently used, unpinned entries may
 be evicted. Referenced cached bytes are pinned while requests execute. An object
 larger than one quarter of the budget is not retained by default, but supplied
 bytes still work for that request. Restarting the Python server loses this cache.
@@ -434,9 +434,9 @@ cache miss occurs. Cache retention is an optimization rather than a guarantee.
 
 File uploads use a separate persistent disk cache. Its default directory is
 `$XDG_CACHE_HOME/kcoral/files` when `XDG_CACHE_HOME` is absolute, otherwise
-`~/.cache/kcoral/files`. The default budget is 16384 MiB (16 GiB); MiB means
-1024 squared bytes. Configure `disk_cache_dir` and
-`disk_cache_capacity_mbytes`, or the corresponding server flags.
+`~/.cache/kcoral/files`. The default budget is 17179869184 bytes (16 GiB).
+Configure `disk_cache_dir` and
+`disk_cache_capacity_bytes`, or the corresponding server flags.
 
 An empty directory option (`None` in Python) or zero capacity disables file
 caching. It does not move files into the memory cache. Entries can survive a
@@ -597,15 +597,15 @@ are rejected. Missing paths, wrong types, invalid runtime paths, read failures,
 and collection limits fail that return with `serialization`. Failed returns add
 no result or binary parts; earlier returns survive ordinary instruction failures.
 
-Contents are buffered in the execution response. The server's `max_response_mbytes`
-limit (default 1024 MiB / 1 GiB) applies. `output_limit_mbytes` controls only stdout/stderr.
+Contents are buffered in the execution response. The existing `max_response_bytes`
+limit (default 1 GiB) applies. `output_limit_bytes` controls only stdout/stderr.
 
 ## Options
 
 | Field | Type | Required | Default | Notes |
 |---|---|---:|---|---|
 | `timeout_seconds` | number | no | `300` | Worker execution deadline; maximum `900` |
-| `output_limit_mbytes` | number | no | `1` | Maximum MiB (1024² bytes) returned for each of stdout and stderr; fractions accepted and rounded down to whole bytes, positive values must cover at least one byte; default server maximum `256`; `0` disables capture |
+| `output_limit_bytes` | integer | no | `1048576` | Maximum bytes returned for each of stdout and stderr; default server maximum `268435456` (256 MiB); `0` disables capture |
 
 A value above either maximum is clamped to it, not rejected.
 
@@ -669,8 +669,8 @@ body described under [Errors](#errors) instead.
 | `missing_blobs` | array | `CACHE_MISS` | Blob hashes the server does not hold |
 | `stdout` | string | run | Captured standard output |
 | `stderr` | string | run | Captured standard error |
-| `stdout_truncated` | boolean | run | Whether `stdout` hit `output_limit_mbytes` |
-| `stderr_truncated` | boolean | run | Whether `stderr` hit `output_limit_mbytes` |
+| `stdout_truncated` | boolean | run | Whether `stdout` hit `output_limit_bytes` |
+| `stderr_truncated` | boolean | run | Whether `stderr` hit `output_limit_bytes` |
 
 "run" marks fields present whenever the worker returned an outcome, so on both
 `COMPLETED` and `FAILED` but not on `CACHE_MISS`.

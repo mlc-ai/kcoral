@@ -31,9 +31,7 @@ every request. If you do not use `with`, call `client.close()` explicitly.
 
 `connect_timeout_seconds` limits connection establishment. It does not limit
 execution. Pass `timeout_seconds` to `execute()` for a server-side execution
-deadline, and `output_limit_mbytes` to limit captured output per stream in MiB (1024² bytes).
-Fractions are accepted; `0` disables capture and `None` uses the server default.
-Sizes are converted to whole bytes by rounding down.
+deadline, and `output_limit_bytes` to limit captured output per stream.
 
 ## Remote functions
 
@@ -137,7 +135,7 @@ All references must point to earlier instructions in the same request.
 
 ```python
 with Client("http://localhost:8000") as client:
-    result = client.execute(program, timeout_seconds=120, output_limit_mbytes=64)
+    result = client.execute(program, timeout_seconds=120, output_limit_bytes=65536)
 
 if result.completed:
     output = result.results["output"]

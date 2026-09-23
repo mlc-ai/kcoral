@@ -291,7 +291,7 @@ def test_uncached_file_upload_still_executes(tmp_path, disabled):
         workers_per_gpu=1,
         max_requests_per_worker=0,
         disk_cache_dir=None if disabled == "directory" else directory,
-        disk_cache_capacity_mbytes=0 if disabled == "capacity" else 100,
+        disk_cache_capacity_bytes=0 if disabled == "capacity" else 100,
     )
     data = b"uncached file"
     key = compute_blob_hash(data)
@@ -302,14 +302,14 @@ def test_uncached_file_upload_still_executes(tmp_path, disabled):
         assert post_program(client, program).json()["status"] == "CACHE_MISS"
 
 
-@pytest.mark.parametrize("size", [1048576, 1048577])
-def test_disk_cache_capacity_mbytes_uses_binary_megabytes(tmp_path, size):
+@pytest.mark.parametrize("size", [16, 17])
+def test_disk_cache_capacity_bytes(tmp_path, size):
     config = ServerConfig(
         sandbox="none",
         workers_per_gpu=1,
         max_requests_per_worker=0,
         disk_cache_dir=tmp_path,
-        disk_cache_capacity_mbytes=1,
+        disk_cache_capacity_bytes=16,
     )
     data = b"x" * size
     key = compute_blob_hash(data)
@@ -317,7 +317,7 @@ def test_disk_cache_capacity_mbytes_uses_binary_megabytes(tmp_path, size):
     with make_client(config) as client:
         assert post_program(client, program, {key: data}).json()["status"] == "COMPLETED"
         warm = post_program(client, program).json()
-        assert warm["status"] == ("COMPLETED" if size == 1048576 else "CACHE_MISS")
+        assert warm["status"] == ("COMPLETED" if size == 16 else "CACHE_MISS")
 
 
 @pytest.mark.parametrize(
@@ -451,16 +451,14 @@ def test_strict_json_and_unknown_instruction_are_400():
 def test_request_and_response_size_limits():
     with TestClient(
         create_app(
-            ServerConfig(sandbox="none", gpus=[0], max_request_mbytes=1),
+            ServerConfig(sandbox="none", gpus=[0], max_request_bytes=100),
             runtime_factory=fake_runtime_factory,
         )
     ) as client:
-        program = scalar_program()
-        program["instructions"][0]["source"] += "#" + "x" * 1048576
-        too_large = post_program(client, program)
+        too_large = post_program(client, scalar_program())
     assert too_large.status_code == 413
 
-    source = "def main():\n    return b'x' * 2097152\n"
+    source = "def main():\n    return b'x' * 1000\n"
     program = {
         "instructions": [
             {"op": "upload", "id": "fn_module", "kind": "module", "source": source},
@@ -476,7 +474,7 @@ def test_request_and_response_size_limits():
     }
     with TestClient(
         create_app(
-            ServerConfig(sandbox="none", gpus=[0], max_response_mbytes=1),
+            ServerConfig(sandbox="none", gpus=[0], max_response_bytes=300),
             runtime_factory=fake_runtime_factory,
         )
     ) as client:
@@ -503,10 +501,10 @@ def test_binary_response_uses_multipart():
 def test_stdout_stderr_and_output_limit_are_request_level():
     source = (
         "import sys\n"
-        "sys.stdout.write('x' * 400000)\n"
+        "print('load output')\n"
         "def main():\n"
-        "    sys.stdout.write('y' * 400000)\n"
-        "    sys.stderr.write('z' * 800000)\n"
+        "    print('run output')\n"
+        "    print('error output', file=sys.stderr)\n"
         "    return 1\n"
     )
     program = {
@@ -520,12 +518,12 @@ def test_stdout_stderr_and_output_limit_are_request_level():
             },
             {"op": "run", "id": "value", "fn": {"$ref": "fn"}},
         ],
-        "options": {"output_limit_mbytes": 0.5},
+        "options": {"output_limit_bytes": 8},
     }
     with make_client() as client:
         data = post_program(client, program).json()
-    assert data["stdout"] == "x" * 400000 + "y" * 124288 and data["stdout_truncated"] is True
-    assert data["stderr"] == "z" * 524288 and data["stderr_truncated"] is True
+    assert data["stdout"] == "load out" and data["stdout_truncated"] is True
+    assert data["stderr"] == "error ou" and data["stderr_truncated"] is True
 
 
 def test_timeout_and_worker_crash_statuses():
@@ -1221,13 +1219,13 @@ def test_server_supplies_file_collection_byte_limit():
     config = ServerConfig(
         sandbox="none",
         max_requests_per_worker=0,
-        max_response_mbytes=1,
+        max_response_bytes=4096,
     )
     source = """
 from pathlib import Path
 def make():
     Path("out").mkdir()
-    Path("out/large").write_bytes(b"x" * 2097152)
+    Path("out/large").write_bytes(b"x" * 8192)
     return 7
 """
     program = {
@@ -1246,11 +1244,11 @@ def make():
     assert body["status"] == "FAILED"
     assert body["results"] == {"kept": {"type": "integer", "value": 7}}
     assert body["error"]["kind"] == "serialization"
-    assert "max_response_mbytes" in body["error"]["message"]
+    assert "max_response_bytes" in body["error"]["message"]
 
 
 def test_file_return_still_obeys_final_serialized_response_cap():
-    source = 'from pathlib import Path\nPath("report").write_bytes(b"x" * 1048576)\n'
+    source = 'from pathlib import Path\nPath("report").write_bytes(b"x" * 4000)\n'
     program = {
         "instructions": [
             {"op": "upload", "kind": "module", "id": "module", "source": source},
@@ -1258,7 +1256,7 @@ def test_file_return_still_obeys_final_serialized_response_cap():
         ]
     }
     with make_client(
-        ServerConfig(sandbox="none", max_requests_per_worker=0, max_response_mbytes=1)
+        ServerConfig(sandbox="none", max_requests_per_worker=0, max_response_bytes=4096)
     ) as client:
         response = post_program(client, program)
     assert response.status_code == 500

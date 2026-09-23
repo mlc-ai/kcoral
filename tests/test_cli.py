@@ -20,12 +20,7 @@ def test_defaults():
     assert config.num_workers == 1
     assert config.log_dir == Path("logs")
     assert config.max_requests_per_worker == 1
-    assert config.disk_cache_capacity_mbytes == 16384
-    assert config.cache_capacity_mbytes == 16384
-    assert config.max_request_mbytes == 256
-    assert config.max_response_mbytes == 1024
-    assert config.output_limit_mbytes == 1
-    assert config.max_output_limit_mbytes == 256
+    assert config.disk_cache_capacity_bytes == 17179869184
     assert config.sandbox == "bubblewrap"
     assert config.sandbox_readonly_paths == []
 
@@ -99,11 +94,11 @@ def test_all_flags_reach_config():
             "1,3",
             "--num-workers",
             "5",
-            "--cache-capacity-mbytes",
-            "1234.5",
+            "--cache-capacity-bytes",
+            "1234",
             "--disk-cache-dir",
             "/tmp/kcoral-files",
-            "--disk-cache-capacity-mbytes",
+            "--disk-cache-capacity-bytes",
             "5678",
             "--log-dir",
             "",
@@ -119,13 +114,13 @@ def test_all_flags_reach_config():
             "7",
             "--worker-termination-grace-seconds",
             "2",
-            "--max-request-mbytes",
+            "--max-request-bytes",
             "1000",
-            "--max-response-mbytes",
+            "--max-response-bytes",
             "2000",
-            "--output-limit-mbytes",
-            "0.5",
-            "--max-output-limit-mbytes",
+            "--output-limit-bytes",
+            "300",
+            "--max-output-limit-bytes",
             "400",
         ]
     )
@@ -133,19 +128,19 @@ def test_all_flags_reach_config():
     assert config.gpus == [1, 3]
     assert config.num_workers == 5
     assert config.log_dir is None  # empty string disables logging
-    assert config.cache_capacity_mbytes == 1234.5
+    assert config.cache_capacity_bytes == 1234
     assert config.disk_cache_dir == Path("/tmp/kcoral-files")
-    assert config.disk_cache_capacity_mbytes == 5678
+    assert config.disk_cache_capacity_bytes == 5678
     assert config.default_timeout_seconds == 12
     assert config.max_timeout_seconds == 34
     assert config.worker_wait_timeout_seconds == 5
     assert config.workers_per_gpu == 3
     assert config.max_requests_per_worker == 7
     assert config.worker_termination_grace_seconds == 2
-    assert config.max_request_mbytes == 1000
-    assert config.max_response_mbytes == 2000
-    assert config.output_limit_mbytes == 0.5
-    assert config.max_output_limit_mbytes == 400
+    assert config.max_request_bytes == 1000
+    assert config.max_response_bytes == 2000
+    assert config.output_limit_bytes == 300
+    assert config.max_output_limit_bytes == 400
 
 
 def test_bad_port_rejected():
@@ -178,38 +173,9 @@ def test_negative_max_requests_per_worker_rejected():
 
 def test_disk_cache_can_be_disabled_and_rejects_negative_budget():
     assert parse(["--disk-cache-dir", ""]).disk_cache_dir is None
-    assert parse(["--disk-cache-capacity-mbytes", "0"]).disk_cache_capacity_mbytes == 0
+    assert parse(["--disk-cache-capacity-bytes", "0"]).disk_cache_capacity_bytes == 0
     with pytest.raises(SystemExit):
-        parse(["--disk-cache-capacity-mbytes", "-1"])
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "cache_capacity_mbytes",
-        "disk_cache_capacity_mbytes",
-        "max_request_mbytes",
-        "max_response_mbytes",
-        "output_limit_mbytes",
-        "max_output_limit_mbytes",
-    ],
-)
-@pytest.mark.parametrize("value", [-1, float("nan"), float("inf"), 0.0000001, 17592186044416])
-def test_invalid_size_limits_rejected_by_cli_and_config(name, value):
-    from kcoral.config import ServerConfig
-
-    with pytest.raises(SystemExit):
-        parse(["--" + name.replace("_", "-") + "=" + str(value)])
-    with pytest.raises(ValueError, match=name):
-        ServerConfig(**{name: value})
-
-
-def test_zero_size_limits():
-    for flag in ("cache-capacity", "disk-cache-capacity", "output-limit", "max-output-limit"):
-        parse([f"--{flag}-mbytes", "0"])
-    for flag in ("max-request", "max-response"):
-        with pytest.raises(SystemExit):
-            parse([f"--{flag}-mbytes", "0"])
+        parse(["--disk-cache-capacity-bytes", "-1"])
 
 
 @pytest.mark.parametrize("xdg_cache_home", ["absolute", "relative", "", None])

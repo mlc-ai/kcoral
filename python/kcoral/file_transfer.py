@@ -16,7 +16,7 @@ def _read_file(parent_fd: int, name: str, max_bytes: int) -> ReturnedFile:
         if not stat.S_ISREG(before.st_mode):
             raise ValueError(f"file return requires a regular file: {name!r}")
         if before.st_size > max_bytes:
-            raise ValueError("file return exceeds max_response_mbytes binary budget")
+            raise ValueError("file return exceeds max_response_bytes binary budget")
         # Never chase an append-only writer or allocate from an unbounded read.
         data = stream.read(before.st_size)
         after = os.fstat(stream.fileno())

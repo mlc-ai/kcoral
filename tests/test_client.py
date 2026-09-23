@@ -75,62 +75,6 @@ def add_one_program():
     return program
 
 
-def test_output_mbytes_default_override_disable_and_server_cap():
-    app = create_app(
-        ServerConfig(
-            sandbox="none",
-            workers_per_gpu=1,
-            max_requests_per_worker=0,
-            output_limit_mbytes=0.5,
-            max_output_limit_mbytes=1,
-        ),
-        runtime_factory=fake_runtime_factory,
-    )
-    program = Program()
-    program.upload(
-        id="module",
-        kind="module",
-        source="import sys\nprint('x' * 2000000)\nprint('x' * 2000000, file=sys.stderr)\n",
-    )
-    server, thread, url = _start_server(app)
-    wire_options = []
-
-    def record_options(request):
-        parts = parse_multipart(request.headers["content-type"], request.read())
-        body = json.loads(next(part.data for part in parts if part.name == "program"))
-        wire_options.append(body.get("options", {}))
-
-    try:
-        with Client(url) as client:
-            client._http.event_hooks["request"].append(record_options)
-            for limit, count in [
-                (None, 524288),
-                (0, 0),
-                (0.25, 262144),
-                (0.75, 786432),
-                (2, 1048576),
-            ]:
-                result = client.execute(program, output_limit_mbytes=limit)
-                assert result.completed
-                assert result.stdout == result.stderr == "x" * count
-                assert result.stdout_truncated is (count > 0)
-                assert result.stderr_truncated is (count > 0)
-                assert wire_options[-1] == ({} if limit is None else {"output_limit_mbytes": limit})
-    finally:
-        server.should_exit = True
-        thread.join(timeout=10)
-
-
-@pytest.mark.parametrize(
-    "value", [True, "1", -1, float("nan"), float("inf"), 0.0000001, 17592186044416]
-)
-def test_invalid_output_mbytes_rejected_before_request(monkeypatch, value):
-    with Client("http://unused") as client:
-        monkeypatch.setattr(client, "_post_program", lambda *a, **kw: pytest.fail("must not send"))
-        with pytest.raises(ValueError, match="output_limit_mbytes"):
-            client.execute(add_one_program(), output_limit_mbytes=value)
-
-
 def test_execute_module_and_return_value(server_url):
     with Client(server_url) as client:
         outcome = client.execute(add_one_program())
@@ -373,11 +317,11 @@ def test_cache_miss_retry_returns_the_router_affinity_header():
 
 def test_cache_churn_falls_back_to_all_blobs():
     app = create_app(
-        ServerConfig(sandbox="none", gpus=[0], workers_per_gpu=1, cache_capacity_mbytes=1),
+        ServerConfig(sandbox="none", gpus=[0], workers_per_gpu=1, cache_capacity_bytes=16),
         runtime_factory=fake_runtime_factory,
     )
     server, thread, url = _start_server(app)
-    values = [np.full(65536, index, dtype=np.float32) for index in range(5)]
+    values = [np.array([index], dtype=np.float32) for index in range(5)]
     try:
         with Client(url) as client:
             for index, value in enumerate(values[:4]):

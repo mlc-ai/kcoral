@@ -91,10 +91,10 @@ def test_definition_loading_and_validation(benchmark):
 def test_shared_and_benchmark_options(monkeypatch):
     monkeypatch.delenv("KCORAL_URL", raising=False)
     args = bench.parse_args(
-        "--host gpu.example --port 9000 --output-limit-mbytes 0.5 --out artifacts "
+        "--host gpu.example --port 9000 --output-limit-bytes 524288 --out artifacts "
         "-- kda/decode v0 --repo checkout --warmup 0 --repeat 2".split()
     )
-    assert args.url == "http://gpu.example:9000" and args.output_limit_mbytes == 0.5
+    assert args.url == "http://gpu.example:9000" and args.output_limit_bytes == 524288
     assert (args.workload, args.version, args.warmup, args.repeat) == ("kda/decode", "v0", 0, 2)
     assert str(args.repo) == "checkout" and str(args.out) == "artifacts"
     with pytest.raises(SystemExit) as error:

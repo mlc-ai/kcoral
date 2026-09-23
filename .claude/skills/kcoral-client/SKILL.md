@@ -83,7 +83,7 @@ Program.return_file(key=..., path=...) -> None    # str or Register resolving to
 Program.return_folder(key=..., path=...) -> None  # str or Register resolving to str
 
 Client(base_url, *, headers=None, connect_timeout_seconds=10)
-Client.execute(program, *, timeout_seconds=None, output_limit_mbytes=None) -> ProgramResult
+Client.execute(program, *, timeout_seconds=None, output_limit_bytes=None) -> ProgramResult
 Client.health() -> dict
 Client.target() -> dict   # e.g. {"arch": "sm_100a"}
 Client.close() -> None
@@ -220,7 +220,7 @@ by `benchmark` or your own measurement code.
 ## Outcomes
 
 - `options`: `timeout_seconds` (default 300, maximum 3600),
-  `output_limit_mbytes` (default 1 MiB per stream). Values above a maximum are
+  `output_limit_bytes` (default 1 MiB per stream). Values above a maximum are
   clamped. `stdout`/`stderr` come back with the response.
 - `COMPLETED` — every instruction ran; `results` holds the returned values.
 - `FAILED` — one instruction failed and the rest were skipped; returns that

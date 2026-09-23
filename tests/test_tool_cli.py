@@ -44,11 +44,11 @@ def test_shared_options_and_native_argument_boundary(monkeypatch, capsys):
     monkeypatch.setenv("LOCAL_VALUE", "copied")
     args, forwarded = cli.get_tool("python").parse_args(
         "--host gpu.example --port 9000 -e LOCAL_VALUE -e MODE=debug "
-        "--send experiment --output-limit-mbytes 0.5 -- check.py --host native".split()
+        "--send experiment --output-limit-bytes 524288 -- check.py --host native".split()
     )
     assert args.url == "http://gpu.example:9000"
     assert args.env == {"LOCAL_VALUE": "copied", "MODE": "debug"}
-    assert args.send == [Path("experiment")] and args.output_limit_mbytes == 0.5
+    assert args.send == [Path("experiment")] and args.output_limit_bytes == 524288
     assert forwarded == ["check.py", "--host", "native"]
     warning = capsys.readouterr().err
     assert "override KCORAL_URL" in warning and args.url in warning
@@ -58,7 +58,7 @@ def test_shared_options_and_native_argument_boundary(monkeypatch, capsys):
     "tool,arguments",
     [
         ("python", "-- -i check.py"),
-        ("python", "--output-limit-mbytes 0 -- check.py"),
+        ("python", "--output-limit-bytes 0 -- check.py"),
         ("python", "-e CUDA_VISIBLE_DEVICES=0 -- check.py"),
         ("ncu", "--out reports -- --export=custom -- python check.py"),
         ("run-iket", "--out reports -- profile"),
@@ -175,7 +175,8 @@ sys.exit(3)
 
 def test_capture_and_failure_paths(remote, tmp_path, capsys):
     assert (
-        cli.main("python", ["--output-limit-mbytes", "0.5", "--", "-c", "print('x' * 600000)"]) == 0
+        cli.main("python", ["--output-limit-bytes", "524288", "--", "-c", "print('x' * 600000)"])
+        == 0
     )
     output = capsys.readouterr()
     assert len(output.out) == 524288 and "truncated" in output.err
@@ -239,4 +240,4 @@ for tool in COMMANDS:
         env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "python")},
     )
     assert result.returncode == 0, result.stderr
-    assert "--output-limit-mbytes" in result.stdout
+    assert "--output-limit-bytes" in result.stdout

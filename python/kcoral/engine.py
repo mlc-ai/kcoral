@@ -14,7 +14,6 @@ from typing import IO, Any, Protocol
 
 from . import sandbox
 from .artifacts import ReturnedFile, ReturnedFolder
-from .config import mbytes_to_bytes
 from .errors import ExecutionError, GPUAccessViolation
 from .file_transfer import collect
 from .keys import compute_blob_hash
@@ -35,7 +34,7 @@ from .schemas import (
     normalize_file_path,
 )
 
-DEFAULT_OUTPUT_LIMIT_MBYTES = 1
+DEFAULT_OUTPUT_LIMIT_BYTES = 1024**2
 MAX_TRACEBACK_BYTES = 8192
 
 
@@ -444,10 +443,7 @@ class _ValueEncoder:
 
 
 def _output_limit(program: Program) -> int:
-    return mbytes_to_bytes(
-        program.options.get("output_limit_mbytes", DEFAULT_OUTPUT_LIMIT_MBYTES),
-        "output_limit_mbytes",
-    )
+    return int(program.options.get("output_limit_bytes", DEFAULT_OUTPUT_LIMIT_BYTES))
 
 
 @dataclass

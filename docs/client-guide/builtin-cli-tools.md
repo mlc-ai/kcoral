@@ -55,7 +55,7 @@ KCoral does not select a server unless a connection option or a nonempty
 | `--host HOST` | `127.0.0.1` when only `--port` is supplied | HTTP server hostname, IPv4 address, or IPv6 address. Supply the host without a scheme, port, or path; IPv6 brackets are optional. |
 | `--port PORT` | `8000` when only `--host` is supplied | HTTP server port, an integer from 1 through 65535. |
 | `--timeout SECONDS` | `300` | Positive integer execution deadline for each request, capped by the server's configured maximum. For `bench`, this applies separately to each workload request. |
-| `--output-limit-mbytes N` | `256` | Capture limit in MiB for **each** of stdout and stderr, capped by the server. One MiB is 1024² bytes. Fractions such as `0.5` are accepted; the limit must be at least one byte. Zero is not accepted by these CLI tools. |
+| `--output-limit-bytes N` | `268435456` (256 MiB) | Positive integer capture limit for **each** of stdout and stderr, capped by the server. Zero is not accepted by these CLI tools. |
 
 Select a server with an environment variable:
 

@@ -341,20 +341,14 @@ def test_stdout_and_stderr_are_captured_for_the_request():
 def test_output_limit_is_shared_across_the_request():
     program = Program(
         [
-            Upload(
-                "module",
-                "module",
-                source=(
-                    "print('a' * 262144, end='')\ndef main():\n    print('b' * 524288, end='')\n"
-                ),
-            ),
+            Upload("module", "module", source="print('12345')\ndef main():\n    print('67890')\n"),
             GetFunction("fn", ref("module"), "main"),
             Run("value", ref("fn"), []),
         ],
-        options={"output_limit_mbytes": 0.5},
+        options={"output_limit_bytes": 7},
     )
     outcome = execute_for_test(program, FakeRuntime(), UNSHARED_GPU)
-    assert outcome.stdout == "a" * 262144 + "b" * 262144 and outcome.stdout_truncated
+    assert outcome.stdout == "12345\n6" and outcome.stdout_truncated
 
 
 class RecordingLease:
