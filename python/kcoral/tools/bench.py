@@ -76,7 +76,7 @@ def build_request(directory, candidate, case, config, *, inputs, environment, fe
     module = program.upload(id="bundle", kind="module", source=Path(__file__).read_text())
     runner = program.get_function(id="runner", module=module, name="run")
     files = program.upload(
-        id="files", kind="module", source=Path(__file__).with_name("_worker.py").read_text()
+        id="files", kind="module", source=Path(__file__).with_name("_common.py").read_text()
     )
     unpack = program.get_function(id="unpack", module=files, name="unpack_inputs")
     collect = program.get_function(id="collect", module=files, name="collect_files")
@@ -135,8 +135,7 @@ def write_json(path, value):
 
 
 def main(argv):
-    from ._common import execute, require_completed
-    from ._inputs import pack_inputs
+    from ._common import execute, pack_inputs, require_completed
 
     args = parse_args(argv)
     summary = {

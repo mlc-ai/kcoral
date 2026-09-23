@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 from typing import Any, Literal
 
+from .config import mbytes_to_bytes
 from .errors import ValidationError
 from .keys import is_blob_hash
 
@@ -287,7 +288,7 @@ def expected_tensor_nbytes(dtype: str, shape: list[int]) -> int:
 def _parse_options(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValidationError("'options' must be an object")
-    _check_fields(value, {"timeout_seconds", "output_limit_bytes"}, set(), "options")
+    _check_fields(value, {"timeout_seconds", "output_limit_mbytes"}, set(), "options")
 
     options: dict[str, Any] = {}
     if "timeout_seconds" in value:
@@ -300,11 +301,13 @@ def _parse_options(value: Any) -> dict[str, Any]:
         ):
             raise ValidationError("'timeout_seconds' must be a finite positive number")
         options["timeout_seconds"] = float(timeout)
-    if "output_limit_bytes" in value:
-        output_limit = value["output_limit_bytes"]
-        if isinstance(output_limit, bool) or not isinstance(output_limit, int) or output_limit < 0:
-            raise ValidationError("'output_limit_bytes' must be a non-negative integer")
-        options["output_limit_bytes"] = output_limit
+    if "output_limit_mbytes" in value:
+        output_limit = value["output_limit_mbytes"]
+        try:
+            mbytes_to_bytes(output_limit, "output_limit_mbytes")
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        options["output_limit_mbytes"] = output_limit
     return options
 
 

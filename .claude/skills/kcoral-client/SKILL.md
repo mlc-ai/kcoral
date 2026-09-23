@@ -92,10 +92,6 @@ Client.close() -> None
 `Program` automatically generates an ID for each value-producing instruction.
 Use the optional `id` field to customize it.
 
-`output_limit_mbytes` is a per-stream capture limit in MiB (1024² bytes);
-fractions are accepted, `0` disables capture, and `None` uses the server default.
-The client converts it to the protocol field `options.output_limit_bytes`.
-
 The client derives `blob`, `dtype`, and `shape` from a tensor `value`. It sends
 no blob parts at first, retries a `CACHE_MISS` with the missing parts, and falls
 back to resending every local blob if the cache changes between the two
@@ -224,7 +220,7 @@ by `benchmark` or your own measurement code.
 ## Outcomes
 
 - `options`: `timeout_seconds` (default 300, maximum 3600),
-  `output_limit_bytes` (default 1 MiB per stream). Values above a maximum are
+  `output_limit_mbytes` (default 1 MiB per stream). Values above a maximum are
   clamped. `stdout`/`stderr` come back with the response.
 - `COMPLETED` — every instruction ran; `results` holds the returned values.
 - `FAILED` — one instruction failed and the rest were skipped; returns that

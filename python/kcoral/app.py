@@ -19,9 +19,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 from . import sandbox
-from ._units import mbytes_to_bytes
 from .cache import ByteCache, DiskFileCache
-from .config import ServerConfig
+from .config import ServerConfig, mbytes_to_bytes
 from .errors import ValidationError
 from .events import EventLogger
 from .health import HealthResponse
@@ -335,7 +334,7 @@ def create_app(
 
         program.max_return_bytes = max_response_bytes
         timeout = _resolve_timeout(program, config)
-        program.options["output_limit_bytes"] = _resolve_output_limit(program, config)
+        program.options["output_limit_mbytes"] = _resolve_output_limit(program, config)
         if events.enabled:  # describing the workload is the one cost worth a branch
             events.emit(
                 "request_accepted",
@@ -653,15 +652,10 @@ def _resolve_timeout(program: Program, config: ServerConfig) -> float:
     )
 
 
-def _resolve_output_limit(program: Program, config: ServerConfig) -> int:
+def _resolve_output_limit(program: Program, config: ServerConfig) -> float:
     return min(
-        int(
-            program.options.get(
-                "output_limit_bytes",
-                mbytes_to_bytes(config.output_limit_mbytes, "output_limit_mbytes"),
-            )
-        ),
-        mbytes_to_bytes(config.max_output_limit_mbytes, "max_output_limit_mbytes"),
+        program.options.get("output_limit_mbytes", config.output_limit_mbytes),
+        config.max_output_limit_mbytes,
     )
 
 

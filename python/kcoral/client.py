@@ -16,8 +16,8 @@ import httpx
 import ml_dtypes
 import numpy as np
 
-from ._units import mbytes_to_bytes
 from .artifacts import ReturnedFile, ReturnedFolder, validate_manifest
+from .config import mbytes_to_bytes
 from .keys import compute_blob_hash, is_blob_hash, verify_blob
 from .multipart import parse_multipart
 from .schemas import (
@@ -552,9 +552,8 @@ class Client:
         if timeout_seconds is not None:
             options["timeout_seconds"] = timeout_seconds
         if output_limit_mbytes is not None:
-            options["output_limit_bytes"] = mbytes_to_bytes(
-                output_limit_mbytes, "output_limit_mbytes"
-            )
+            mbytes_to_bytes(output_limit_mbytes, "output_limit_mbytes")
+            options["output_limit_mbytes"] = output_limit_mbytes
 
         body, binary_parts, route = self._post_program(
             program, options, include_blobs=set(), route=None

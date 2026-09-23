@@ -1,18 +1,18 @@
-"""Shared argument parsing, request construction, and output handling for tools."""
+"""Shared tool arguments, file transfers, and local and remote execution."""
 
 from __future__ import annotations
 
 import argparse
+import io
 import ipaddress
 import os
 import re
+import shutil
+import stat
+import subprocess
 import sys
-from pathlib import Path
-
-from .._units import mbytes_to_bytes
-from ..client import Client, Program
-from . import COMMANDS
-from ._inputs import pack_inputs, relative_path
+import tarfile
+from pathlib import Path, PurePosixPath
 
 
 def add_connection_args(parser):
@@ -43,6 +43,8 @@ def add_connection_args(parser):
 
 
 def validate_connection_args(parser, args):
+    from ..config import mbytes_to_bytes
+
     environment_url = os.environ.get("KCORAL_URL")
     if args.host is not None or args.port is not None:
         if args.url is not None:
@@ -84,6 +86,8 @@ def validate_connection_args(parser, args):
 
 
 def execute(args, program):
+    from ..client import Client
+
     with Client(args.url) as client:
         result = client.execute(
             program, timeout_seconds=args.timeout, output_limit_mbytes=args.output_limit_mbytes
@@ -194,11 +198,14 @@ def validate_profiler_args(parser, forwarded, *, managed, short, subcommand=None
 
 
 def build_program(args, tool, forwarded):
+    from ..client import Program
+    from . import COMMANDS
+
     program = Program()
     module = program.upload(
         id="tool_runner",
         kind="module",
-        source=Path(__file__).with_name("_worker.py").read_text(),
+        source=Path(__file__).read_text(),
     )
     runner = program.get_function(id="runner", module=module, name="run")
     definition = program.upload(
@@ -242,3 +249,119 @@ def run_tool(tool, args, forwarded):
         # Transport/protocol failures should have the same concise CLI presentation.
         print(f"kcoral run {tool}: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
+
+
+def relative_path(name):
+    path = PurePosixPath(name)
+    if not name or path.is_absolute() or ".." in path.parts or "\\" in name or not path.parts:
+        raise ValueError(f"expected a relative file path: {name!r}")
+    return path
+
+
+def pack_inputs(paths=()):
+    """Stable archives: preserve each selected file or directory's basename."""
+    buffer, names = io.BytesIO(), set()
+    with tarfile.open(fileobj=buffer, mode="w") as tar:
+
+        def add(name, data, executable=False):
+            name = relative_path(name).as_posix()
+            if name in names or any(
+                name.startswith(old + "/") or old.startswith(name + "/") for old in names
+            ):
+                raise ValueError(f"duplicate or conflicting input path: {name}")
+            names.add(name)
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o700 if executable else 0o600
+            tar.addfile(info, io.BytesIO(data))
+
+        for path in paths:
+            if path.is_symlink() or not path.exists():
+                raise ValueError(f"input must exist and not be a symlink: {path}")
+            directory = path.is_dir()
+            basename = path.resolve().name if directory else path.name
+            if not basename:
+                raise ValueError(f"input directory must have a name: {path}")
+            for entry in sorted(path.rglob("*")) if directory else [path]:
+                if "__pycache__" in entry.parts:
+                    continue
+                if entry.is_symlink():
+                    raise ValueError(f"symlink inputs are not supported: {entry}")
+                if entry.is_dir():
+                    continue
+                if not entry.is_file():
+                    raise ValueError(f"input is not a regular file: {entry}")
+                name = f"{basename}/{entry.relative_to(path).as_posix()}" if directory else basename
+                add(name, entry.read_bytes(), bool(entry.stat().st_mode & 0o111))
+    return buffer.getvalue()
+
+
+def unpack_inputs(archive, workdir):
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as tar:
+        for member in tar:
+            path = relative_path(member.name)
+            if not member.isfile():
+                raise ValueError(f"input is not a regular file: {member.name!r}")
+            destination = workdir.joinpath(*path.parts)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with tar.extractfile(member) as source, destination.open("xb") as target:
+                shutil.copyfileobj(source, target)
+            destination.chmod(0o700 if member.mode & 0o111 else 0o600)
+
+
+def collect_files(workdir, reports, paths):
+    missing = []
+    for name in paths:
+        source = workdir.joinpath(*relative_path(name).parts)
+        # Check every ancestor before traversing or reading the selection.
+        current = workdir
+        for part in source.relative_to(workdir).parts:
+            current /= part
+            if current.is_symlink():
+                raise ValueError(f"artifact is a symlink: {current}")
+        if not source.exists():
+            missing.append(name)
+            continue
+        entries = [source, *sorted(source.rglob("*"))] if source.is_dir() else [source]
+        for entry in entries:
+            mode = entry.lstat().st_mode
+            destination = reports / entry.relative_to(workdir)
+            if stat.S_ISDIR(mode):
+                destination.mkdir(parents=True, exist_ok=True)
+            elif stat.S_ISREG(mode):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(entry, destination)
+            else:
+                raise ValueError(f"artifact is not a regular file or directory: {entry}")
+    return missing
+
+
+def run(archive, tool_run, arguments, overrides, fetch):
+    workdir = Path("inputs").absolute()
+    reports = Path("outputs").absolute()
+    workdir.mkdir()
+    unpack_inputs(archive, workdir)
+    env = {**os.environ, **overrides, "KCORAL_DIR": str(workdir)}
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+
+    def execute(command, *, create_reports=True):
+        if create_reports:
+            reports.mkdir(exist_ok=True)
+        target = command[0]
+        if "/" in target and not os.path.isabs(target):
+            target = str(workdir / target)
+        executable = shutil.which(target, path=env["PATH"])
+        if executable is None:
+            raise RuntimeError(f"{command[0]} is not installed in the remote server environment")
+        # Stay in the worker's process group so its timeout also kills subprocesses.
+        return subprocess.run(
+            [executable, *command[1:]],
+            cwd=workdir,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        ).returncode
+
+    outcome = tool_run(arguments, env, reports, execute)
+    reports.mkdir(exist_ok=True)
+    outcome["missing"].extend(collect_files(workdir, reports, fetch))
+    return outcome

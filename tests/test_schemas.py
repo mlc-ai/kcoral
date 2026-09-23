@@ -43,7 +43,7 @@ def test_parse_complete_program():
                 {"op": "run", "id": "result", "fn": {"$ref": "kernel"}, "args": [1]},
                 {"op": "return", "key": "answer", "value": {"$ref": "result"}},
             ],
-            "options": {"timeout_seconds": 12, "output_limit_bytes": 0},
+            "options": {"timeout_seconds": 12, "output_limit_mbytes": 0},
         }
     )
     assert isinstance(program.instructions[0], Upload)
@@ -57,7 +57,7 @@ def test_parse_complete_program():
     assert program.instructions[3].fn == Ref("kernel")
     assert program.instructions[3].args == [1]
     assert program.instructions[4].value == Ref("result")
-    assert program.options == {"timeout_seconds": 12.0, "output_limit_bytes": 0}
+    assert program.options == {"timeout_seconds": 12.0, "output_limit_mbytes": 0}
     assert program.blob_uploads()[0].blob == TENSOR_HASH
 
 
@@ -399,8 +399,13 @@ def test_invalid_get_function_shapes_rejected(instruction, match):
         None,
         {"timeout_seconds": 0},
         {"timeout_seconds": float("inf")},
-        {"output_limit_bytes": -1},
-        {"output_limit_bytes": True},
+        {"output_limit_mbytes": -1},
+        {"output_limit_mbytes": True},
+        {"output_limit_mbytes": "1"},
+        {"output_limit_mbytes": float("nan")},
+        {"output_limit_mbytes": float("inf")},
+        {"output_limit_mbytes": 0.0000001},
+        {"output_limit_mbytes": 17592186044416},
         {"unknown": 1},
     ],
 )

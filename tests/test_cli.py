@@ -20,8 +20,8 @@ def test_defaults():
     assert config.num_workers == 1
     assert config.log_dir == Path("logs")
     assert config.max_requests_per_worker == 1
-    assert config.disk_cache_capacity_mbytes == 16 * 1024
-    assert config.cache_capacity_mbytes == 16 * 1024
+    assert config.disk_cache_capacity_mbytes == 16384
+    assert config.cache_capacity_mbytes == 16384
     assert config.max_request_mbytes == 256
     assert config.max_response_mbytes == 1024
     assert config.output_limit_mbytes == 1
@@ -194,7 +194,7 @@ def test_disk_cache_can_be_disabled_and_rejects_negative_budget():
         "max_output_limit_mbytes",
     ],
 )
-@pytest.mark.parametrize("value", [-1, float("nan"), float("inf"), 0.0000001, 2**44])
+@pytest.mark.parametrize("value", [-1, float("nan"), float("inf"), 0.0000001, 17592186044416])
 def test_invalid_size_limits_rejected_by_cli_and_config(name, value):
     from kcoral.config import ServerConfig
 

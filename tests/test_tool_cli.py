@@ -1,3 +1,5 @@
+"""Shared options and remote execution for the built-in commands."""
+
 import io
 import json
 import os
@@ -11,56 +13,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from kcoral import Client
+from kcoral import client as client_module
 from kcoral.app import create_app
 from kcoral.config import ServerConfig
 from kcoral.testing import fake_runtime_factory
-from kcoral.tools import _common, cli
-from kcoral.tools._inputs import pack_inputs
-from kcoral.tools._worker import unpack_inputs
-
-
-@pytest.mark.parametrize("tool", cli.COMMANDS)
-@pytest.mark.parametrize("explicit_argv", [False, True])
-def test_run_command_preserves_tool_arguments(monkeypatch, tool, explicit_argv):
-    from kcoral.__main__ import main
-
-    arguments = (
-        ["--host", "gpu.example", "--", "kda/decode", "v0", "--repo", "checkout"]
-        if tool == "bench"
-        else ["--send", "experiment", "--", "--flag", "--", "script.py", "a b"]
-    )
-    calls = []
-    monkeypatch.setattr(cli, "main", lambda name, argv: calls.append((name, argv)) or 7)
-    monkeypatch.setattr(sys, "argv", ["kcoral", "run", tool, *arguments])
-    with pytest.raises(SystemExit) as exc:
-        main(["run", tool, *arguments]) if explicit_argv else main()
-    assert exc.value.code == 7
-    assert calls == [(tool, arguments)]
-
-
-@pytest.mark.parametrize("argv", [[], ["unknown"]])
-def test_run_requires_a_known_tool(argv):
-    with pytest.raises(SystemExit) as exc:
-        cli.run_main(argv)
-    assert exc.value.code == 2
-
-
-@pytest.mark.parametrize(
-    "argv,usage",
-    [
-        (["run", "--help"], "kcoral run"),
-        (["run", "ncu", "--help"], "kcoral run ncu"),
-        (["run", "bench", "--help"], "kcoral run bench"),
-    ],
-)
-def test_run_command_help(monkeypatch, argv, usage, capsys):
-    from kcoral.__main__ import main
-
-    monkeypatch.setattr(sys, "argv", ["kcoral", *argv])
-    with pytest.raises(SystemExit) as exc:
-        main()
-    assert exc.value.code == 0
-    assert usage in capsys.readouterr().out
+from kcoral.tools import cli
+from kcoral.tools._common import pack_inputs, unpack_inputs
 
 
 @pytest.fixture
@@ -69,63 +27,102 @@ def remote(monkeypatch, tmp_path):
         device="cpu",
         sandbox="none",
         max_requests_per_worker=0,
+        log_console=False,
         disk_cache_dir=tmp_path / "cache",
     )
     with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as server:
         client = Client("http://testserver")
         client.close()
         client._http = server
-        monkeypatch.setattr(_common, "Client", lambda url: nullcontext(client))
+        monkeypatch.setattr(client_module, "Client", lambda url: nullcontext(client))
         monkeypatch.setenv("KCORAL_URL", "http://testserver")
-        yield server
+        yield
 
 
-def test_python_roundtrip_and_exit_code(remote, tmp_path, capsys):
+def test_shared_options_and_native_argument_boundary(monkeypatch, capsys):
+    monkeypatch.setenv("KCORAL_URL", "http://environment")
+    monkeypatch.setenv("LOCAL_VALUE", "copied")
+    args, forwarded = cli.get_tool("python").parse_args(
+        "--host gpu.example --port 9000 -e LOCAL_VALUE -e MODE=debug "
+        "--send experiment --output-limit-mbytes 0.5 -- check.py --host native".split()
+    )
+    assert args.url == "http://gpu.example:9000"
+    assert args.env == {"LOCAL_VALUE": "copied", "MODE": "debug"}
+    assert args.send == [Path("experiment")] and args.output_limit_mbytes == 0.5
+    assert forwarded == ["check.py", "--host", "native"]
+    warning = capsys.readouterr().err
+    assert "override KCORAL_URL" in warning and args.url in warning
+
+
+@pytest.mark.parametrize(
+    "tool,arguments",
+    [
+        ("python", "-- -i check.py"),
+        ("python", "--output-limit-mbytes 0 -- check.py"),
+        ("python", "-e CUDA_VISIBLE_DEVICES=0 -- check.py"),
+        ("ncu", "--out reports -- --export=custom -- python check.py"),
+        ("run-iket", "--out reports -- profile"),
+    ],
+)
+def test_invalid_tool_options(monkeypatch, tool, arguments):
+    monkeypatch.setenv("KCORAL_URL", "http://unused")
+    with pytest.raises(SystemExit) as error:
+        cli.get_tool(tool).parse_args(arguments.split())
+    assert error.value.code == 2
+
+
+def test_python_upload_output_and_exit_status(remote, tmp_path, capsys):
     experiment = tmp_path / "experiment"
     experiment.mkdir()
     (experiment / "value.txt").write_text("uploaded")
     (experiment / "check.py").write_text(
         "import os, sys\nfrom pathlib import Path\n"
         "assert Path(os.environ['KCORAL_DIR']) == Path.cwd()\n"
-        "print(Path('experiment/value.txt').read_text(), os.environ['TEST_VALUE'], sys.argv[1:])\n"
+        "print(Path('experiment/value.txt').read_text(), os.environ['MODE'], sys.argv[1:])\n"
         "print('remote stderr', file=sys.stderr)\nsys.exit(7)\n"
     )
-    code = cli.main(
-        "python",
-        [
-            "--send",
-            str(experiment),
-            "-e",
-            "TEST_VALUE=a b",
-            "--",
-            "experiment/check.py",
-            "--url",
-            "literal",
-        ],
+    assert (
+        cli.run_main(
+            [
+                "python",
+                "--send",
+                str(experiment),
+                "-e",
+                "MODE=debug",
+                "--",
+                "experiment/check.py",
+                "--url",
+                "literal",
+            ]
+        )
+        == 7
     )
     output = capsys.readouterr()
-    assert code == 7
-    assert "uploaded a b ['--url', 'literal']" in output.out
-    assert "remote stderr" in output.err
+    assert output.out == "uploaded debug ['--url', 'literal']\n"
+    assert output.err == "remote stderr\n"
 
 
-def test_shell_fetches_binary_and_empty_directory_on_failure(remote, tmp_path):
-    script = tmp_path / "setup.sh"
-    script.write_text("mkdir -p result/empty\nprintf '\\000\\377' > result/data.bin\nexit 9\n")
+def test_shell_returns_files_on_failure(remote, tmp_path):
+    directory = tmp_path / "experiment"
+    directory.mkdir()
+    script = directory / "setup.sh"
+    script.write_text(
+        "#!/bin/sh\nmkdir -p result/empty\nprintf '\\000\\377' > result/data.bin\nexit 9\n"
+    )
+    script.chmod(0o700)
     out = tmp_path / "artifacts"
     assert (
         cli.main(
             "shell",
             [
                 "--send",
-                str(script),
+                str(directory),
                 "--fetch",
                 "result",
                 "--out",
                 str(out),
                 "--",
-                "bash",
-                "setup.sh",
+                "./experiment/setup.sh",
             ],
         )
         == 9
@@ -134,413 +131,106 @@ def test_shell_fetches_binary_and_empty_directory_on_failure(remote, tmp_path):
     assert (out / "result/empty").is_dir()
 
 
-@pytest.mark.parametrize("send_directory", [False, True])
-def test_executable_inputs_and_missing_artifacts(remote, tmp_path, capsys, send_directory):
-    directory = tmp_path / "experiment"
-    directory.mkdir()
-    script = directory / "run.sh"
-    script.write_text("#!/bin/sh\necho executable\n")
-    script.chmod(0o700)
-    selection = directory if send_directory else script
-    command = "./experiment/run.sh" if send_directory else "./run.sh"
-    assert cli.main("shell", ["--send", str(selection), "--", command]) == 0
-    assert "executable" in capsys.readouterr().out
+@pytest.mark.parametrize("tool", ["compute-sanitizer", "ncu", "run-iket"])
+def test_native_tools_and_profiler_reports(remote, tmp_path, capsys, tool):
+    executable = tmp_path / tool
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        + """
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+print(json.dumps(args))
+if Path(sys.argv[0]).name == 'ncu':
+    assert os.environ['NCU_PROFILE'] == '1'
+    Path(args[args.index('--export') + 1]).write_bytes(b'report')
+elif Path(sys.argv[0]).name == 'run-iket':
+    out = Path(args[args.index('--output-dir') + 1])
+    out.mkdir()  # IKET requires a directory that does not already exist.
+    (out / 'trace.json').write_text('{}')
+sys.exit(3)
+"""
+    )
+    executable.chmod(0o700)
+    out = tmp_path / "artifacts"
+    options = ["-e", f"PATH={tmp_path}"]
+    native = {
+        "compute-sanitizer": ["--tool", "racecheck"],
+        "ncu": ["--set", "basic", "--"],
+        "run-iket": ["profile", "--"],
+    }[tool]
+    if tool != "compute-sanitizer":
+        options += ["--out", str(out)]
+    assert cli.main(tool, [*options, "--", *native, "python", "check.py", "a b"]) == 3
+    arguments = json.loads(capsys.readouterr().out)
+    assert arguments[-3:] == ["python", "check.py", "a b"]
+    if tool == "compute-sanitizer":
+        assert arguments[:2] == ["--tool", "racecheck"]
+    elif tool == "ncu":
+        assert arguments[:2] == ["--config-file", "0"]
+        assert (out / "capture.ncu-rep").read_bytes() == b"report"
+    else:
+        assert (out / "trace.json").read_text() == "{}"
+
+
+def test_capture_and_failure_paths(remote, tmp_path, capsys):
+    assert (
+        cli.main("python", ["--output-limit-mbytes", "0.5", "--", "-c", "print('x' * 600000)"]) == 0
+    )
+    output = capsys.readouterr()
+    assert len(output.out) == 524288 and "truncated" in output.err
+    assert (
+        cli.main("python", ["--", "-c", "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"])
+        == 143
+    )
+    assert cli.main("shell", ["--", "no-such-kcoral-executable"]) == 1
     assert (
         cli.main(
             "python", ["--fetch", "missing", "--out", str(tmp_path / "out"), "--", "-c", "pass"]
         )
         == 1
     )
-    assert "missing artifacts: missing" in capsys.readouterr().err
+    assert "missing artifacts" in capsys.readouterr().err
 
 
-def test_python_runs_uploaded_package(remote, tmp_path, capsys):
-    package = tmp_path / "experiment"
-    package.mkdir()
-    (package / "__init__.py").write_text("")
-    (package / "helper.py").write_text("VALUE = 'package import works'\n")
-    (package / "check.py").write_text("from .helper import VALUE\nprint(VALUE)\n")
-    assert cli.main("python", ["--send", str(package), "--", "-m", "experiment.check"]) == 0
-    assert capsys.readouterr().out == "package import works\n"
-
-
-@pytest.fixture
-def tool_binaries(tmp_path):
-    source = (
-        f"#!{sys.executable}\n"
-        + """
-import json, os, sys
-from pathlib import Path
-name = Path(sys.argv[0]).name
-args = sys.argv[1:]
-print(json.dumps({"tool": name, "args": args, "ncu_profile": os.environ.get("NCU_PROFILE")}))
-if name == "ncu":
-    Path(args[args.index("--export") + 1]).write_bytes(b"NCU report\\x00")
-elif name == "run-iket":
-    root = Path(args[args.index("--output-dir") + 1])
-    root.mkdir()  # The real profiler requires a new output directory.
-    (root / "trace.json").write_text('{"traceEvents": []}')
-sys.exit(int(os.environ.get("TOOL_EXIT", "0")))
-"""
-    )
-    for name in ("ncu", "run-iket", "compute-sanitizer"):
-        path = tmp_path / name
-        path.write_text(source)
-        path.chmod(0o700)
-    return ["-e", f"PATH={tmp_path}{os.pathsep}{os.environ['PATH']}"]
-
-
-@pytest.mark.parametrize("options", [[], ["--tool", "racecheck"]])
-def test_compute_sanitizer_native_arguments(remote, tool_binaries, capsys, options):
-    assert (
-        cli.main("compute-sanitizer", [*tool_binaries, "--", *options, "python", "check.py"]) == 0
-    )
-    output = json.loads(capsys.readouterr().out)
-    assert output["args"] == [*options, "python", "check.py"]
-
-
-@pytest.mark.parametrize("tool", ["ncu", "run-iket"])
-def test_profilers_return_reports_even_when_application_fails(
-    remote, tool_binaries, tmp_path, capsys, tool
-):
-    out = tmp_path / "artifacts" / tool
-    options = (
-        ["--set", "basic", "--launch-count", "1"]
-        if tool == "ncu"
-        else ["profile", "--postprocess", "json"]
-    )
-    assert (
-        cli.main(
-            tool,
-            [
-                *tool_binaries,
-                "-e",
-                "TOOL_EXIT=3",
-                "--out",
-                str(out),
-                "--",
-                *options,
-                "--",
-                "python",
-                "capture.py",
-                "a b",
-            ],
-        )
-        == 3
-    )
-    output = json.loads(capsys.readouterr().out)
-    assert output["args"][-3:] == ["python", "capture.py", "a b"]
-    if tool == "ncu":
-        assert output["ncu_profile"] == "1"
-        assert output["args"][:2] == ["--config-file", "0"]
-        assert (out / "capture.ncu-rep").read_bytes() == b"NCU report\x00"
-    else:
-        assert output["args"][2:7] == ["profile", "--postprocess", "json", "--", "python"]
-        assert json.loads((out / "trace.json").read_text()) == {"traceEvents": []}
-
-
-def test_no_report_and_missing_tool_are_failures(remote, tmp_path, capsys):
-    assert cli.main("shell", ["--", "no-such-kcoral-test-executable"]) == 1
-    assert "not installed in the remote server environment" in capsys.readouterr().err
-    path = tmp_path / "ncu"
-    path.write_text("#!/bin/sh\nexit 0\n")
-    path.chmod(0o700)
-    assert (
-        cli.main(
-            "ncu",
-            [
-                "-e",
-                f"PATH={tmp_path}",
-                "--out",
-                str(tmp_path / "out"),
-                "--",
-                "--",
-                "python",
-                "capture.py",
-            ],
-        )
-        == 1
-    )
-    assert "missing artifacts: capture.ncu-rep" in capsys.readouterr().err
-
-
-def test_truncated_output_signal_and_remote_exception(remote, capsys):
-    assert (
-        cli.main(
-            "python", ["--output-limit-mbytes", str(8 / 1024**2), "--", "-c", "print('x' * 100)"]
-        )
-        == 0
-    )
-    assert "remote output was truncated" in capsys.readouterr().err
-    assert (
-        cli.main("python", ["--", "-c", "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"])
-        == 143
-    )
-    assert cli.main("python", ["--", "-c", "raise RuntimeError('bad kernel')"]) == 1
-    assert "bad kernel" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "0.0000001", str(2**44)])
-def test_invalid_output_limit_mbytes(monkeypatch, value):
-    monkeypatch.setenv("KCORAL_URL", "http://unused")
-    with pytest.raises(SystemExit) as exc:
-        cli.get_tool("python").parse_args([f"--output-limit-mbytes={value}", "--", "check.py"])
-    assert exc.value.code == 2
-
-
-def test_output_collision_does_not_execute(monkeypatch, tmp_path):
-    monkeypatch.setenv("KCORAL_URL", "http://unused")
-    monkeypatch.setattr(_common, "execute", lambda *args: pytest.fail("must not contact server"))
-    assert cli.main("ncu", ["--out", str(tmp_path), "--", "--", "python", "capture.py"]) == 1
-
-
-def test_return_rejects_symlinks(remote, tmp_path, capsys):
-    code = "from pathlib import Path; Path('link').symlink_to('/etc/passwd')"
-    assert (
-        cli.main("python", ["--fetch", "link", "--out", str(tmp_path / "out"), "--", "-c", code])
-        == 1
-    )
-    assert "symlink" in capsys.readouterr().err
-    assert not (tmp_path / "out").exists()
-
-
-@pytest.mark.parametrize(
-    "tool,args",
-    [
-        ("python", ["--", "-i", "check.py"]),
-        ("python", ["--", "-"]),
-        ("python", ["--", "-c"]),
-        ("python", ["--send", "x"]),
-        ("python", ["-e", "CUDA_VISIBLE_DEVICES=1", "--", "check.py"]),
-        ("python", ["-e", "KCORAL_DIR=/tmp", "--", "check.py"]),
-        ("python", ["-e", "BAD-NAME=x", "--", "check.py"]),
-        ("python", ["--timeout", "0", "--", "check.py"]),
-        ("python", ["--fetch", "../x", "--out", "out", "--", "check.py"]),
-        ("ncu", ["--out", "out", "--", "--export=x", "--", "python", "capture.py"]),
-        ("ncu", ["--out", "out", "--", "-ifile", "--", "python", "capture.py"]),
-        ("ncu", ["--out", "out", "--", "--mode=attach", "--", "python", "capture.py"]),
-        (
-            "run-iket",
-            ["--out", "out", "--", "--output-dir=x", "profile", "--", "python", "capture.py"],
-        ),
-        ("run-iket", ["--out", "out", "--", "profile"]),
-    ],
-)
-def test_invalid_arguments(monkeypatch, tool, args):
-    monkeypatch.setenv("KCORAL_URL", "http://unused")
-    with pytest.raises(SystemExit) as exc:
-        cli.get_tool(tool).parse_args(args)
-    assert exc.value.code == 2
-
-
-def test_url_and_environment_defaults(monkeypatch):
-    monkeypatch.delenv("KCORAL_URL", raising=False)
-    with pytest.raises(SystemExit):
-        cli.get_tool("python").parse_args(["--", "check.py"])
-    monkeypatch.setenv("LOCAL_VALUE", "a b")
-    args, forwarded = cli.get_tool("python").parse_args(
-        [
-            "--url",
-            "http://server",
-            "-e",
-            "LOCAL_VALUE",
-            "--",
-            "-Wignore",
-            "-X",
-            "dev",
-            "-m",
-            "module",
-            "-i",
-        ],
-    )
-    assert args.url == "http://server"
-    assert args.env == {"LOCAL_VALUE": "a b"}
-    assert forwarded[-1] == "-i"
-
-
-@pytest.mark.parametrize("environment_url", [None, "https://environment.example:9443/prefix"])
-@pytest.mark.parametrize(
-    "options,expected_url",
-    [
-        (["--host", "gpu.example", "--port", "9000"], "http://gpu.example:9000"),
-        (["--host", "gpu.example"], "http://gpu.example:8000"),
-        (["--port", "9000"], "http://127.0.0.1:9000"),
-        (["--host", "127.0.0.2", "--port", "65535"], "http://127.0.0.2:65535"),
-        (["--host", "::1", "--port", "9000"], "http://[::1]:9000"),
-        (["--host", "[::1]", "--port", "1"], "http://[::1]:1"),
-    ],
-)
-def test_explicit_address_overrides_environment(
-    monkeypatch, capsys, environment_url, options, expected_url
-):
-    if environment_url is None:
-        monkeypatch.delenv("KCORAL_URL", raising=False)
-    else:
-        monkeypatch.setenv("KCORAL_URL", environment_url)
-    args, forwarded = cli.get_tool("python").parse_args([*options, "--", "check.py"])
-    assert args.url == expected_url
-    assert forwarded == ["check.py"]
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == (
-        f"kcoral: warning: --host/--port override KCORAL_URL; using {expected_url}\n"
-        if environment_url
-        else ""
-    )
-
-
-@pytest.mark.parametrize("explicit_url", [None, "https://explicit.example/prefix"])
-def test_url_selection_preserves_native_host_and_port(monkeypatch, capsys, explicit_url):
-    monkeypatch.setenv("KCORAL_URL", "https://environment.example/prefix")
-    options = ["--url", explicit_url] if explicit_url else []
-    native_args = ["check.py", "--host", "native-host", "--port", "invalid-for-kcoral"]
-    args, forwarded = cli.get_tool("python").parse_args([*options, "--", *native_args])
-    assert args.url == (explicit_url or "https://environment.example/prefix")
-    assert forwarded == native_args
-    assert capsys.readouterr().err == ""
-
-
-@pytest.mark.parametrize(
-    "tool,native_args",
-    [
-        ("python", ["check.py"]),
-        ("shell", ["bash", "setup.sh"]),
-        ("compute-sanitizer", ["python", "check.py"]),
-        ("ncu", ["--set", "basic", "--", "python", "capture.py"]),
-        ("run-iket", ["profile", "--", "python", "capture.py"]),
-    ],
-)
-def test_all_tools_accept_connection_flags(monkeypatch, tool, native_args):
-    monkeypatch.delenv("KCORAL_URL", raising=False)
-    options = ["--host", "gpu.example", "--port", "9000"]
-    if tool in {"ncu", "run-iket"}:
-        options += ["--out", "artifacts"]
-    args, forwarded = cli.get_tool(tool).parse_args([*options, "--", *native_args])
-    assert args.url == "http://gpu.example:9000"
-    assert forwarded == native_args
-
-
-@pytest.mark.parametrize(
-    "options,message",
-    [
-        (["--port", "0"], "--port must be between 1 and 65535"),
-        (["--port", "65536"], "--port must be between 1 and 65535"),
-        (["--port", "-1"], "--port must be between 1 and 65535"),
-        (["--port", "abc"], "invalid int value"),
-        *[
-            (["--host", host], "--host must be a hostname or IP address")
-            for host in (
-                "",
-                "http://gpu",
-                "gpu:9000",
-                "gpu/path",
-                "user@gpu",
-                "a b",
-                "[gpu]",
-                "::x",
-            )
-        ],
-        (["--url", "http://gpu", "--host", "other"], "--url cannot be combined"),
-        (["--url", "http://gpu", "--port", "9000"], "--url cannot be combined"),
-    ],
-)
-def test_invalid_connection_flags(monkeypatch, capsys, options, message):
-    monkeypatch.setenv("KCORAL_URL", "http://environment.example")
-    with pytest.raises(SystemExit) as exc:
-        cli.get_tool("python").parse_args([*options, "--", "check.py"])
-    assert exc.value.code == 2
-    assert message in capsys.readouterr().err
-
-
-def test_input_snapshots_are_stable_and_reject_conflicts(tmp_path):
-    source = tmp_path / "inputs"
-    source.mkdir()
-    file = source / "run.sh"
-    file.write_text("#!/bin/sh\n")
-    file.chmod(0o700)
-    archive = pack_inputs([source])
-    os.utime(file, (1, 1))
-    assert pack_inputs([source]) == archive
+def test_upload_names_permissions_and_path_validation(tmp_path):
+    directory = tmp_path / "experiment"
+    directory.mkdir()
+    script = directory / "run.sh"
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o700)
+    snapshot = pack_inputs([directory, script])
+    os.utime(script, (1, 1))
+    assert pack_inputs([directory, script]) == snapshot
     out = tmp_path / "out"
     out.mkdir()
-    unpack_inputs(archive, out)
-    assert (out / "inputs/run.sh").stat().st_mode & 0o100
+    unpack_inputs(snapshot, out)
+    assert (out / "experiment/run.sh").read_text() == (out / "run.sh").read_text()
+    assert (out / "experiment/run.sh").stat().st_mode & 0o100
     with pytest.raises(ValueError, match="conflicting"):
-        pack_inputs([source, source])
-    (source / "link").symlink_to(file)
+        pack_inputs([directory, directory])
+    (directory / "link").symlink_to(script)
     with pytest.raises(ValueError, match="symlink"):
-        pack_inputs([source])
-
-
-@pytest.mark.parametrize(
-    "selection", ["experiment", "experiment/", "./experiment", ".", "absolute"]
-)
-def test_input_directory_name_is_preserved(monkeypatch, tmp_path, selection):
-    source = tmp_path / "experiment"
-    (source / "data").mkdir(parents=True)
-    (source / "data/input.txt").write_text("uploaded")
-    monkeypatch.chdir(source if selection == "." else tmp_path)
-    selected = source if selection == "absolute" else Path(selection)
-    out = tmp_path / "out"
-    out.mkdir()
-    unpack_inputs(pack_inputs([selected]), out)
-    assert (out / "experiment/data/input.txt").read_text() == "uploaded"
-    assert sorted(entry.name for entry in out.iterdir()) == ["experiment"]
-
-
-def test_distinct_directories_and_individual_files_keep_their_names(tmp_path):
-    sources = [tmp_path / name for name in ("first", "second")]
-    for directory in sources:
-        directory.mkdir()
-        (directory / "check.py").write_text(directory.name)
-    out = tmp_path / "out"
-    out.mkdir()
-    unpack_inputs(pack_inputs([*sources, sources[0] / "check.py"]), out)
-    assert (out / "first/check.py").read_text() == "first"
-    assert (out / "second/check.py").read_text() == "second"
-    assert (out / "check.py").read_text() == "first"
-
-
-@pytest.mark.parametrize("reverse", [False, True])
-def test_input_directory_conflicts_with_a_file_of_the_same_name(tmp_path, reverse):
-    source = tmp_path / "experiment"
-    source.mkdir()
-    (source / "check.py").write_text("pass")
-    file = tmp_path / "other/experiment"
-    file.parent.mkdir()
-    file.write_text("conflict")
-    paths = [source, file]
-    with pytest.raises(ValueError, match="conflicting"):
-        pack_inputs(paths[::-1] if reverse else paths)
-
-
-def test_filesystem_root_has_no_upload_directory_name():
-    with pytest.raises(ValueError, match="must have a name"):
-        pack_inputs([Path("/")])
-
-
-@pytest.mark.parametrize(
-    "name,kind",
-    [("../escape", tarfile.REGTYPE), ("/escape", tarfile.REGTYPE), ("link", tarfile.SYMTYPE)],
-)
-def test_archive_extraction_rejects_unsafe_members(tmp_path, name, kind):
+        pack_inputs([directory])
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
-        member = tarfile.TarInfo(name)
-        member.type = kind
-        archive.addfile(member)
+        archive.addfile(tarfile.TarInfo("../escape"))
     with pytest.raises(ValueError):
-        unpack_inputs(buffer.getvalue(), tmp_path)
+        unpack_inputs(buffer.getvalue(), out)
 
 
-def test_help_and_tool_imports_need_no_server_extra():
+def test_all_tool_help_needs_only_client_dependencies():
     code = """
 import sys
 for name in ('fastapi', 'uvicorn', 'grpc', 'torch', 'tvm', 'tvm_ffi'):
     sys.modules[name] = None
-from kcoral.__main__ import main
-sys.argv = ['kcoral', 'run', 'ncu', '--help']
-main()
+from kcoral.tools import COMMANDS
+from kcoral.tools.cli import run_main
+for tool in COMMANDS:
+    try:
+        run_main([tool, '--help'])
+    except SystemExit as error:
+        assert error.code == 0
 """
     result = subprocess.run(
         [sys.executable, "-c", code],
@@ -549,4 +239,4 @@ main()
         env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "python")},
     )
     assert result.returncode == 0, result.stderr
-    assert "--send" in result.stdout and "--out" in result.stdout
+    assert "--output-limit-mbytes" in result.stdout

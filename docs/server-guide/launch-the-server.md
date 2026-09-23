@@ -147,8 +147,7 @@ GPU lease. It defaults to 5 minutes and is capped at 15 minutes, so a long queue
 wait does not give a running program a longer execution budget.
 
 Client arguments `timeout_seconds` and `output_limit_mbytes` override their
-respective defaults, up to these server maximums. The client converts MiB to
-bytes for the protocol field `options.output_limit_bytes`. See [protocol options](../client-guide/protocol.md#options)
+respective defaults, up to these server maximums. See [protocol options](../client-guide/protocol.md#options)
 for clamping and [errors](../client-guide/protocol.md#errors) for request failures.
 
 ### File upload cache

@@ -82,7 +82,7 @@ def test_function_names_do_not_collide_with_generated_dispatcher(server_url):
 def test_execution_results_and_failures(server_url):
     with Client(server_url) as client:
 
-        @client.function(timeout=12, output_limit_mbytes=1 / 1024, cpu_only=True)
+        @client.function(timeout=12, output_limit_mbytes=1, cpu_only=True)
         def report(value):
             import sys
 
