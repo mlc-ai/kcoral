@@ -68,6 +68,7 @@ class GPURuntime:
         _require_torch_and_ffi()
         self._seeded_fnames: list[str] = []  # linecache keys to clear on reset
         _warm_up()
+        self._cupti_guard_used = False
         self._process_state = process_state.snapshot()
         self._request_libraries: list[LoadedLibrary] = []
 
@@ -166,6 +167,7 @@ class GPURuntime:
         domains = (cupti.CallbackDomain.RUNTIME_API, cupti.CallbackDomain.DRIVER_API)
         try:
             subscriber = cupti.subscribe(record_first_call, 0)
+            self._cupti_guard_used = True
             for domain in domains:
                 cupti.enable_domain(1, subscriber, domain)
         except cupti.cuptiError as exc:
@@ -222,6 +224,14 @@ class GPURuntime:
         # replace this worker instead of returning its context to the pool.
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
+        if self._cupti_guard_used:
+            # Unsubscribe stops callbacks but leaves CUPTI helper threads alive.
+            # Finalize only after GPU work is drained.
+            # The built-in timer already finalizes its own activity session.
+            from cupti import cupti
+
+            cupti.finalize()
+            self._cupti_guard_used = False
 
 
 def _call_site(frames: list[traceback.FrameSummary]) -> str:
