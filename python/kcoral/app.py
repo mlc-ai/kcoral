@@ -23,12 +23,14 @@ from .cache import ByteCache, DiskFileCache
 from .config import ServerConfig
 from .errors import ValidationError
 from .events import EventLogger
+from .folder_archive import archive_files
 from .health import HealthResponse
 from .keys import is_blob_hash, verify_blob
 from .multipart import MultipartPart, encode_multipart, parse_multipart
 from .pool import PoolBusy, SubmitOutcome, WorkerPool
 from .schemas import (
     FileUpload,
+    FolderUpload,
     Program,
     ProgramOutcome,
     Upload,
@@ -535,8 +537,10 @@ def _parse_execute_request(
     if unreferenced:
         raise ValidationError(f"unreferenced blob part(s): {', '.join(sorted(unreferenced))}")
 
-    file_keys = {upload.blob for upload in uploads if isinstance(upload, FileUpload)}
-    memory_keys = {upload.blob for upload in uploads if not isinstance(upload, FileUpload)}
+    file_keys = {
+        upload.blob for upload in uploads if isinstance(upload, (FileUpload, FolderUpload))
+    }
+    memory_keys = {upload.blob for upload in uploads if isinstance(upload, Upload)}
     for blob_hash, data in supplied_blobs.items():
         if blob_hash in memory_keys:
             cache.put(blob_hash, data)
@@ -569,7 +573,30 @@ def _parse_execute_request(
                 )
     if missing:
         raise _CacheMiss(missing)
+    _validate_folder_uploads(program)
     return program, [key for key in referenced_blobs if key in memory_keys], program_bytes
+
+
+def _validate_folder_uploads(program: Program) -> None:
+    """Reject malformed archives and cross-upload path conflicts before execution."""
+    from .schemas import normalize_file_path, validate_and_add_file_paths
+
+    paths = []
+    archives = {}
+    try:
+        for instruction in program.instructions:
+            if isinstance(instruction, FileUpload):
+                paths.append(instruction.path)
+            elif isinstance(instruction, FolderUpload):
+                if instruction.blob not in archives:
+                    archives[instruction.blob] = archive_files(program.blob_bytes[instruction.blob])
+                paths.extend(
+                    normalize_file_path(f"{instruction.path}/{name}")
+                    for name, _, _ in archives[instruction.blob]
+                )
+        validate_and_add_file_paths(paths, set())
+    except ValueError as exc:
+        raise ValidationError(f"invalid filesystem uploads: {exc}") from exc
 
 
 def _describe(config: ServerConfig) -> dict[str, object]:
@@ -595,7 +622,7 @@ def _program_shape(program: Program) -> dict[str, object]:
     uploads: Counter[str] = Counter()
     for instruction in program.instructions:
         ops[instruction.op] += 1
-        if isinstance(instruction, (Upload, FileUpload)):
+        if isinstance(instruction, (Upload, FileUpload, FolderUpload)):
             kind = instruction.kind
             uploads[f"{kind}:{instruction.language}" if kind == "module" else kind] += 1
     return {

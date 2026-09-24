@@ -75,7 +75,7 @@ name; it is not the value itself.
 | --- | --- | --- |
 | `upload(kind=..., ...)` | Upload module source, a tensor, bytes or a compiled library | `Register` |
 | `upload_file(blob=..., path=...)` | Snapshot bytes as a file in the request workspace | `None` |
-| `upload_folder(folder, path=...)` | Snapshot a local directory as file uploads | `None` |
+| `upload_folder(folder, path=...)` | Pack a local directory into one cached archive | `None` |
 | `get_function(module=..., name=..., cpu_only=False)` | Select a function or object from an earlier module or library | `Register` |
 | `run(fn=..., args=None)` | Call a selected or computed callable | `Register` |
 | `return_(key=..., value=...)` | Select an earlier value for the response | `None` |
@@ -236,7 +236,7 @@ The module can use `open("inputs/tensor.bin", "rb")` unchanged. File uploads
 return no register. Put them before any instruction that reads the files,
 including a module upload whose top-level code opens them.
 
-To snapshot a local directory at the current program position:
+To pack a local directory into one uncompressed tar archive at the current program position:
 
 ```python
 program.upload_folder("./assets", path="inputs")
@@ -247,7 +247,13 @@ snapshot content when called, so later changes to the supplied bytes or local
 files do not affect execution or retries. Folder uploads include hidden files
 and reject symbolic links (including the source directory), repeated directories,
 and special files such as FIFOs. Empty directories and original permissions and
-timestamps are omitted; an empty folder adds no instructions.
+timestamps are omitted; an empty folder adds no instructions. The client sorts
+archive paths and fixes metadata, so identical contents and relative filenames
+produce identical archive bytes even if local timestamps or permissions change.
+The server caches the complete archive on disk and extracts it for each request.
+Changing one file resends the entire new archive; use `upload_file` per file when
+you need individual file cache reuse. Folder uploads require a client and server
+version that both support `upload kind="folder"`.
 
 Destinations must be relative POSIX paths without `..` components. Duplicate
 paths and file/directory conflicts are rejected; parent directories are created

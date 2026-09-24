@@ -17,6 +17,7 @@ import ml_dtypes
 import numpy as np
 
 from .artifacts import ReturnedFile, ReturnedFolder, validate_manifest
+from .folder_archive import pack_files
 from .keys import compute_blob_hash, is_blob_hash, verify_blob
 from .multipart import parse_multipart
 from .schemas import (
@@ -141,11 +142,13 @@ class Program:
         )
 
     def upload_folder(self, folder: str | os.PathLike[str], *, path: str) -> None:
-        """Snapshot a directory as ordinary file uploads at this program position.
+        """Pack a directory into one cached, uncompressed tar archive.
 
         Includes hidden files; empty directories and original file metadata are
         not uploaded. Symbolic links, special files, and repeated directories
-        are rejected. Failed calls leave the program unchanged.
+        are rejected. Failed calls leave the program unchanged. The server
+        unpacks the archive at this program position. Cache entries cover the
+        whole archive: changing any file requires resending the complete pack.
 
         :param folder: Local directory whose contents should be uploaded.
         :param path: Relative destination directory in the request workspace.
@@ -156,18 +159,20 @@ class Program:
         ``assets/a.bin`` to ``inputs/a.bin``. An empty folder adds no instructions.
         """
         destination = normalize_file_path(path)
-        instructions = []
-        blobs = {}
+        files = {}
         for remote, data in _folder_files(folder, destination):
-            digest = compute_blob_hash(data)
-            blobs.setdefault(digest, data)
-            instructions.append({"op": "upload", "kind": "file", "blob": digest, "path": remote})
+            files[remote.removeprefix(destination + "/")] = data
+        if not files:
+            return
+        archive = pack_files(files)
+        digest = compute_blob_hash(archive)
         # One batch validation avoids a quadratic scan for folders with many
         # files and commits no state until traversal and validation both succeed.
-        validate_and_add_file_paths([item["path"] for item in instructions], self._file_paths)
-        self._instructions.extend(sorted(instructions, key=lambda item: item["path"]))
-        for digest, data in blobs.items():
-            self._blobs.setdefault(digest, data)
+        validate_and_add_file_paths([f"{destination}/{name}" for name in files], self._file_paths)
+        self._instructions.append(
+            {"op": "upload", "kind": "folder", "blob": digest, "path": destination}
+        )
+        self._blobs.setdefault(digest, archive)
 
     def upload(
         self,

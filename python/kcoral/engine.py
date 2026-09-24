@@ -16,12 +16,14 @@ from . import sandbox
 from .artifacts import ReturnedFile, ReturnedFolder
 from .errors import ExecutionError, GPUAccessViolation
 from .file_transfer import collect
+from .folder_archive import archive_files
 from .keys import compute_blob_hash
 from .lease import Lease
 from .schemas import (
     DTYPE_ITEM_SIZES,
     FileReturn,
     FileUpload,
+    FolderUpload,
     GetFunction,
     Instruction,
     Program,
@@ -117,6 +119,10 @@ def _execute_in_workspace(
                             workspace_dir,
                             instruction.path,
                             program.blob_bytes[instruction.blob],
+                        )
+                    elif isinstance(instruction, FolderUpload):
+                        _materialize_folder(
+                            workspace_dir, instruction.path, program.blob_bytes[instruction.blob]
                         )
                     elif isinstance(instruction, Upload):
                         if instruction.kind == "module":
@@ -310,11 +316,27 @@ def _materialize_file(workspace_dir: str, path: str, data: bytes) -> None:
         ) from exc
 
 
+def _materialize_folder(workspace_dir: str, path: str, data: bytes) -> None:
+    """Validate the complete archive before copying any files into the workspace."""
+    try:
+        destination = normalize_file_path(path)
+        entries = archive_files(data)
+        paths = [normalize_file_path(f"{destination}/{name}") for name, _, _ in entries]
+        for target, (_, offset, size) in zip(paths, entries, strict=True):
+            _materialize_file(workspace_dir, target, data[offset : offset + size])
+    except ExecutionError:
+        raise
+    except Exception as exc:
+        raise ExecutionError(
+            "runtime", f"cannot materialize folder {path!r}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 def _place(
     instruction: Instruction, off_gpu: frozenset[Ref], runtime: Runtime, lease: Lease
 ) -> None:
     """Hold or drop the GPU for the instruction about to run."""
-    if isinstance(instruction, (FileUpload, FileReturn)):
+    if isinstance(instruction, (FileUpload, FolderUpload, FileReturn)):
         _drop_gpu(runtime, lease)
         return
     if isinstance(instruction, Run) and instruction.fn in off_gpu:

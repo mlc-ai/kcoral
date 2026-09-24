@@ -49,6 +49,16 @@ class FileUpload:
     op: Literal["upload"] = "upload"
 
 
+@dataclass
+class FolderUpload:
+    """One cached archive unpacked beneath a request-workspace directory."""
+
+    blob: str
+    path: str
+    kind: Literal["folder"] = "folder"
+    op: Literal["upload"] = "upload"
+
+
 @dataclass(frozen=True)
 class Ref:
     """A validated reference to an earlier handle; wire form is ``{"$ref": id}``."""
@@ -88,7 +98,7 @@ class FileReturn:
     op: Literal["return"] = "return"
 
 
-Instruction = Upload | FileUpload | GetFunction | Run | Return | FileReturn
+Instruction = Upload | FileUpload | FolderUpload | GetFunction | Run | Return | FileReturn
 
 
 @dataclass
@@ -101,12 +111,12 @@ class Program:
     # Trusted limits supplied by the front-end; never accepted in wire options.
     max_return_bytes: int = 256 * 1024**2
 
-    def blob_uploads(self) -> list[Upload | FileUpload]:
+    def blob_uploads(self) -> list[Upload | FileUpload | FolderUpload]:
         """Uploads whose payload comes from the content-addressed blob cache."""
         return [
             instruction
             for instruction in self.instructions
-            if isinstance(instruction, FileUpload)
+            if isinstance(instruction, (FileUpload, FolderUpload))
             or (isinstance(instruction, Upload) and instruction.blob is not None)
         ]
 
@@ -198,9 +208,10 @@ def parse_program(body: Any) -> Program:
         if op == "return":
             instruction = _parse_return(item, index, handles, return_keys)
             return_keys.add(instruction.key)
-        elif op == "upload" and item.get("kind") == "file":
-            instruction = _parse_file_upload(item, index)
-            file_paths.append(instruction.path)
+        elif op == "upload" and item.get("kind") in ("file", "folder"):
+            instruction = _parse_filesystem_upload(item, index)
+            if isinstance(instruction, FileUpload):
+                file_paths.append(instruction.path)
         elif op in ("upload", "get_function", "run"):
             instruction_id = item.get("id")
             if not isinstance(instruction_id, str) or not instruction_id:
@@ -379,7 +390,7 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
     raise ValidationError(f"upload {item.get('id')!r}: unknown kind {kind!r}")
 
 
-def _parse_file_upload(item: dict[str, Any], index: int) -> FileUpload:
+def _parse_filesystem_upload(item: dict[str, Any], index: int) -> FileUpload | FolderUpload:
     _check_fields(
         item,
         {"op", "kind", "blob", "path"},
@@ -388,8 +399,9 @@ def _parse_file_upload(item: dict[str, Any], index: int) -> FileUpload:
     )
     blob = item["blob"]
     if not is_blob_hash(blob):
-        raise ValidationError("file upload: 'blob' must be a lowercase SHA-256 digest")
-    return FileUpload(blob=blob, path=normalize_file_path(item["path"]))
+        raise ValidationError(f"{item['kind']} upload: 'blob' must be a lowercase SHA-256 digest")
+    cls = FileUpload if item["kind"] == "file" else FolderUpload
+    return cls(blob=blob, path=normalize_file_path(item["path"]))
 
 
 def _parse_get_function(item: dict[str, Any], index: int, handles: set[str]) -> GetFunction:
