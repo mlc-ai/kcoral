@@ -595,6 +595,7 @@ def _validate_folder_uploads(program: Program) -> None:
                     for name, _, _ in archives[instruction.blob]
                 )
         validate_and_add_file_paths(paths, set())
+        program.folder_entries = archives
     except ValueError as exc:
         raise ValidationError(f"invalid filesystem uploads: {exc}") from exc
 

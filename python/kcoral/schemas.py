@@ -111,6 +111,9 @@ class Program:
     # Trusted limits supplied by the front-end; never accepted in wire options.
     max_return_bytes: int = 256 * 1024**2
 
+    # Validated archive members passed to the worker, never accepted from the wire.
+    folder_entries: dict[str, list[tuple[str, int, int]]] = field(default_factory=dict)
+
     def blob_uploads(self) -> list[Upload | FileUpload | FolderUpload]:
         """Uploads whose payload comes from the content-addressed blob cache."""
         return [

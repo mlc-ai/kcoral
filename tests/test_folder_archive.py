@@ -2,7 +2,9 @@
 
 import gzip
 import io
+import json
 import os
+import pickle
 import tarfile
 
 import pytest
@@ -136,8 +138,6 @@ def test_extraction_refuses_to_overwrite_existing_files(tmp_path):
 def test_frontend_rejects_conflicts_between_archives_and_other_uploads(
     tmp_path, other_kind, other_path
 ):
-    import json
-
     archive = pack_files({"a": b"x"})
     digest = compute_blob_hash(archive)
     instructions = [
@@ -156,6 +156,39 @@ def test_frontend_rejects_conflicts_between_archives_and_other_uploads(
         _parse_execute_request(
             content_type, body, ByteCache(1024), DiskFileCache(tmp_path, 1024**2)
         )
+
+
+def test_validated_members_survive_worker_transfer_without_reparsing(tmp_path, monkeypatch):
+    archive = pack_files({"nested/a": b"payload", ".hidden": b"", "b": b"\x00\xff"})
+    digest = compute_blob_hash(archive)
+    instructions = [
+        {"op": "upload", "kind": "folder", "path": path, "blob": digest}
+        for path in ["first", "second"]
+    ]
+    body, content_type = encode_multipart(
+        [
+            MultipartPart(
+                "program", "application/json", json.dumps({"instructions": instructions}).encode()
+            ),
+            MultipartPart("blob:" + digest, "application/octet-stream", archive),
+        ]
+    )
+    program, _, _ = _parse_execute_request(
+        content_type, body, ByteCache(1024), DiskFileCache(None, 0)
+    )
+    # The real worker receives the program over a multiprocessing pipe.
+    program = pickle.loads(pickle.dumps(program))
+
+    def unexpected_parse(_):
+        pytest.fail("the worker must reuse the front-end's validated archive members")
+
+    monkeypatch.setattr("kcoral.engine.archive_files", unexpected_parse)
+    result = execute(program, FakeRuntime(), NoGPULease(), workspace_dir=str(tmp_path))
+    assert result.status == "COMPLETED", result.error
+    for path in ["first", "second"]:
+        assert (tmp_path / path / "nested/a").read_bytes() == b"payload"
+        assert (tmp_path / path / ".hidden").read_bytes() == b""
+        assert (tmp_path / path / "b").read_bytes() == b"\x00\xff"
 
 
 def test_archive_is_standard_tar_and_deterministic_across_enumeration_orders():

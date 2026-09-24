@@ -122,7 +122,10 @@ def _execute_in_workspace(
                         )
                     elif isinstance(instruction, FolderUpload):
                         _materialize_folder(
-                            workspace_dir, instruction.path, program.blob_bytes[instruction.blob]
+                            workspace_dir,
+                            instruction.path,
+                            program.blob_bytes[instruction.blob],
+                            entries=program.folder_entries.get(instruction.blob),
                         )
                     elif isinstance(instruction, Upload):
                         if instruction.kind == "module":
@@ -280,7 +283,7 @@ def _working_directory(directory: str) -> Iterator[None]:
         os.close(previous)
 
 
-def _materialize_file(workspace_dir: str, path: str, data: bytes) -> None:
+def _materialize_file(workspace_dir: str, path: str, data: bytes | memoryview) -> None:
     """Copy one blob beneath ``workspace_dir`` without following symlinks."""
     try:
         path = normalize_file_path(path)
@@ -316,14 +319,22 @@ def _materialize_file(workspace_dir: str, path: str, data: bytes) -> None:
         ) from exc
 
 
-def _materialize_folder(workspace_dir: str, path: str, data: bytes) -> None:
-    """Validate the complete archive before copying any files into the workspace."""
+def _materialize_folder(
+    workspace_dir: str,
+    path: str,
+    data: bytes,
+    *,
+    entries: list[tuple[str, int, int]] | None = None,
+) -> None:
+    """Reuse validated members, or validate first when called without the front-end."""
     try:
         destination = normalize_file_path(path)
-        entries = archive_files(data)
+        if entries is None:
+            entries = archive_files(data)
         paths = [normalize_file_path(f"{destination}/{name}") for name, _, _ in entries]
+        contents = memoryview(data)
         for target, (_, offset, size) in zip(paths, entries, strict=True):
-            _materialize_file(workspace_dir, target, data[offset : offset + size])
+            _materialize_file(workspace_dir, target, contents[offset : offset + size])
     except ExecutionError:
         raise
     except Exception as exc:
