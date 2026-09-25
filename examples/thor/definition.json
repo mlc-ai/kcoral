@@ -1,0 +1,27 @@
+{
+  "name": "thor_fp16_gemm",
+  "description": "D = A @ B^T with fp16 inputs and output and fp32 accumulation; shapes chosen for NVIDIA Thor.",
+  "op_type": "gemm",
+  "tags": [
+    "dtype:fp16",
+    "status:synthetic",
+    "reference:cublas"
+  ],
+  "axes": {
+    "M": {"type": "var"},
+    "N": {"type": "var"},
+    "K": {"type": "var"}
+  },
+  "constraints": [
+    "A.shape == [M, K]",
+    "B.shape == [N, K]"
+  ],
+  "inputs": {
+    "A": {"shape": ["M", "K"], "dtype": "float16"},
+    "B": {"shape": ["N", "K"], "dtype": "float16"}
+  },
+  "outputs": {
+    "D": {"shape": ["M", "N"], "dtype": "float16"}
+  },
+  "reference": "import torch\n\n\ndef run(A, B):\n    return torch.matmul(A, B.T)\n"
+}

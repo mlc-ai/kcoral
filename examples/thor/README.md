@@ -20,7 +20,7 @@ claims with one command.
 | File | Purpose |
 |---|---|
 | `initial_kernel.py` | The agent's starting point: shared-memory tiled GEMM on CUDA cores |
-| `task.json` | The benchmark task: shapes, correctness rule, timing protocol |
+| `definition.json`, `workload.jsonl` | The task in FlashInfer Trace format: the GEMM and its cuBLAS reference, and the shapes |
 | `bench.py` | Client CLI: checks and times kernels plus cuBLAS in one KCoral request |
 | `remote_bench.py` | Server-side harness that `bench.py` uploads with every request |
 | `PROMPT.md` | Self-contained instructions for the optimization agent |
@@ -36,8 +36,10 @@ shapes: two squares and two LLM feed-forward projections. It starts from
 `bench.py` checks every kernel for correctness before timing it, and times all
 kernels together with cuBLAS under the same protocol on the server, so the
 speedups it reports are comparable and repeatable. It also copes with Thor's
-load-dependent clocks. If you want the details, the shapes, correctness rule
-and timing protocol are defined in `task.json` and implemented in
+load-dependent clocks. If you want the details, the task is defined in
+[FlashInfer Trace](https://bench.flashinfer.ai/docs/flashinfer-trace) format
+(`definition.json` for the operation and reference, `workload.jsonl` for the
+shapes), and the correctness rule and timing protocol are implemented in
 `remote_bench.py`.
 
 ## Setup
@@ -220,13 +222,13 @@ with `bench.py initial_kernel.py work/best.py`:
 | speedup vs initial kernel | 158× | 152× | 147× |
 | ratio vs cuBLAS | 1.07× | 1.03× | 1.00× |
 
-Per shape, the kernel is about 1.2× faster than cuBLAS on the long-K `ffn-down`
-projection and within a few percent of it on the square shapes. On `ffn-up`
-its timing is bimodal: `bench.py` flags a 10–24% spread across trials there.
-That is the kind of lead a further run could pick up. Your numbers will
-differ with clocks, temperature, the model and effort level you run, and the
-agent's choices. The speedup over the initial kernel should land well above
-100×.
+Per shape, the kernel is about 1.2× faster than cuBLAS on the long-K
+`m2048-n4096-k11008` projection and within a few percent of it on the square
+shapes. On `m2048-n11008-k4096` its timing is bimodal: `bench.py` flags a
+10–24% spread across trials there. That is the kind of lead a further run could
+pick up. Your numbers will differ with clocks, temperature, the model and
+effort level you run, and the agent's choices. The speedup over the initial
+kernel should land well above 100×.
 
 ## Troubleshooting
 

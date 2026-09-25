@@ -2,8 +2,9 @@
 
 Every kernel file passed on the command line, plus cuBLAS as the reference, is
 checked and timed in one KCoral request, so all implementations share the same
-GPU and the same thermal window. The protocol is fixed by ``task.json`` and
-implemented by ``remote_bench.py``, which runs on the server.
+GPU and the same thermal window. The task is defined by ``definition.json`` and
+``workload.jsonl`` (FlashInfer Trace format); the protocol is implemented by
+``remote_bench.py``, which runs on the server.
 
 Examples::
 
@@ -22,10 +23,13 @@ import sys
 import time
 from pathlib import Path
 
+from remote_bench import BenchConfig
+
 from kcoral import Client, KCoralError, Program, ProtocolError, TransportError
 
 HERE = Path(__file__).resolve().parent
-TASK = HERE / "task.json"
+DEFINITION = HERE / "definition.json"
+WORKLOADS = HERE / "workload.jsonl"
 HARNESS = HERE / "remote_bench.py"
 CLIENT_ERRORS = (KCoralError, TransportError, ProtocolError)
 CUBLAS = "cublas"
@@ -46,7 +50,7 @@ def parse_args() -> argparse.Namespace:
         help="KCoral server URL (default: $KCORAL_URL or http://127.0.0.1:8000)",
     )
     parser.add_argument(
-        "--shapes", help="comma-separated shape indices from task.json (default: all)"
+        "--shapes", help="comma-separated row indices of workload.jsonl (default: all)"
     )
     parser.add_argument("--check-only", action="store_true", help="correctness only, no timing")
     parser.add_argument(
@@ -70,12 +74,15 @@ def kernel_names(paths: list[Path]) -> list[str]:
     return names
 
 
-def build_program(task: bytes, options: dict, sources: list[bytes]) -> Program:
+def build_program(
+    definition: bytes, workloads: bytes, options: dict, sources: list[bytes]
+) -> Program:
     program = Program()
     harness = program.upload(kind="module", source=HARNESS.read_text())
     evaluate = program.get_function(module=harness, name="evaluate")
     args = [
-        program.upload(kind="bytes", value=task),
+        program.upload(kind="bytes", value=definition),
+        program.upload(kind="bytes", value=workloads),
         program.upload(kind="bytes", value=json.dumps(options).encode()),
         *(program.upload(kind="bytes", value=source) for source in sources),
     ]
@@ -84,7 +91,7 @@ def build_program(task: bytes, options: dict, sources: list[bytes]) -> Program:
     return program
 
 
-def summarize(report: dict, task: dict) -> tuple[list[str], dict, bool]:
+def summarize(report: dict) -> tuple[list[str], dict, bool]:
     """Render the per-shape table and aggregate scores; return (lines, summary, all_passed)."""
     names = [*report["names"], CUBLAS]
     lines = []
@@ -94,7 +101,7 @@ def summarize(report: dict, task: dict) -> tuple[list[str], dict, bool]:
     totals = {name: 0.0 for name in names}
     passed_all = {name: True for name in names}
     for shape in report["shapes"]:
-        label = f"{shape['name']} {shape['M']}x{shape['N']}x{shape['K']}"
+        label = shape["uuid"]
         impls = shape["impls"]
         initial_ms = impls.get(INITIAL, {}).get("median_ms")
         cublas_ms = impls.get(CUBLAS, {}).get("median_ms")
@@ -134,23 +141,23 @@ def summarize(report: dict, task: dict) -> tuple[list[str], dict, bool]:
     return lines, summary, all_passed
 
 
-def stability_warnings(report: dict, task: dict) -> list[str]:
-    limits = task["stability"]
+def stability_warnings(report: dict) -> list[str]:
+    cfg = BenchConfig()
     warnings = []
     for shape in report["shapes"]:
         for name, info in shape["impls"].items():
             spread = info.get("spread")
-            if spread is not None and spread > limits["max_spread"]:
+            if spread is not None and spread > cfg.max_spread:
                 warnings.append(
-                    f"{shape['name']}: {name} varied {spread:.1%} across trials "
-                    f"(limit {limits['max_spread']:.0%}); the measurement was disturbed"
+                    f"{shape['uuid']}: {name} varied {spread:.1%} across trials "
+                    f"(limit {cfg.max_spread:.0%}); the measurement was disturbed"
                 )
     samples = [s for shape in report["shapes"] for s in shape.get("telemetry", [])[1:]]
     freqs = [(s.get("cur_freq_mhz"), s.get("max_freq_mhz")) for s in samples]
     freqs = [(cur, top) for cur, top in freqs if cur and top]
     if freqs:
         low = min(cur / top for cur, top in freqs)
-        if low < limits["min_clock_fraction"]:
+        if low < cfg.min_clock_fraction:
             warnings.append(
                 f"GPU clock sampled after timing fell to {low:.0%} of its maximum; "
                 "the governor or thermal throttling lowered it (see README: stable clocks)"
@@ -206,8 +213,6 @@ def main() -> int:
         if not path.is_file():
             raise SystemExit(f"kernel file not found: {path}")
     names = kernel_names(args.kernels)
-    task_bytes = TASK.read_bytes()
-    task = json.loads(task_bytes)
     indices = [int(i) for i in args.shapes.split(",")] if args.shapes else None
     options = {
         "names": names,
@@ -215,7 +220,8 @@ def main() -> int:
         "check_only": args.check_only,
         "emit_source": args.emit_source,
     }
-    program = build_program(task_bytes, options, [p.read_bytes() for p in args.kernels])
+    sources = [p.read_bytes() for p in args.kernels]
+    program = build_program(DEFINITION.read_bytes(), WORKLOADS.read_bytes(), options, sources)
 
     with Client(args.url) as client:
         try:
@@ -237,7 +243,7 @@ def main() -> int:
         raise SystemExit(f"remote execution {result.status}: {result.error}")
 
     report = result["report"]
-    lines, summary, all_passed = summarize(report, task)
+    lines, summary, all_passed = summarize(report)
     env = report["environment"]
     print(
         f"device {env['device']} ({env['arch']}, {env['sm_count']} SMs), torch {env['torch']}, "
@@ -245,7 +251,7 @@ def main() -> int:
     )
     print("\n".join(lines))
     print(telemetry_line(report))
-    warnings = [] if report["check_only"] else stability_warnings(report, task)
+    warnings = [] if report["check_only"] else stability_warnings(report)
     for warning in warnings:
         print(f"warning: {warning}")
     print_failures(report)

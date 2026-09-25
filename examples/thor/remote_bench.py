@@ -4,9 +4,12 @@
 :func:`evaluate` inside a GPU worker. Everything the protocol promises lives
 here, so the numbers do not depend on the client machine:
 
+* the task comes from FlashInfer Trace files: ``definition.json`` (operation,
+  tensor specs, reference) and ``workload.jsonl`` (one shape per row);
 * kernels are compiled once per shape, outside every timed region;
-* correctness is checked against an fp32 reference on several seeds, with the
-  output poisoned with NaN before every checked call and re-checked after timing;
+* correctness is checked against the definition's reference on several seeds,
+  with the output poisoned with NaN before every checked call and re-checked
+  after timing;
 * timing uses a fixed number of warmup and measured calls per trial, CUDA events
   around each call, an L2 flush between calls, and implementations interleaved
   round-robin in every trial so clock and thermal drift hit all of them alike;
@@ -27,10 +30,36 @@ import sys
 import tempfile
 import time
 import traceback
+from dataclasses import dataclass
 
 CUBLAS = "cublas"
 # Kernel names that indicate a vendor GEMM ran inside a candidate's timed call.
 VENDOR_KERNEL_PATTERN = re.compile(r"nvjet|cutlass|cublas|xmma|splitKreduce|ampere_|volta_|turing_")
+
+
+@dataclass(frozen=True)
+class BenchConfig:
+    """Correctness, timing and stability settings shared by every run."""
+
+    # Correctness: an element fails only if it is off by more than ``atol`` and by
+    # more than ``rtol`` relatively; every element must pass.
+    seeds: tuple[int, ...] = (0, 1)
+    atol: float = 0.1
+    rtol: float = 0.01
+    # Timing: per trial, ``warmup`` untimed then ``repeat`` timed calls.
+    warmup: int = 10
+    repeat: int = 50
+    trials: int = 3
+    flush_l2: bool = True
+    # Thor's clocks follow the load. Implementations slower than ``slow_call_ms`` per
+    # call are timed on their own first; then cuBLAS ramps the clocks for ``ramp_s``
+    # and each remaining implementation runs untimed for ``settle_s`` before timing.
+    slow_call_ms: float = 20.0
+    ramp_s: float = 4.0
+    settle_s: float = 0.25
+    # Stability: bench.py warns beyond these limits.
+    max_spread: float = 0.05
+    min_clock_fraction: float = 0.97
 
 
 # ── telemetry ────────────────────────────────────────────────────────────────
@@ -123,22 +152,73 @@ def _cublas_fn(A, B, D) -> None:
     torch.matmul(A, B.T, out=D)
 
 
+# ── task files ───────────────────────────────────────────────────────────────
+
+
+def parse_workloads(workload_jsonl: str) -> list[dict]:
+    """The ``workload`` objects of a FlashInfer Trace ``workload.jsonl``."""
+    return [json.loads(line)["workload"] for line in workload_jsonl.splitlines() if line.strip()]
+
+
+def load_reference(definition: dict):
+    """The ``run`` function defined by the definition's ``reference`` source."""
+    namespace: dict = {}
+    exec(compile(definition["reference"], "definition.json:reference", "exec"), namespace)
+    return namespace["run"]
+
+
+def _tensor_shape(spec: dict, axes: dict) -> list[int]:
+    return [axes[axis] for axis in spec["shape"]]
+
+
+def make_inputs(definition: dict, workload: dict, seed: int) -> list:
+    """Input tensors in definition order; only ``random`` input specs are supported."""
+    import torch
+
+    gen = torch.Generator(device="cuda").manual_seed(seed)
+    tensors = []
+    for name, spec in definition["inputs"].items():
+        kind = workload["inputs"][name]["type"]
+        if kind != "random":
+            raise ValueError(f"input {name}: unsupported workload input type {kind!r}")
+        shape = _tensor_shape(spec, workload["axes"])
+        dtype = getattr(torch, spec["dtype"])
+        tensors.append(torch.randn(shape, dtype=dtype, device="cuda", generator=gen))
+    return tensors
+
+
+def make_output(definition: dict, workload: dict):
+    import torch
+
+    ((_, spec),) = definition["outputs"].items()
+    shape = _tensor_shape(spec, workload["axes"])
+    return torch.empty(shape, dtype=getattr(torch, spec["dtype"]), device="cuda")
+
+
 # ── correctness ──────────────────────────────────────────────────────────────
 
 
 def check_output(D, ref, rtol: float, atol: float) -> dict:
+    """FlashInfer's rule: an element fails if its error exceeds both ``atol`` and ``rtol``."""
     import torch
 
     out = D.float()
+    ref = ref.float()
     finite = bool(torch.isfinite(out).all())
-    err = (out - ref).abs()
-    bad = ~(err <= atol + rtol * ref.abs())  # NaN counts as bad
+    abs_err = (out - ref).abs()
+    rel_err = abs_err / (ref.abs() + 1e-8)
+    bad = ~((abs_err <= atol) | (rel_err <= rtol))  # NaN counts as bad
     num_bad = int(bad.sum())
+
+    def worst(err) -> float:
+        return float(torch.nan_to_num(err, nan=float("inf")).max().clamp(max=3e38))
+
     result = {
         "passed": finite and num_bad == 0,
         "finite": finite,
         "num_bad": num_bad,
-        "max_abs_err": float(torch.nan_to_num(err, nan=float("inf")).max().clamp(max=3e38)),
+        "max_abs_err": worst(abs_err),
+        "max_rel_err": worst(rel_err),
     }
     if num_bad:
         index = int(bad.flatten().nonzero()[0])
@@ -260,27 +340,29 @@ def environment() -> dict:
     return env
 
 
-def evaluate(task_json: bytes, options_json: bytes, *kernel_sources: bytes) -> dict:
-    """Check and time every kernel plus cuBLAS on the task's shapes.
+def evaluate(
+    definition_json: bytes, workload_jsonl: bytes, options_json: bytes, *kernel_sources: bytes
+) -> dict:
+    """Check and time every kernel plus cuBLAS on the workload's shapes.
 
     ``options_json`` holds ``names`` (one per kernel source), ``shapes`` (indices
-    into the task's shape list, or null for all) and ``check_only``.
+    into the workload rows, or null for all), ``check_only`` and ``emit_source``.
     """
     import torch
 
-    task = json.loads(bytes(task_json))
+    cfg = BenchConfig()
+    definition = json.loads(bytes(definition_json))
+    workloads = parse_workloads(bytes(workload_jsonl).decode())
+    reference = load_reference(definition)
     options = json.loads(bytes(options_json))
     names = list(options["names"])
     if len(names) != len(kernel_sources) or CUBLAS in names:
         raise ValueError("kernel names must match the sources and must not be 'cublas'")
     check_only = bool(options.get("check_only", False))
-    shapes = task["shapes"]
     indices = options.get("shapes")
-    selected = [shapes[i] for i in indices] if indices is not None else shapes
-    corr = task["correctness"]
-    timing = task["timing"]
+    selected = [workloads[i] for i in indices] if indices is not None else workloads
 
-    torch.backends.cuda.matmul.allow_tf32 = False
+    # Keep cuBLAS's fp16 reductions in full precision: it is the reference.
     torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
     telemetry_before = sample_telemetry()
 
@@ -294,22 +376,20 @@ def evaluate(task_json: bytes, options_json: bytes, *kernel_sources: bytes) -> d
             load_errors[name] = _short_traceback()
 
     flush = None
-    if timing.get("flush_l2", True):
+    if cfg.flush_l2:
         l2_bytes = torch.cuda.get_device_properties(0).L2_cache_size or (64 << 20)
         flush = torch.empty(2 * l2_bytes, dtype=torch.uint8, device="cuda")
 
     results = []
-    for shape in selected:
-        M, N, K = shape["M"], shape["N"], shape["K"]
-        entry: dict = {"name": shape.get("name"), "M": M, "N": N, "K": K, "impls": {}}
+    for workload in selected:
+        M, N, K = (workload["axes"][axis] for axis in ("M", "N", "K"))
+        entry: dict = {"uuid": workload["uuid"], "M": M, "N": N, "K": K, "impls": {}}
         results.append(entry)
 
         inputs = []
-        for seed in corr["seeds"]:
-            gen = torch.Generator(device="cuda").manual_seed(seed)
-            A = torch.randn(M, K, device="cuda", dtype=torch.float16, generator=gen)
-            B = torch.randn(N, K, device="cuda", dtype=torch.float16, generator=gen)
-            inputs.append((A, B, A.float() @ B.float().T))
+        for seed in cfg.seeds:
+            A, B = make_inputs(definition, workload, seed)
+            inputs.append((A, B, reference(A, B)))
         A, B, ref = inputs[0]
 
         # Build and check each implementation; only passing ones are timed.
@@ -336,10 +416,10 @@ def evaluate(task_json: bytes, options_json: bytes, *kernel_sources: bytes) -> d
         outputs = {}
         for name, fn in list(fns.items()):
             info = entry["impls"][name]
-            out = torch.empty(M, N, device="cuda", dtype=torch.float16)
+            out = make_output(definition, workload)
             outputs[name] = out
             try:
-                info["check"] = run_checks(fn, inputs, out, corr["rtol"], corr["atol"])
+                info["check"] = run_checks(fn, inputs, out, cfg.rtol, cfg.atol)
             except Exception:
                 info.update(status="ERROR", error=_short_traceback())
                 del fns[name]
@@ -365,9 +445,12 @@ def evaluate(task_json: bytes, options_json: bytes, *kernel_sources: bytes) -> d
         A.copy_(inputs[-1][0])
         B.copy_(inputs[-1][1])
         ref = inputs[-1][2]
-        warmup, repeat, trials = int(timing["warmup"]), int(timing["repeat"]), int(timing["trials"])
-        slow_ms = float(timing["slow_call_ms"])
-        slow = [n for n in fns if n != CUBLAS and entry["impls"][n]["check"]["call_ms"] >= slow_ms]
+        warmup, repeat, trials = cfg.warmup, cfg.repeat, cfg.trials
+        slow = [
+            n
+            for n in fns
+            if n != CUBLAS and entry["impls"][n]["check"]["call_ms"] >= cfg.slow_call_ms
+        ]
         fast = [n for n in fns if n not in slow]
         trial_ms: dict = {name: [] for name in fns}
         entry["telemetry"] = [sample_telemetry()]
@@ -391,20 +474,20 @@ def evaluate(task_json: bytes, options_json: bytes, *kernel_sources: bytes) -> d
         if slow:
             entry["telemetry"].append(sample_telemetry())
 
-        run_for(fns[CUBLAS], (A, B, outputs[CUBLAS]), float(timing["ramp_s"]), flush)
+        run_for(fns[CUBLAS], (A, B, outputs[CUBLAS]), cfg.ramp_s, flush)
         for name in fast:
             entry["impls"][name]["timing"] = "interleaved"
         for trial in range(trials):
             shift = trial % len(fast)
             for name in fast[shift:] + fast[:shift]:
                 if name in fns:
-                    timed(name, float(timing["settle_s"]))
+                    timed(name, cfg.settle_s)
             entry["telemetry"].append(sample_telemetry())
 
         flops = 2.0 * M * N * K
         for name in list(fns):
             info = entry["impls"][name]
-            after = check_output(outputs[name], ref, corr["rtol"], corr["atol"])
+            after = check_output(outputs[name], ref, cfg.rtol, cfg.atol)
             info["check_after_timing"] = after
             if not after["passed"]:
                 info["status"] = "FAIL"
@@ -430,7 +513,7 @@ def evaluate(task_json: bytes, options_json: bytes, *kernel_sources: bytes) -> d
 
     return {
         "environment": environment(),
-        "task": task.get("name"),
+        "definition": definition["name"],
         "check_only": check_only,
         "names": names,
         "shapes": results,

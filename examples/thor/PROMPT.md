@@ -8,15 +8,16 @@ Keep working until the stop rule in section 8 is met.
 ## 1. Task
 
 Compute `D[M,N] = A[M,K] @ B[N,K]^T` with fp16 inputs and output and fp32
-accumulation. `task.json` fixes the shapes, the correctness rule and the timing
-protocol:
+accumulation. The task is defined in FlashInfer Trace format:
+`definition.json` holds the operation, the tensor specs and the reference
+(cuBLAS), and `workload.jsonl` holds one shape per row:
 
-| name | M | N | K |
+| workload | M | N | K |
 |---|---|---|---|
-| square-2k | 2048 | 2048 | 2048 |
-| square-4k | 4096 | 4096 | 4096 |
-| ffn-up | 2048 | 11008 | 4096 |
-| ffn-down | 2048 | 4096 | 11008 |
+| m2048-n2048-k2048 | 2048 | 2048 | 2048 |
+| m4096-n4096-k4096 | 4096 | 4096 | 4096 |
+| m2048-n11008-k4096 | 2048 | 11008 | 4096 |
+| m2048-n4096-k11008 | 2048 | 4096 | 11008 |
 
 The score of a candidate is its **total latency**: the sum over all four shapes
 of its median time. Lower is better. `bench.py` also reports
@@ -41,8 +42,8 @@ cuBLAS is the reference to chase; a candidate is scored only if it passes on
 ## 3. Files
 
 Locked (reading is fine, modifying invalidates the run): `bench.py`,
-`remote_bench.py`, `task.json`, `initial_kernel.py`, `pyproject.toml`,
-`uv.lock`, this file.
+`remote_bench.py`, `definition.json`, `workload.jsonl`, `initial_kernel.py`,
+`pyproject.toml`, `uv.lock`, this file.
 
 Your workspace is `work/` (create it). Keep:
 
@@ -87,10 +88,10 @@ uv run python bench.py work/new.py --check-only             # correctness on all
 uv run python bench.py work/best.py work/new.py             # timed A/B comparison
 ```
 
-- Only numbers printed by `bench.py` count. It checks correctness against an
-  fp32 reference on two seeds, then times every kernel and cuBLAS in the same
-  request, interleaved, with fixed warmup/repeat counts and an L2 flush between
-  calls.
+- Only numbers printed by `bench.py` count. It checks correctness against the
+  cuBLAS reference on two seeds (every element within `atol=0.1` or within
+  `rtol=1%`), then times every kernel and cuBLAS in the same request,
+  interleaved, with fixed warmup/repeat counts and an L2 flush between calls.
 - Correctness first: a candidate that fails on any shape is not a candidate.
   Never loosen a check, never promote a failing kernel.
 - Compare against the current best **inside the same invocation**, never
