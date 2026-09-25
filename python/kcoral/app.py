@@ -36,15 +36,16 @@ from .schemas import (
     parse_program,
     strict_json_loads,
 )
-from .worker import FINISH_REASON_LEVEL, WorkerCrashed, WorkerTimeout
+from .worker import WorkerCrashed, WorkerTimeout
 
 _TRACEBACK_LIMIT = 8192
 _MESSAGE_LIMIT = 2048
 
-# The worker's finish reasons, plus the ones the front-end can answer with before
-# any worker is involved.
 _FINISH_REASON_LEVEL = {
-    **FINISH_REASON_LEVEL,
+    "completed": "INFO",
+    "program_failed": "INFO",
+    "timeout": "WARNING",
+    "crashed": "ERROR",
     "no_worker": "WARNING",
     "rejected": "WARNING",
     "cache_miss": "INFO",

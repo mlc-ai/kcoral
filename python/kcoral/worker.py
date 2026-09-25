@@ -7,9 +7,8 @@ fresh process once it has served ``max_requests`` of them. The worker's
 `main` is the child entry point; :class:`Worker` is the parent-side handle with
 crash/timeout kill + respawn.
 
-Every request ends with a *finish reason*: ``completed`` and ``program_failed``
-leave the worker serving, ``request_limit`` and ``poisoned_context`` retire it,
-and the parent supplies ``timeout`` or ``crashed`` when no answer arrived.
+Worker results carry the program outcome and an optional retirement reason.
+The parent handles timeout and crash recovery when no answer arrives.
 """
 
 from __future__ import annotations
@@ -21,6 +20,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import nvml
@@ -31,20 +31,31 @@ from .lease import GPULeases, LeaseClient, NoopLease, NoopLeases
 
 _WORKER_PIPE_FAILURES = (EOFError, ConnectionResetError, BrokenPipeError, OSError)
 
-# Finish reasons whose worker answered the request but must not serve another.
-RETIRING_FINISH_REASONS = frozenset({"poisoned_context", "request_limit", "sandbox_cleanup"})
-
-# How loud each one is: a failed program is the client's kernel and stays INFO,
-# so one level separates our faults from theirs.
-FINISH_REASON_LEVEL = {
-    "completed": "INFO",
-    "program_failed": "INFO",
+# Severity of worker lifecycle events.
+RETIRE_REASON_LEVEL = {
     "request_limit": "INFO",
     "poisoned_context": "WARNING",
     "timeout": "WARNING",
     "crashed": "ERROR",
     "sandbox_cleanup": "WARNING",
 }
+
+
+@dataclass
+class WorkerResult:
+    execution: object
+    lease_wait_ms: float
+    lease_held_ms: float
+    retire_reason: str | None = None
+
+    @property
+    def finish_reason(self) -> str:
+        return (
+            "completed"
+            if getattr(self.execution, "status", None) == "COMPLETED"
+            else "program_failed"
+        )
+
 
 _NO_EVENTS = EventLogger(None)  # a shared no-op, for a handle given no log
 _OUTPUT_TAIL_BYTES = 4096  # of a killed worker's output, kept on its log record
@@ -140,8 +151,7 @@ def worker_main(
             except Exception as exc:
                 sandbox_cleanup_error = f"{type(exc).__name__}: {exc}"
         requests_served += 1
-        # This side names retirement reasons; None
-        # means it can serve on, and the parent reads the rest off the outcome.
+        # None means this worker can serve another program.
         retire_reason: str | None = None
         if sandbox_cleanup_error is not None:
             retire_reason = "sandbox_cleanup"
@@ -151,10 +161,8 @@ def worker_main(
             # A fresh process gives every request the same context and allocator
             # state, even where native code left no detectable sticky error.
             retire_reason = "request_limit"
-        # Always the same shape, so the parent reads the reason rather than
-        # inferring it, and the result goes first either way: the parent respawns
-        # after answering, not before.
-        response = {"__outcome__": outcome, "__finish__": retire_reason}
+        # Send the outcome before exiting; the pool schedules replacement.
+        response = {"__outcome__": outcome, "__retire_reason__": retire_reason}
         if sandbox_cleanup_error is not None:
             response["__sandbox_cleanup_error__"] = sandbox_cleanup_error
         conn.send(response)
@@ -361,10 +369,10 @@ class Worker:
             raise WorkerCrashed(f"{self._description()} timed out during {phase}")
         return msg
 
-    def run(self, program, timeout: float, leases: GPULeases | NoopLeases) -> tuple:
+    def run(self, program, timeout: float, leases: GPULeases | NoopLeases) -> WorkerResult:
         """Run a program, servicing its lease requests; kill+respawn on timeout or
         crash, then re-raise. A poisoned context is respawned after preserving its
-        outcome. Returns the outcome, the lease timings, and the finish_reason.
+        outcome. Returns the execution outcome, lease timings, and retirement reason.
 
         The parent owns the workspace so it is removed even when the child is
         killed before its own cleanup handlers can run.
@@ -381,7 +389,7 @@ class Worker:
                 self._abandon_and_respawn(leases, "sandbox_cleanup")
                 raise WorkerCrashed(f"cannot prepare sandbox workspace: {exc}") from exc
             result = self._run_in_workspace(program, timeout, leases, sandboxing.WORKSPACE)
-            if result[-1] in RETIRING_FINISH_REASONS:
+            if result.retire_reason is not None:
                 # Stop surviving tasks before the parent touches their files.
                 self._kill()
             else:
@@ -389,7 +397,7 @@ class Worker:
                     sandbox.prepare()
                 except OSError:
                     self._kill()
-                    result = (*result[:-1], "sandbox_cleanup")
+                    result.retire_reason = "sandbox_cleanup"
             return result
         with tempfile.TemporaryDirectory(prefix="kcoral-program-") as workspace_dir:
             return self._run_in_workspace(program, timeout, leases, workspace_dir)
@@ -400,7 +408,7 @@ class Worker:
         timeout: float,
         leases: GPULeases | NoopLeases,
         workspace_dir: str,
-    ) -> tuple:
+    ) -> WorkerResult:
         """Worker protocol loop for a program whose workspace already exists.
 
         The deadline covers only the worker's own work - time blocked on a lease
@@ -436,9 +444,9 @@ class Worker:
                         lease_held_ms += (time.monotonic() - held_since) * 1000
                     leases.release(self.gpu_id, self)  # no-op if the engine already did
                     outcome = message["__outcome__"]
-                    # A retirement the child named, or else the program's result.
-                    finish_reason = message["__finish__"] or _program_finish_reason(outcome)
-                    return outcome, lease_wait_ms, lease_held_ms, finish_reason
+                    return WorkerResult(
+                        outcome, lease_wait_ms, lease_held_ms, message["__retire_reason__"]
+                    )
                 if not (isinstance(message, dict) and "__lease__" in message):
                     # Nothing this protocol defines. Hand it up rather than read
                     # it as lease traffic: the front-end rejects what is not a
@@ -446,7 +454,7 @@ class Worker:
                     if held_since is not None:
                         lease_held_ms += (time.monotonic() - held_since) * 1000
                     leases.release(self.gpu_id, self)
-                    return message, lease_wait_ms, lease_held_ms, "program_failed"
+                    return WorkerResult(message, lease_wait_ms, lease_held_ms)
                 if message["__lease__"] == "acquire":
                     # The child is blocked until we answer, so this may wait freely.
                     lease_wait_ms += leases.acquire(self.gpu_id, self)
@@ -489,8 +497,7 @@ class Worker:
         return read_captured_output(self._capture_dir, self.pid, _OUTPUT_TAIL_BYTES)
 
     def replace(self, leases: GPULeases | NoopLeases, reason: str) -> None:
-        """Swap in a fresh process. The pool calls this after answering the request
-        the old one served, so no client waits for a respawn."""
+        """Swap in a fresh process, normally on the pool's replacement thread."""
         self._abandon_and_respawn(leases, reason)
 
     def _abandon_and_respawn(self, leases: GPULeases | NoopLeases, reason: str) -> None:
@@ -503,7 +510,7 @@ class Worker:
         """
         self._events.emit(
             "worker_retired",
-            level=FINISH_REASON_LEVEL.get(reason, "INFO"),
+            level=RETIRE_REASON_LEVEL.get(reason, "INFO"),
             worker_id=self.worker_id,
             gpu_id=self.gpu_id,
             generation=self.generation,
@@ -564,11 +571,6 @@ class Worker:
         except Exception:
             pass
         self._kill()
-
-
-def _program_finish_reason(outcome) -> str:
-    """Why a worker that stayed alive answered: what the program itself did."""
-    return "completed" if getattr(outcome, "status", None) == "COMPLETED" else "program_failed"
 
 
 def _terminate_process_tree(process, grace_seconds: float) -> None:

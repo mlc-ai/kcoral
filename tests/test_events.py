@@ -143,7 +143,8 @@ def test_program_failure_records_the_failing_instruction(tmp_path):
     assert finished["level"] == "INFO"
 
 
-def test_request_limit_is_the_reason_a_healthy_worker_retires(tmp_path):
+@pytest.mark.parametrize("fails", [False, True])
+def test_request_limit_is_the_reason_a_worker_retires(tmp_path, fails):
     # Keep the default limit of one request per worker.
     config = ServerConfig(
         sandbox="none",
@@ -152,7 +153,14 @@ def test_request_limit_is_the_reason_a_healthy_worker_retires(tmp_path):
         workers_per_gpu=1,
     )
     with TestClient(create_app(config, runtime_factory=fake_runtime_factory)) as client:
-        assert _post(client, STRUCTURAL_PROGRAM).status_code == 200
+        program = (
+            {"instructions": [*harness_instructions("bad", "stale_cuda_error")]}
+            if fails
+            else STRUCTURAL_PROGRAM
+        )
+        response = _post(client, program)
+        assert response.status_code == 200
+        assert "retire_reason" not in response.text and "request_limit" not in response.text
         # Recycling is allowed while serving, but is interrupted by shutdown.
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
@@ -163,7 +171,12 @@ def test_request_limit_is_the_reason_a_healthy_worker_retires(tmp_path):
             pytest.fail("replacement never became ready")
     events = _read_events(tmp_path)
     finished = _one(events, "request_finished")
-    assert finished["finish_reason"] == "request_limit" and finished["status"] == "COMPLETED"
+    assert finished["finish_reason"] == ("program_failed" if fails else "completed")
+    assert finished["status"] == ("FAILED" if fails else "COMPLETED")
+    for event in events:
+        if event.get("request_id"):
+            assert "retire_reason" not in event
+            assert "request_limit" not in json.dumps(event)
     retired = _one(events, "worker_retired")
     assert retired["reason"] == "request_limit" and retired["worker_id"] == "gpu0/w0"
     assert [event["event"] for event in events].count("worker_ready") == 2  # first, replacement
@@ -175,9 +188,12 @@ def test_poisoned_context_is_the_reason_a_failed_cleanup_retires_a_worker(tmp_pa
         assert _post(client, program).status_code == 200
     events = _read_events(tmp_path)
     finished = _one(events, "request_finished")
-    assert finished["finish_reason"] == "poisoned_context" and finished["status"] == "FAILED"
-    assert finished["level"] == "WARNING"  # the server's problem, not the program's
-    assert _one(events, "worker_retired")["reason"] == "poisoned_context"
+    assert finished["finish_reason"] == "program_failed" and finished["status"] == "FAILED"
+    assert finished["level"] == "INFO"
+    assert "retire_reason" not in finished
+    retired = _one(events, "worker_retired")
+    assert retired["reason"] == "poisoned_context"
+    assert retired["level"] == "WARNING"
 
 
 def test_timeout_is_the_reason_a_worker_never_answered(tmp_path):

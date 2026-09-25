@@ -12,19 +12,30 @@ after the record naming its worker.
 `sandbox_disabled` records why the startup check disabled isolation, at `WARNING`.
 `pool_ready.sandbox` reports the active mode: `bubblewrap` or `none`.
 
-`request_finished` carries a `finish_reason`: why the request ended when it did.
+`request_finished` carries a `finish_reason` describing the request outcome.
 
-| `finish_reason` | what happened | worker |
+| `finish_reason` | what happened |
+|---|---|
+| `completed` | the program ran to the end |
+| `program_failed` | the program raised; `error_kind` and `instruction_index` say where |
+| `timeout` | no answer inside `timeout_seconds` |
+| `crashed` | the process exited mid-request; `exitcode` says how |
+| `no_worker` | saturated, nothing ran |
+| `rejected` | the request was rejected |
+| `cache_miss` | required blobs were missing |
+| `server_error` | the server failed to handle the request |
+
+`worker_retired` carries a `reason` describing why the worker is being replaced.
+
+| `reason` | what happened | level |
 |---|---|---|
-| `completed` | the program ran to the end | keeps serving |
-| `program_failed` | the program raised; `error_kind` and `instruction_index` say where | keeps serving |
-| `request_limit` | `--max-requests-per-worker` reached, after answering | replaced |
-| `poisoned_context` | cleanup after the program failed, after answering | replaced |
-| `sandbox_cleanup` | sandbox resources survived the request or workspace cleanup failed | killed, replaced |
-| `timeout` | no answer inside `timeout_seconds` | killed, replaced |
-| `crashed` | the process exited mid-request; `exitcode` says how | killed, replaced |
-| `no_worker` | saturated, nothing ran | untouched |
-| `rejected`, `cache_miss`, `server_error` | never reached a worker | untouched |
+| `request_limit` | the worker reached `--max-requests-per-worker` | `INFO` |
+| `poisoned_context` | runtime cleanup failed | `WARNING` |
+| `sandbox_cleanup` | sandbox resources survived the request or workspace cleanup failed | `WARNING` |
+| `timeout` | the worker exceeded the execution timeout | `WARNING` |
+| `crashed` | the worker crashed or could not execute a program | `ERROR` |
+
+The pool makes a replacement worker available once it is ready.
 
 A failing program is the client's kernel and stays `INFO`; only what the server
 itself did wrong reaches `ERROR`. A `cpu_only` function caught touching the GPU

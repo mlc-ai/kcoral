@@ -113,7 +113,7 @@ def test_crash_replaces_worker_and_recovers(pool):
 
 
 def settled(pool):
-    """Wait out a background replacement, which now happens after the answer."""
+    """Wait until background replacement finishes."""
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         with pool._replacing_lock:
@@ -129,7 +129,7 @@ def test_poisoned_context_replaces_worker_and_recovers(pool):
     assert outcome.execution.status == "FAILED"
     assert outcome.execution.error["kind"] == "runtime"
     assert outcome.execution.error["message"] == "simulated illegal memory access"
-    assert outcome.finish_reason == "poisoned_context"
+    assert outcome.finish_reason == "program_failed"
     assert settled(pool)._workers[0]._proc.pid != original_pid
     assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
 
@@ -146,14 +146,19 @@ def test_last_error_fails_current_request_without_replacing_worker(pool):
     assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
 
 
-def test_default_request_limit_replaces_worker_after_preserving_outcome():
+@pytest.mark.parametrize("fails", [False, True])
+def test_default_request_limit_replaces_worker_after_preserving_outcome(fails):
     pool = WorkerPool([0], fake_runtime_factory, sandbox="none")
     try:
         original_pid = pool._workers[0]._proc.pid
-        outcome = pool.submit(successful_program(), timeout=10)
+        program = (
+            prog(*harness_call("bad", "stale_cuda_error", [])) if fails else successful_program()
+        )
+        outcome = pool.submit(program, timeout=10)
 
-        assert outcome.execution.status == "COMPLETED"
-        assert outcome.finish_reason == "request_limit"
+        assert outcome.execution.status == ("FAILED" if fails else "COMPLETED")
+        assert outcome.finish_reason == ("program_failed" if fails else "completed")
+        assert not hasattr(outcome, "retire_reason")
         assert settled(pool)._workers[0]._proc.pid != original_pid
     finally:
         pool.shutdown()
@@ -509,7 +514,7 @@ def test_poison_replaces_only_the_corresponding_worker(shared_gpu_pool):
     after = [worker._proc.pid for worker in settled(shared_gpu_pool)._workers]
 
     assert outcome.execution.error["kind"] == "runtime"
-    assert outcome.finish_reason == "poisoned_context"
+    assert outcome.finish_reason == "program_failed"
     assert sum(old != new for old, new in zip(before, after, strict=True)) == 1
 
 

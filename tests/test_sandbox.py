@@ -7,6 +7,7 @@ import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,7 +20,7 @@ from kcoral.lease import NoopLeases
 from kcoral.pool import WorkerPool
 from kcoral.sandbox import Sandbox
 from kcoral.schemas import parse_program
-from kcoral.worker import Worker, WorkerCrashed, WorkerTimeout
+from kcoral.worker import Worker, WorkerCrashed, WorkerResult, WorkerTimeout
 
 
 @pytest.fixture
@@ -49,8 +50,9 @@ def values(outcome):
 
 
 def run(worker, program, timeout=15):
-    result, _, _, reason = worker.run(program, timeout, NoopLeases())
-    return values(result)["value"], reason
+    result = worker.run(program, timeout, NoopLeases())
+    assert result.finish_reason == "completed"
+    return values(result.execution)["value"], result.retire_reason
 
 
 def wait_for(predicate, timeout=10):
@@ -90,7 +92,9 @@ def test_gpu_mount_uses_device_minor_number(monkeypatch, minor, expected):
     monkeypatch.setattr(
         Path,
         "exists",
-        lambda path: True if str(path) in ("/dev/nvidia0", "/dev/nvidia6") else original_exists(path),
+        lambda path: (
+            True if str(path) in ("/dev/nvidia0", "/dev/nvidia6") else original_exists(path)
+        ),
     )
     instance = Sandbox()
     try:
@@ -267,6 +271,7 @@ def test_reused_process_has_fresh_files_modules_and_temporary_storage(worker):
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 import helper
 
 def main():
@@ -299,7 +304,7 @@ def main():
         ),
     )
     assert worker.pid == original_pid and worker.generation == 1
-    assert first_reason == second_reason == "completed"
+    assert first_reason is second_reason is None
     assert first["namespace"] == second["namespace"]
     assert not first["old"] and not second["old"]
     assert not first["old_temp"] and not second["old_temp"]
@@ -343,6 +348,7 @@ def test_concurrent_workers_cannot_see_each_other_or_modify_outside_files(
                 parsed("""
 import time
 from pathlib import Path
+from types import SimpleNamespace
 def main():
     Path("secret.txt").write_text("b-private")
     Path("ready").touch()
@@ -361,6 +367,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 def blocked(fn):
     try:
         fn()
@@ -392,7 +399,7 @@ def main(other, readonly, hidden):
                         (str(workspace_b), str(readonly), str(hidden)),
                     ),
                 )
-                assert reason == "completed"
+                assert reason is None
                 for key, value in result.items():
                     if key not in ("readonly", "own"):
                         assert value, key
@@ -423,6 +430,7 @@ def test_pool_supports_both_new_and_reused_sandbox_processes(require_bubblewrap,
                 parsed(
                     """
 from pathlib import Path
+from types import SimpleNamespace
 def main(value):
     assert not Path("old.txt").exists()
     Path("old.txt").write_text(value)
@@ -476,11 +484,38 @@ def main():
     assert not worker._proc.is_alive()
 
 
+@pytest.mark.parametrize("status", ["COMPLETED", "FAILED"])
+def test_parent_workspace_cleanup_preserves_program_outcome(monkeypatch, status):
+    worker = Worker.__new__(Worker)
+    worker._sandbox_mode = "bubblewrap"
+    calls = []
+
+    def prepare():
+        calls.append("prepare")
+        if len(calls) == 2:
+            raise OSError("workspace cleanup failed")
+
+    worker._sandbox = SimpleNamespace(prepare=prepare)
+    execution = SimpleNamespace(status=status)
+    monkeypatch.setattr(
+        worker, "_run_in_workspace", lambda *args: WorkerResult(execution, 1.0, 2.0)
+    )
+    monkeypatch.setattr(worker, "_kill", lambda: calls.append("kill"))
+    result = worker.run(None, 10, NoopLeases())
+
+    assert calls == ["prepare", "prepare", "kill"]
+    assert result.execution is execution
+    assert result.finish_reason == ("completed" if status == "COMPLETED" else "program_failed")
+    assert result.retire_reason == "sandbox_cleanup"
+    assert (result.lease_wait_ms, result.lease_held_ms) == (1.0, 2.0)
+
+
 def test_reserved_runtime_upload_path_is_rejected(worker):
-    outcome, _, _, _ = worker.run(
+    result = worker.run(
         parsed("def main(): return None", files={".kcoral/input": b"bad"}), 15, NoopLeases()
     )
-    assert outcome.status == "FAILED" and "reserved" in outcome.error["message"]
+    assert result.finish_reason == "program_failed"
+    assert "reserved" in result.execution.error["message"]
 
 
 def test_timeout_recovers_and_preserves_output(worker):
@@ -521,6 +556,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 def main():
     subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
                      start_new_session=True)
@@ -557,6 +593,7 @@ def test_subprocess_compilation_and_file_returns(worker):
     program = parsed("""
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 def main():
     subprocess.run(
         ["/usr/bin/cc", "-x", "c", "-o", "compiled", "-"],
@@ -569,9 +606,9 @@ def main():
     from kcoral.schemas import FileReturn
 
     program.instructions.append(FileReturn(key="file", kind="file", path="result.txt"))
-    outcome, _, _, reason = worker.run(program, 30, NoopLeases())
-    assert reason == "completed"
-    assert values(outcome)["file"].read_bytes() == b"compiled"
+    result = worker.run(program, 30, NoopLeases())
+    assert result.finish_reason == "completed" and result.retire_reason is None
+    assert values(result.execution)["file"].read_bytes() == b"compiled"
 
 
 def test_workspace_is_removed_on_shutdown(worker):
@@ -613,6 +650,7 @@ def test_http_uploads_and_logging_use_isolated_reused_worker(
             program = parsed(
                 """
 from pathlib import Path
+from types import SimpleNamespace
 def main(cache):
     assert not Path(cache).exists()
     assert not Path("previous").exists()
@@ -688,11 +726,12 @@ def test_gpu_computation_reuses_process_with_fresh_files(gpu_sandbox):
     worker, leases, _ = gpu_sandbox
     original_pid = worker.pid
     for value in (3, 7):
-        outcome, _, _, reason = worker.run(
+        result = worker.run(
             parsed(
                 """
 import torch
 from pathlib import Path
+from types import SimpleNamespace
 def main(value):
     assert not Path("previous").exists()
     Path("previous").touch()
@@ -705,8 +744,8 @@ def main(value):
             30,
             leases,
         )
-        assert values(outcome)["value"] == [float(i + value) for i in range(16)]
-        assert reason == "completed"
+        assert values(result.execution)["value"] == [float(i + value) for i in range(16)]
+        assert result.finish_reason == "completed" and result.retire_reason is None
         assert worker.pid == original_pid and worker._sandbox is not None
 
 
@@ -727,6 +766,7 @@ def test_uploaded_library_state_does_not_cross_reused_gpu_requests(gpu_sandbox, 
             parsed(
                 '''
 from pathlib import Path
+from types import SimpleNamespace
 import subprocess
 from tvm_ffi.libinfo import find_include_path, find_dlpack_include_path
 def main(keep_mapping):
@@ -765,11 +805,12 @@ int __tvm_ffi_next_value(void* self, const TVMFFIAny* args,
         program.return_(key="value", value=result)
         request = parse_program({"instructions": program.instructions})
         request.blob_bytes = program._blobs
-        outcome, _, _, reason = worker.run(request, 30, leases)
-        assert values(outcome)["value"] == 1
+        result = worker.run(request, 30, leases)
+        assert values(result.execution)["value"] == 1
+        assert result.finish_reason == "completed"
         if keep_mapping:
-            assert reason == "sandbox_cleanup" and worker._sandbox is None
+            assert result.retire_reason == "sandbox_cleanup" and worker._sandbox is None
             assert worker.generation == request_index + 1
         else:
-            assert reason == "completed"
+            assert result.retire_reason is None
             assert worker.pid == original_pid and worker._sandbox is not None

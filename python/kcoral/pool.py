@@ -27,7 +27,7 @@ from pathlib import Path
 
 from .events import EventLogger
 from .lease import GPULeases, NoopLeases, Ticket
-from .worker import RETIRING_FINISH_REASONS, Worker, WorkerCrashed, WorkerTimeout
+from .worker import Worker, WorkerCrashed, WorkerTimeout
 
 
 class IdleWorkers:
@@ -218,22 +218,21 @@ class WorkerPool:
             queue_ms=queue_ms,
         )
         run_started = time.monotonic()
-        finish_reason = None
+        retire_reason = None
         worker.request_id = request_id
         try:
-            execution, lease_wait_ms, lease_held_ms, finish_reason = worker.run(
-                program, timeout, self._leases
-            )
+            result = worker.run(program, timeout, self._leases)
+            retire_reason = result.retire_reason
             return SubmitOutcome(
-                execution,
+                result.execution,
                 worker.gpu_id,
                 queue_ms,
                 (time.monotonic() - run_started) * 1000,
-                lease_wait_ms,
-                lease_held_ms,
+                result.lease_wait_ms,
+                result.lease_held_ms,
                 worker.worker_id,
-                finish_reason,
-                self._interfered_request(worker, execution, request_id),
+                result.finish_reason,
+                self._interfered_request(worker, result.execution, request_id),
             )
         except (WorkerTimeout, WorkerCrashed) as exc:
             exc.worker_id = worker.worker_id
@@ -245,7 +244,7 @@ class WorkerPool:
             self._leases.abandon(worker.gpu_id, worker)  # no-op unless it still holds
             worker.request_id = None
             try:
-                self._release_or_replace(worker, finish_reason)
+                self._release_or_replace(worker, retire_reason)
             finally:
                 with self._condition:
                     self._active -= 1
@@ -261,7 +260,7 @@ class WorkerPool:
         holder = self._leases.request_at(worker.gpu_id, error.pop("detected_at_ns"))
         return None if holder == request_id else holder  # its own release may reach us late
 
-    def _release_or_replace(self, worker: Worker, finish_reason: str | None) -> None:
+    def _release_or_replace(self, worker: Worker, retire_reason: str | None) -> None:
         """Hand the worker back, replacing its process first if it retired.
 
         A retired worker has already exited, so it stays out of the idle set until
@@ -269,11 +268,11 @@ class WorkerPool:
         answered request's timings; a crash or timeout respawned in place already.
         """
         with self._condition:
-            if finish_reason not in RETIRING_FINISH_REASONS or self._closing.is_set():
+            if retire_reason is None or self._closing.is_set():
                 self._idle.release(worker)
                 return
             thread = threading.Thread(
-                target=self._replace, args=(worker, finish_reason), daemon=True
+                target=self._replace, args=(worker, retire_reason), daemon=True
             )
             with self._replacing_lock:
                 self._replacing[thread] = worker
@@ -284,7 +283,7 @@ class WorkerPool:
                 with self._replacing_lock:
                     self._replacing.pop(thread, None)
         # This fallback remains tracked by the active submit.
-        self._replace(worker, finish_reason)
+        self._replace(worker, retire_reason)
 
     def _replace(self, worker: Worker, reason: str) -> None:
         try:
