@@ -2,7 +2,7 @@
 
 In large-scale kernel evaluation, compilation can take much longer than kernel
 execution. Build steps that need only a CPU (central processing unit) can run
-separately from execution on a GPU (graphics processing unit). Running that
+separately from execution on a GPU. Running that
 host work on expensive GPU servers can increase cost and leave GPUs underutilized.
 Some compiler APIs query CUDA or load GPU modules during compilation; those
 steps need GPU access.

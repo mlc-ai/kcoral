@@ -1,0 +1,83 @@
+name: Build wheels
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Optional tag, branch, or SHA; defaults to the selected workflow ref'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04, arch: x86_64}
+          - {os: ubuntu-24.04-arm, arch: aarch64}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Check release version
+        env:
+          BUILD_REF: ${{ inputs.ref || github.ref }}
+        run: |
+          python - <<'PY'
+          import ast
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          ref = os.environ['BUILD_REF']
+          tag = ref.removeprefix('refs/tags/')
+          if ref.startswith('refs/tags/') or re.match(r'^v[0-9]', tag):
+              if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:\.post[0-9]+)?', tag):
+                  raise SystemExit(f'Unsupported release tag: {tag}')
+              version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+              if tag != f'v{version}':
+                  raise SystemExit(f'Tag {tag} does not match package version {version}')
+              tree = ast.parse(Path('python/kcoral/__init__.py').read_text())
+              exported = next(
+                  ast.literal_eval(node.value)
+                  for node in tree.body if isinstance(node, ast.Assign)
+                  if any(isinstance(t, ast.Name) and t.id == '__version__' for t in node.targets)
+              )
+              if exported != version:
+                  raise SystemExit(f'kcoral.__version__ {exported} does not match {version}')
+          PY
+      - name: Build and smoke-test manylinux wheels
+        uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55 # v4.1.0
+        env:
+          # The wheel has no Python ABI dependency; build once per architecture.
+          CIBW_BUILD: cp310-manylinux_${{ matrix.arch }}
+          CIBW_ARCHS_LINUX: ${{ matrix.arch }}
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+          CIBW_BEFORE_ALL_LINUX: >-
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh &&
+            sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain 1.87.0
+          CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
+          CIBW_TEST_COMMAND: kcoral router --help && kcoral-node --help
+        with:
+          output-dir: wheelhouse
+      - name: Check wheel metadata
+        run: uv tool run twine check --strict wheelhouse/*.whl
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kcoral-wheels-linux-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error

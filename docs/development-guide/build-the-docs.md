@@ -134,25 +134,25 @@ generated HTML in the hosting repository: the next deployment replaces it.
 
 ## Run project checks
 
-`--group test` adds pytest to either environment from [installation](../getting-started/installation.md):
+`--group test` adds pytest to the server environment from [installation](../getting-started/installation.md):
 
 ```bash
-uv sync --no-editable --group test             # or --group test --group gpu
+uv sync --no-editable --group test
 pytest -q
 ruff check python tests
 ruff format --check python tests
 ```
 
-The GPU integration tests are opt-in, and need the GPU environment:
+The GPU integration tests are opt-in, and need the server dependencies and a GPU:
 
 ```bash
 KCORAL_GPU_TEST=1 pytest -q
 ```
 
-The CPU compilation integration test needs the compiler group and a CUDA
+The CPU compilation integration test needs the server extra and a CUDA
 toolchain, but no GPU. It runs whenever `nvcc`, `ninja` and a host C++ compiler
 are present, and skips itself otherwise:
 
 ```bash
-uv run --no-editable --group test --group compiler pytest -q
+uv run --no-editable --group test pytest -q
 ```

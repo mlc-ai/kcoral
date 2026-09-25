@@ -1,0 +1,4 @@
+include Cargo.toml Cargo.lock
+include rust/kcoral/Cargo.toml rust/kcoral/build.rs
+recursive-include rust/kcoral/src *.rs
+recursive-include rust/kcoral/proto *.proto

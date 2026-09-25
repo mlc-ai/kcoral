@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77", "setuptools-rust>=1.11,<2"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -14,14 +14,20 @@ dependencies = [
   "ml_dtypes>=0.5", # the bfloat16 and float8 scalar types numpy lacks
 ]
 
-# The client needs none of the HTTP front-end, so `pip install kcoral` installs
-# the client alone and `pip install kcoral[server]` adds the server.
+# The base install supports clients and the Rust router. The server extra
+# supplies both GPU execution and CPU compilation dependencies.
 [project.optional-dependencies]
 server = [
   "fastapi>=0.110",
   "grpcio>=1.66.2",
   "protobuf>=5.27.2",
   "uvicorn>=0.29",
+  "torch>=2.14",
+  "apache-tvm>=0.26.0",
+  "apache-tvm-ffi[cpp]==0.1.13.post2",
+  "nvidia-cutlass-dsl[cu13]==4.7.0",
+  "cupti-python>=13.0.1",
+  "flashinfer-python>=0.6.17",
 ]
 
 [project.scripts]
@@ -36,35 +42,28 @@ server = [
 test = [
   "pytest>=8",
 ]
-compiler = [
-  { include-group = "server" },
-  "apache-tvm-ffi[cpp]==0.1.13.post2",
-]
-gpu = [
-  { include-group = "server" },
-  "torch>=2.9",
-  "apache-tvm>=0.26.0",
-  "apache-tvm-ffi[cpp]==0.1.13.post2",
-  "nvidia-cutlass-dsl[cu13]==4.7.0",
-  "cupti-python>=13.0.1",
-  "flashinfer-python>=0.6.17",
-]
+# Keep existing checkout commands working; runtime requirements live in the extra.
+gpu = ["kcoral[server]"]
 
 [tool.uv]
 default-groups = ["server"]
 environments = ["sys_platform == 'linux'"]
 
-[[tool.uv.index]]
-name = "pytorch-cu132"
-url = "https://download.pytorch.org/whl/cu132"
-explicit = true
-
-[tool.uv.sources]
-torch = { index = "pytorch-cu132" }
-
 [tool.setuptools.packages.find]
 where = ["python"]
 include = ["kcoral*"]
+
+[[tool.setuptools-rust.bins]]
+target = "kcoral-router"
+path = "rust/kcoral/Cargo.toml"
+cargo-manifest-args = ["--locked"]
+strip = "All"
+
+[[tool.setuptools-rust.bins]]
+target = "kcoral-node"
+path = "rust/kcoral/Cargo.toml"
+cargo-manifest-args = ["--locked"]
+strip = "All"
 
 [tool.pytest.ini_options]
 pythonpath = ["python"]

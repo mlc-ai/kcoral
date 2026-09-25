@@ -31,7 +31,7 @@ the actual method signatures.
 Provide the server address, kernel source or function to implement, tensor
 shapes and types, correctness tolerance, and the outputs you want. Say whether
 compilation should happen on the GPU server, on a separate CPU server, or locally.
-GPU means graphics processing unit; CPU means central processing unit.
+CPU means central processing unit.
 
 For example, give the agent this prompt from the repository checkout:
 

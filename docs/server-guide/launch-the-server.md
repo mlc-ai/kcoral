@@ -93,7 +93,7 @@ the corresponding fields to `ServerConfig`, the server configuration object.
 Explicit command-line options take precedence over environment variables.
 Defaults in this table assume none of those environment variables is set.
 
-GPU means graphics processing unit; CPU means central processing unit. A worker
+CPU means central processing unit. A worker
 is a process that executes one request at a time. A lease gives a worker exclusive
 access to its GPU while it executes or measures GPU work.
 

@@ -36,8 +36,9 @@ Python 3.10 or newer is required. From this checkout:
 pip install .
 ```
 
-This installs only the client. See [installation](docs/getting-started/installation.md)
-for server, GPU and compiler dependencies.
+This installs the package with client dependencies. Use `pip install ".[server]"`
+for both GPU execution and CPU compilation dependencies. See
+[installation](docs/getting-started/installation.md) for source build and system requirements.
 
 ## Run the server
 

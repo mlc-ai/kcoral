@@ -158,7 +158,7 @@ def _cuda_toolchain_available() -> bool:
 
 @pytest.mark.skipif(
     not _cuda_toolchain_available(),
-    reason="needs the compiler group and a CUDA toolchain (nvcc, ninja, c++)",
+    reason="needs the server extra and a CUDA toolchain (nvcc, ninja, c++)",
 )
 def test_cpu_cuda_compilation_end_to_end():
     arch = os.environ.get("KCORAL_CPU_COMPILE_ARCH", "sm_90a")

@@ -1,7 +1,7 @@
 # Your First Program
 
 Start a KCoral server, then submit a program that adds one to a four-element
-tensor on its GPU (graphics processing unit) and returns the result.
+tensor on its GPU and returns the result.
 
 ## Required hardware
 
