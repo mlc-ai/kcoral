@@ -5,8 +5,6 @@ call functions, check correctness and return measurements. A GPU is a graphics
 processing unit; a CPU is a central processing unit. CPU compilation services
 can build kernels for a separate GPU server.
 
-View the source code, report issues and contribute on [GitHub](https://github.com/mlc-ai/kcoral).
-
 ```{warning}
 KCoral allows clients to execute arbitrary code on its workers. Only allow
 trusted clients to access your KCoral server or Router. Deploy on a trusted,
@@ -69,7 +67,6 @@ tutorials/agent-integration
 :hidden:
 
 development-guide/build-the-docs
-GitHub <https://github.com/mlc-ai/kcoral>
 ```
 
 ```{toctree}
