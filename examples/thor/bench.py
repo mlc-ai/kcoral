@@ -3,11 +3,11 @@
 Every kernel file passed on the command line, plus cuBLAS as the reference, is
 checked and timed in one KCoral request, so all implementations share the same
 GPU and the same thermal window. The protocol is fixed by ``task.json`` and
-implemented by ``harness/remote_bench.py``, which runs on the server.
+implemented by ``remote_bench.py``, which runs on the server.
 
 Examples::
 
-    uv run python bench.py kernels/baseline.py
+    uv run python bench.py initial_kernel.py
     uv run python bench.py work/best.py work/new.py
     uv run python bench.py work/new.py --check-only --shapes 0
     uv run python bench.py --health
@@ -26,10 +26,10 @@ from kcoral import Client, KCoralError, Program, ProtocolError, TransportError
 
 HERE = Path(__file__).resolve().parent
 TASK = HERE / "task.json"
-HARNESS = HERE / "harness" / "remote_bench.py"
+HARNESS = HERE / "remote_bench.py"
 CLIENT_ERRORS = (KCoralError, TransportError, ProtocolError)
 CUBLAS = "cublas"
-BASELINE = "baseline"
+INITIAL = "initial_kernel"
 
 
 def parse_args() -> argparse.Namespace:
@@ -89,14 +89,14 @@ def summarize(report: dict, task: dict) -> tuple[list[str], dict, bool]:
     names = [*report["names"], CUBLAS]
     lines = []
     header = f"{'shape':<28} {'impl':<16} {'status':<6} {'median ms':>10} {'spread':>7} {'TF/s':>7}"
-    header += f" {'x baseline':>10} {'x cuBLAS':>9}"
+    header += f" {'x initial':>10} {'x cuBLAS':>9}"
     lines += [header, "-" * len(header)]
     totals = {name: 0.0 for name in names}
     passed_all = {name: True for name in names}
     for shape in report["shapes"]:
         label = f"{shape['name']} {shape['M']}x{shape['N']}x{shape['K']}"
         impls = shape["impls"]
-        base_ms = impls.get(BASELINE, {}).get("median_ms")
+        initial_ms = impls.get(INITIAL, {}).get("median_ms")
         cublas_ms = impls.get(CUBLAS, {}).get("median_ms")
         for name in names:
             info = impls.get(name, {})
@@ -109,11 +109,11 @@ def summarize(report: dict, task: dict) -> tuple[list[str], dict, bool]:
                 lines.append(row)
                 continue
             totals[name] += ms
-            vs_base = f"{base_ms / ms:.2f}" if base_ms else "-"
+            vs_initial = f"{initial_ms / ms:.2f}" if initial_ms else "-"
             vs_cublas = f"{cublas_ms / ms:.3f}" if cublas_ms else "-"
             lines.append(
                 f"{row} {ms:>10.4f} {info['spread']:>7.1%}"
-                f" {info['tflops']:>7.1f} {vs_base:>10} {vs_cublas:>9}"
+                f" {info['tflops']:>7.1f} {vs_initial:>10} {vs_cublas:>9}"
             )
     all_passed = all(passed_all[name] for name in report["names"])
 
@@ -125,8 +125,8 @@ def summarize(report: dict, task: dict) -> tuple[list[str], dict, bool]:
                 lines.append(f"  {name:<16} not scored (failed or errored on some shape)")
                 continue
             entry = {"total_ms": round(totals[name], 4)}
-            if passed_all.get(BASELINE) and BASELINE in totals:
-                entry["speedup_vs_baseline"] = round(totals[BASELINE] / totals[name], 3)
+            if passed_all.get(INITIAL) and INITIAL in totals:
+                entry["speedup_vs_initial"] = round(totals[INITIAL] / totals[name], 3)
             entry["ratio_vs_cublas"] = round(totals[CUBLAS] / totals[name], 4)
             summary[name] = entry
             extra = "".join(f"  {key}={value}" for key, value in entry.items() if key != "total_ms")

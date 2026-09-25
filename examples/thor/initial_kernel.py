@@ -1,6 +1,7 @@
-"""Baseline fp16 GEMM for the Thor example: ``D = A @ B.T``.
+"""Initial fp16 GEMM kernel for the Thor example: ``D = A @ B.T``.
 
-The textbook shared-memory tiled kernel. A 16x16 thread block computes a 16x16
+The agent's starting point: the textbook shared-memory tiled kernel on CUDA
+cores, deliberately unoptimized. A 16x16 thread block computes a 16x16
 tile of ``D``: for each 16-wide slice of K it stages one tile of ``A`` and one of
 ``B`` in shared memory, then every thread accumulates its output element in an
 fp32 register with scalar FMAs. There are no tensor cores, no register

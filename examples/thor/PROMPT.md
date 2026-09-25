@@ -20,7 +20,7 @@ protocol:
 
 The score of a candidate is its **total latency**: the sum over all four shapes
 of its median time. Lower is better. `bench.py` also reports
-`speedup_vs_baseline` (total of `kernels/baseline.py` divided by the candidate's
+`speedup_vs_initial` (total of `initial_kernel.py` divided by the candidate's
 total) and `ratio_vs_cublas` (cuBLAS total divided by the candidate's total).
 cuBLAS is the reference to chase; a candidate is scored only if it passes on
 **every** shape.
@@ -41,14 +41,15 @@ cuBLAS is the reference to chase; a candidate is scored only if it passes on
 ## 3. Files
 
 Locked (reading is fine, modifying invalidates the run): `bench.py`,
-`harness/`, `task.json`, `kernels/`, `pyproject.toml`, `uv.lock`, this file.
+`remote_bench.py`, `task.json`, `initial_kernel.py`, `pyproject.toml`,
+`uv.lock`, this file.
 
 Your workspace is `work/` (create it). Keep:
 
 - `work/<short-name>.py` — one file per candidate, never edited after it has
   been benchmarked (copy to a new name to iterate);
 - `work/best.py` — a copy of the best passing candidate (initially a copy of
-  `kernels/baseline.py`);
+  `initial_kernel.py`);
 - `work/LOG.md` — one entry per round (section 7);
 - `work/RESULTS.md` — the final report (section 8).
 
@@ -76,7 +77,7 @@ def build(M: int, N: int, K: int):
 - Do not special-case the test data (seeds, values) or cache results between
   calls. Correctness must hold for any fp16 inputs of these shapes.
 - Compile for the server's exact architecture with arch-specific features
-  enabled; copy `cuda_target()` from `kernels/baseline.py`.
+  enabled; copy `cuda_target()` from `initial_kernel.py`.
 
 ## 5. Benchmark protocol — the only source of truth
 
@@ -124,7 +125,7 @@ uv run python bench.py work/best.py work/new.py             # timed A/B comparis
 
 ### A ladder of optimizations
 
-The baseline is a textbook shared-memory tiled kernel on CUDA cores (well
+The initial kernel is a textbook shared-memory tiled kernel on CUDA cores (well
 under 1 TF/s). Each step below pays off on its own; take them in roughly this
 order and measure each.
 
@@ -132,7 +133,7 @@ order and measure each.
    per 128×N output tile: load A and B tiles into swizzled shared memory with
    TMA, multiply with `Tx.gemm_async` into a TMEM accumulator over the K loop,
    read the accumulator back to registers and store D. Even without any
-   overlap this is tens of times faster than the baseline.
+   overlap this is tens of times faster than the initial kernel.
 2. **Pipelining and warp specialization.** A ring of shared-memory stages with
    "full" (TMA → MMA) and "empty" (MMA → TMA) mbarriers; one thread of one
    warp issues TMA, one thread of another warp issues MMAs, so loads for later
@@ -264,8 +265,8 @@ row is 64 fp16 values, so `BK = 64` pairs naturally with swizzle mode 3.
 
 ## 7. Iteration loop
 
-Start with round 0: copy `kernels/baseline.py` to `work/best.py`, run
-`uv run python bench.py kernels/baseline.py` once (the baseline is slow; this
+Start with round 0: copy `initial_kernel.py` to `work/best.py`, run
+`uv run python bench.py initial_kernel.py` once (the initial kernel is slow; this
 takes a few minutes) and record its total in `work/LOG.md`.
 
 Then repeat:
@@ -283,7 +284,7 @@ Then repeat:
 6. If confirmed, copy the candidate to `work/best.py`; otherwise keep the best.
 7. Print one status line, exactly in this form, so progress is visible:
 
-   `ROUND <n> | <candidate> | <PASS/FAIL> | best total <ms> ms | <x.xx>x vs baseline | <y.yyy>x vs cuBLAS | rounds without improvement: <k>`
+   `ROUND <n> | <candidate> | <PASS/FAIL> | best total <ms> ms | <x.xx>x vs initial | <y.yyy>x vs cuBLAS | rounds without improvement: <k>`
 
 A round is one distinct idea carried to a benchmarked result or abandoned.
 Fixing compile errors or bugs in the same idea is part of that round. Do not
@@ -302,10 +303,10 @@ Stop when either:
 
 Then:
 
-1. Run the final verification: `uv run python bench.py kernels/baseline.py work/best.py`.
+1. Run the final verification: `uv run python bench.py initial_kernel.py work/best.py`.
 2. Write `work/RESULTS.md`: the final table and aggregate from that run, the
    telemetry line and any warnings, the exact command to reproduce, the chain
    of ideas that produced `work/best.py` (by round), and what you would try
    next.
-3. Print `FINAL | best total <ms> ms | <x.xx>x vs baseline | <y.yyy>x vs cuBLAS | all shapes PASS`
+3. Print `FINAL | best total <ms> ms | <x.xx>x vs initial | <y.yyy>x vs cuBLAS | all shapes PASS`
    followed by the final verification output.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Start (or stop) a KCoral GPU server on a Thor host over SSH.
 #
-#   ./setup_thor_server.sh <thor-host> [--port PORT] [--dir DIR]
-#   ./setup_thor_server.sh <thor-host> --stop [--dir DIR]
+#   ./launch_server.sh <thor-host> [--port PORT] [--dir DIR]
+#   ./launch_server.sh <thor-host> --stop [--dir DIR]
 #
 # Start:
 # 1. copies this KCoral checkout's tracked files to <thor-host>:DIR

@@ -24,14 +24,14 @@
     "flush_l2": true,
     "timer": "CUDA events around each timed call, L2 flushed between calls; median per trial, then median across trials",
     "slow_call_ms": 20,
-    "slow_rule": "implementations whose single call takes at least slow_call_ms (compute-bound, e.g. the baseline) are timed first, on their own, for all trials",
+    "slow_rule": "implementations whose single call takes at least slow_call_ms (compute-bound, e.g. the initial kernel) are timed first, on their own, for all trials",
     "ramp_s": 4.0,
     "ramp_rule": "then cuBLAS runs untimed for ramp_s seconds so the GPU and memory clocks reach their top state",
     "settle_s": 0.25,
     "interleave_rule": "then every trial times each remaining implementation (cuBLAS included) back to back, rotating the order; each first runs untimed for settle_s seconds"
   },
   "score": {
-    "speedup_vs_baseline": "sum(baseline median ms) / sum(candidate median ms) over all shapes",
+    "speedup_vs_initial": "sum(initial kernel median ms) / sum(candidate median ms) over all shapes",
     "ratio_vs_cublas": "sum(cuBLAS median ms) / sum(candidate median ms) over all shapes"
   },
   "stability": {
