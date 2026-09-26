@@ -19,7 +19,7 @@ The server checks [bubblewrap filesystem isolation](docs/server-guide/launch-the
 at startup by default. If unavailable, it warns and runs without isolation.
 Use `--sandbox none` to disable it explicitly.
 
-**[Documentation](https://kcoral.mlc.ai/docs/)** · [Quickstart](docs/getting-started/quickstart.md) ·
+**[Website](https://kcoral.mlc.ai/)** · **[Documentation](https://kcoral.mlc.ai/docs/)** · [Quickstart](docs/getting-started/quickstart.md) ·
 [Write a client program](docs/client-guide/writing-a-program.md) · [KCoral Protocol](docs/client-guide/protocol.md)
 
 ## Install

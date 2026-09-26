@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#fcfaf7">
+    <title>KCoral — Remote GPU kernel development</title>
+    <meta name="description" content="Run GPU kernels remotely with KCoral. Upload code and data, compile, check correctness, and benchmark from your own workspace.">
+    <link rel="canonical" href="https://kcoral.mlc.ai/">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="KCoral — Remote GPU kernel development">
+    <meta property="og:description" content="Your workspace. Remote GPUs. One workflow to compile, check, and benchmark your kernels.">
+    <meta property="og:url" content="https://kcoral.mlc.ai/">
+    <meta property="og:image" content="https://kcoral.mlc.ai/assets/brand/kcoral-logo-light.png">
+    <link rel="icon" type="image/png" href="assets/brand/kcoral-icon.png">
+    <link rel="stylesheet" href="assets/site.css">
+    <script src="assets/site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="brand" href="./" aria-label="KCoral home">
+          <img src="assets/brand/kcoral-logo-light.png" alt="KCoral" width="2048" height="682">
+        </a>
+        <nav aria-label="Main navigation">
+          <a href="#features">Why KCoral</a>
+          <a href="docs/">Docs</a>
+          <a class="nav-github" href="https://github.com/mlc-ai/kcoral">GitHub <span aria-hidden="true">↗</span></a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero container" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Remote GPU kernel development</p>
+          <h1 id="hero-title">Run your kernels.<br><span>Where the<br class="desktop-break"> GPUs are.</span></h1>
+          <p class="hero-description">KCoral connects your workspace to remote compute. Upload code and data, check correctness, and benchmark GPU kernels over HTTP.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#get-started">Get started <span aria-hidden="true">→</span></a>
+            <a class="button button-secondary" href="docs/">Read the docs <span aria-hidden="true">↗</span></a>
+          </div>
+          <p class="hero-note">For kernel developers and coding agents.</p>
+        </div>
+
+        <figure class="workflow" aria-labelledby="workflow-caption">
+          <div class="workspace-node">
+            <div class="node-heading"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>YOUR WORKSPACE</span></div>
+            <div class="workspace-content"><span class="code-symbol" aria-hidden="true">&lt;/&gt;</span><div><strong>Code. Submit. Iterate.</strong><span>Python client · HTTP API</span></div></div>
+          </div>
+          <div class="connection"><span>code + data</span><span aria-hidden="true">↓</span><span>POST /execute</span></div>
+          <div class="worker-node">
+            <div class="worker-heading">
+              <svg class="chip-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="10" y="10" width="28" height="28" rx="5"/><rect x="17" y="17" width="14" height="14" rx="2"/><path d="M18 4v6m12-6v6M18 38v6m12-6v6M4 18h6m-6 12h6m28-12h6m-6 12h6"/></svg>
+              <div><strong>KCoral workers</strong><span>Your remote compute</span></div>
+              <span class="worker-badge">GPU / CPU</span>
+            </div>
+            <ol class="execution-steps">
+              <li><span>01</span> Compile <span aria-hidden="true">↗</span></li>
+              <li><span>02</span> Check correctness <span aria-hidden="true">✓</span></li>
+              <li><span>03</span> Benchmark <span aria-hidden="true">↗</span></li>
+            </ol>
+          </div>
+          <div class="connection return-connection"><span>results</span><span aria-hidden="true">↓</span><span>back to you</span></div>
+          <div class="result-node"><span class="result-check" aria-hidden="true">✓</span><strong>Correctness + timing</strong><span class="result-format">Ready to iterate</span></div>
+          <figcaption id="workflow-caption">One workflow, from source to measurements.</figcaption>
+        </figure>
+      </section>
+
+      <div class="container toolchain-strip">
+        <p>Bring your kernel toolchain</p>
+        <ul aria-label="Supported kernel workflows"><li>CUDA C</li><li>Triton</li><li>CuTeDSL</li><li>TIRx</li></ul>
+        <a href="docs/latest/tutorials/benchmark-kernel.html">Explore examples <span aria-hidden="true">↗</span></a>
+      </div>
+
+      <section id="features" class="features container" aria-labelledby="features-title">
+        <div class="section-heading"><p class="eyebrow">Focus on the kernel</p><h2 id="features-title">Your workflow. More compute.</h2></div>
+        <div class="feature-grid">
+          <article class="feature">
+            <span class="feature-number" aria-hidden="true">01 / EXECUTE</span>
+            <h3>Keep your workspace local</h3>
+            <p>Write code on your machine and run it on remote GPU workers. Upload your own harness and return exactly the results you need.</p>
+            <a href="docs/latest/client-guide/writing-a-program.html">Write a program <span aria-hidden="true">↗</span></a>
+          </article>
+          <article class="feature">
+            <span class="feature-number" aria-hidden="true">02 / COMPILE</span>
+            <h3>Put CPUs to work, too</h3>
+            <p>Move host-only compilation to a CPU server, then send the compiled library to a GPU worker for correctness checks and measurement.</p>
+            <a href="docs/latest/tutorials/remote-compilation.html">Explore remote compilation <span aria-hidden="true">↗</span></a>
+          </article>
+          <article class="feature">
+            <span class="feature-number" aria-hidden="true">03 / ITERATE</span>
+            <h3>Give your agent a GPU workflow</h3>
+            <p>Connect coding agents to real hardware with a documented protocol and a ready-to-use skill. Feed results back into the next revision.</p>
+            <a href="docs/latest/tutorials/agent-integration.html">Connect an agent <span aria-hidden="true">↗</span></a>
+          </article>
+        </div>
+      </section>
+
+      <section id="get-started" class="getting-started" aria-labelledby="start-title">
+        <div class="container start-grid">
+          <div>
+            <p class="eyebrow">From code to compute</p>
+            <h2 id="start-title">Start with your<br>first kernel.</h2>
+            <p class="section-description">A small client. A remote worker.<br>Everything you need to start iterating.</p>
+            <ol class="start-steps">
+              <li><div><h3>Install the client</h3><p>Clone the repository and install in a virtual environment.</p></div></li>
+              <li><div><h3>Connect to a server</h3><p>Use your team's endpoint, or <a href="docs/latest/server-guide/launch-the-server.html">launch a worker</a>.</p></div></li>
+              <li><div><h3>Run your first program</h3><p>Follow the <a href="docs/latest/getting-started/quickstart.html">quickstart</a> to submit code and get results.</p></div></li>
+            </ol>
+          </div>
+          <div class="install-panel">
+            <div class="terminal">
+              <div class="terminal-heading"><span><span class="terminal-dot" aria-hidden="true"></span> Install from source</span><button id="copy-install" type="button" hidden>Copy</button></div>
+              <pre tabindex="0" aria-label="Client installation commands"><code id="install-command"><span class="code-comment"># Get KCoral</span>
+git clone https://github.com/mlc-ai/kcoral.git
+cd kcoral
+
+<span class="code-comment"># Set up the client</span>
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install .</code></pre>
+              <div class="terminal-footer"><span aria-hidden="true">↳</span> Your client runs without a local GPU.</div>
+            </div>
+            <p class="install-note">Building from source requires Python 3.10+, Rust 1.87+, and a C/C++ toolchain. See the <a href="docs/latest/getting-started/installation.html">installation guide</a> for server dependencies.</p>
+            <p id="copy-status" class="copy-status" role="status"></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="community container" aria-labelledby="community-title">
+        <div><p class="eyebrow">Build with us</p><h2 id="community-title">Better kernels start with iteration.</h2><p>Explore the code, share an idea, or contribute your next improvement.</p></div>
+        <a class="button button-secondary" href="https://github.com/mlc-ai/kcoral">KCoral on GitHub <span aria-hidden="true">↗</span></a>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner"><span>© KCoral contributors</span><nav aria-label="Footer navigation"><a href="docs/">Documentation</a><a href="https://github.com/mlc-ai/kcoral">GitHub <span aria-hidden="true">↗</span></a></nav><a class="back-to-top" href="#main">Back to top <span aria-hidden="true">↑</span></a></div>
+    </footer>
+  </body>
+</html>
