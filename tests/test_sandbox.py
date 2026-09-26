@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import subprocess
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -82,6 +83,37 @@ def test_direct_worker_reports_missing_bubblewrap(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name: None)
     with pytest.raises(ValueError, match="install bubblewrap"):
         Worker(None, cpu_runtime_factory)
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_optional_nsight_installation(monkeypatch, tmp_path, require_bubblewrap, installed):
+    installation = Path("/opt/nvidia/nsight-compute")
+    (tmp_path / "ncu").write_text("echo synthetic-ncu\n")
+    original_exists, original_resolve = Path.exists, Path.resolve
+    monkeypatch.setattr(
+        Path, "exists", lambda path: installed if path == installation else original_exists(path)
+    )
+    monkeypatch.setattr(
+        Path,
+        "resolve",
+        lambda path, **kwargs: tmp_path if path == installation else original_resolve(path, **kwargs),
+    )
+    script = (
+        f"/bin/sh {installation}/ncu && ! touch {installation}/unexpected-write"
+        if installed
+        else f"test ! -e {installation}"
+    )
+    instance = Sandbox()
+    try:
+        result = subprocess.run(
+            instance.command(None, program=("/bin/sh", "-c", script)),
+            capture_output=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == (b"synthetic-ncu\n" if installed else b"")
+    finally:
+        instance.close()
 
 
 @pytest.mark.parametrize("minor, expected", [(6, "/dev/nvidia6"), (None, "/dev/nvidia0")])

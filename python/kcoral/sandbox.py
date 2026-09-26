@@ -186,6 +186,7 @@ class Sandbox:
                 "/lib",
                 "/lib64",
                 "/sys",
+                "/opt/nvidia/nsight-compute",
                 "/etc/ld.so.cache",
                 "/etc/ld.so.conf",
                 "/etc/ld.so.conf.d",
