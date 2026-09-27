@@ -6,14 +6,12 @@ so autodoc reads that version's API, not the API installed for another ref.
 """
 
 import argparse
-import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 from pathlib import Path
 
@@ -104,13 +102,12 @@ def main():
             source = REPO
             if name != "latest":
                 source = work / name
-                source.mkdir()
-                archive = subprocess.check_output(
-                    ["git", "archive", "--format=tar", f"refs/tags/{name}"], cwd=REPO
-                )
-                with tarfile.open(fileobj=io.BytesIO(archive)) as files:
-                    files.extractall(source, filter="data")
-            build_version(source, site / "docs" / name, name, versions, work / f"env-{name}")
+                run("git", "worktree", "add", "--detach", source, f"refs/tags/{name}", cwd=REPO)
+            try:
+                build_version(source, site / "docs" / name, name, versions, work / f"env-{name}")
+            finally:
+                if name != "latest":
+                    run("git", "worktree", "remove", "--force", source, cwd=REPO)
 
         redirect(site / "index.html", "docs/")
         redirect(site / "docs" / "index.html", "latest/")
