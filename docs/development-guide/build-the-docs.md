@@ -3,193 +3,117 @@
 
 # Build the Docs
 
-Sphinx builds the website; MyST reads Markdown, and Furo supplies the theme.
-Only the Python interface reference uses Sphinx's native reStructuredText format.
-The documentation environment uses Python 3.12 and needs no GPU toolchain.
-
-Run from the repository checkout. Set `DOC_ENV` and `DOC_OUTPUT` to directories
-for this checkout; in an isolated task, keep both inside the task directory.
+Run these commands from the repository root with Python 3.12, `uv`, and the
+[source build tools](../getting-started/installation.md#get-the-source) installed.
+No GPU or CUDA toolkit is needed.
 
 ```bash
-DOC_REPO="$PWD"
-DOC_ENV="$DOC_REPO/.docs-venv"
-DOC_OUTPUT="$DOC_REPO/docs/_build/html"
-uv venv --python 3.12 "$DOC_ENV"
-uv pip install --python "$DOC_ENV/bin/python" \
-  -r "$DOC_REPO/docs/requirements.txt" "${DOC_REPO}[server]"
-"$DOC_ENV/bin/python" -m sphinx -b html -n -W --keep-going \
-  "$DOC_REPO/docs" "$DOC_OUTPUT"
-"$DOC_ENV/bin/python" -m http.server 8008 --bind 127.0.0.1 \
-  --directory "$DOC_OUTPUT"
+uv venv --python 3.12 .docs-venv
+uv pip install --python .docs-venv/bin/python -r docs/requirements.txt '.[server]'
+.docs-venv/bin/python -m sphinx -b html -n -W --keep-going docs docs/_build/html
+.docs-venv/bin/python -m http.server 8008 --bind 127.0.0.1 --directory docs/_build/html
 ```
 
-Open `http://127.0.0.1:8008`. Stop the foreground server with Ctrl+C. Rebuild after
-editing pages and reload the browser. After changing Python documentation
-strings, reinstall with `uv pip install --reinstall-package kcoral` using the
-same environment and checkout path before rebuilding. Do not use an editable
-installation for the documentation build.
+Open <http://127.0.0.1:8008>. After editing pages, rerun Sphinx and reload the
+browser. After changing Python docstrings, reinstall KCoral before rebuilding:
 
-`-n` checks object references, `-W` fails on warnings, and `--keep-going` reports
-as many issues as possible. To check external links, replace `-b html` with
-`-b linkcheck` and choose a separate output directory. External checks need a
-network connection. The HTML build uses a bundled theme and does not download
-fonts or execute remote kernel examples.
+```bash
+uv pip install --python .docs-venv/bin/python --reinstall-package kcoral '.[server]'
+```
+
+Use a non-editable install so the API reference reads the installed package.
+The Sphinx flags check references and fail on warnings. For external link checks,
+use `-b linkcheck` with a separate output directory.
 
 ## Maintain the documentation
 
-Place each page in the directory for its navigation section:
+- Add pages under the appropriate section and update `docs/index.md`.
+- When moving pages, update links and source includes; preserve linked headings
+  or add explicit anchors.
+- Document public APIs in Python docstrings and keep runnable examples in
+  `examples/`, included with `literalinclude`.
 
-```text
-docs/
-├── getting-started/
-├── client-guide/
-├── server-guide/
-├── tutorials/
-├── development-guide/
-└── python-api/
+To update documentation dependencies, edit `docs/requirements.in` and regenerate
+the lock file:
+
+```bash
+uv pip compile --python-version 3.12 docs/requirements.in -o docs/requirements.txt
 ```
-
-The root `index.md` defines the section navigation. Sphinx configuration,
-dependency files and shared static assets stay at the documentation root.
-
-- Update navigation, relative links, source includes and skill references when
-  moving a page. Preserve headings when other pages link to them; add an explicit
-  anchor before renaming one.
-- Explain public parameters, results and errors in the Python documentation
-  strings. The reference page lists public objects explicitly.
-- Keep complete runnable scripts in `examples/`. Their documentation pages use
-  `literalinclude`, a Sphinx directive that displays the source file, and offer
-  the same file for download.
-- Update `docs/requirements.in`, then regenerate its lock file on Python 3.12:
-
-  ```bash
-  uv pip compile --python-version 3.12 docs/requirements.in -o docs/requirements.txt
-  ```
-
-- Pull requests build the documentation and upload an HTML artifact for review.
-  They do not publish a preview site.
-
-## Package versions
-
-Git tags are the source of package versions. `setuptools-scm` derives the version
-at build time: a clean checkout of `v1.2.3` produces version `1.2.3`, and commits
-after that tag produce development versions. Post-release tags such as
-`v1.2.3.post1` are also supported. There are no version constants to update before
-tagging a release. The bundled Rust crate is unpublished and has no separate
-release version.
-
-Use a checkout with Git history and tags available (`git fetch --tags`; unshallow
-the clone first if needed). Every pull request, push to `main`, and version tag
-push runs the `Build wheels` workflow; it can also be run manually with the tag
-as its `ref`. The installed package metadata, `kcoral.__version__`, and the HTTP
-API version all use the derived version.
-Source distributions preserve it for builds without Git; `git archive` exports
-carry version metadata through `.git_archival.txt`.
-
-## Publish a release to PyPI
-
-Publishing a GitHub Release triggers `Publish to PyPI`. It calls `Build wheels`
-for the release tag, then uploads the checked Linux x86_64 and aarch64 wheels
-after both builds succeed. Pull requests, pushes to `main`, tag pushes, and manual
-wheel builds only produce GitHub Actions artifacts; they do not upload to PyPI.
-Draft releases do not publish either.
-
-Before the first release, configure a GitHub Trusted Publisher for the `kcoral`
-project on PyPI (a pending publisher if the project does not yet exist):
-
-- Owner: `mlc-ai`
-- Repository: `kcoral`
-- Workflow: `publish_pypi.yml`
-- Environment: `pypi`
-
-Create the matching `pypi` GitHub environment. The publish job uses GitHub's OIDC
-token, so no PyPI API token secret is required. Publish each package version
-once; PyPI does not allow replacing an uploaded file.
 
 ## Build the versioned website
 
-The public website lives at <https://kcoral.mlc.ai/docs/>. Its sidebar includes
-a version menu. `latest` follows `main`; stable release tags such as `v0.1.0`
-have their own permanent URLs:
-
-```text
-/docs/                 redirects to /docs/latest/
-/docs/latest/          documentation from main
-/docs/v0.1.0/          documentation from tag v0.1.0
-```
-
-Switching versions opens that version's documentation home page. Tags must use
-the form `vMAJOR.MINOR.PATCH` and contain the documentation configuration and
-dependencies. Prerelease tags are not published. Treat published tags as
-immutable: changing or removing a tag changes the site on the next deployment.
-
-Build and serve the complete website from the repository root with Python 3.12
-and `uv` available:
+The website at <https://kcoral.mlc.ai/docs/> serves `main` at `/docs/latest/` and
+stable `vMAJOR.MINOR.PATCH` tags at paths such as `/docs/v1.2.3/`.
+Keep published tags immutable and include the documentation and its dependencies
+in each tag. Other tag formats are excluded from the website.
 
 ```bash
 git fetch origin --tags
-python scripts/build_docs.py
-python -m http.server 8008 --bind 127.0.0.1 --directory _site
+.docs-venv/bin/python scripts/build_docs.py
+.docs-venv/bin/python -m http.server 8008 --bind 127.0.0.1 --directory _site
 ```
 
-Open `http://127.0.0.1:8008/docs/`. The builder uses the current checkout for
-`latest` and extracts each stable tag into a temporary directory. Each version
-gets a separate Python environment, its own locked documentation dependencies,
-and a non-editable installation of its own KCoral package. This ensures that
-the API reference describes the selected release. No GPU toolchain is needed.
-
-Use `python scripts/build_docs.py --latest-only` to skip release builds while
-editing. `_site/` is generated output and is not committed to this repository.
-A failed build preserves the previous output. The usual single-version Sphinx
-command above remains available for quick local edits.
+Open <http://127.0.0.1:8008/docs/>. The builder uses the current checkout for
+`latest` and installs each tag in a separate environment for its API reference.
+Add `--latest-only` to skip tag builds. Output goes to `_site/`; a failed build
+preserves the previous site.
 
 ## Publish the website
 
-The `Documentation` workflow rebuilds the website after a push to `main`, a
-version tag push, or a manual run on `main`. It publishes the HTML artifact to
-the public [kcoral-docs repository](https://github.com/mlc-ai/kcoral-docs), which
-serves it through GitHub Pages. This keeps the source repository private while
-allowing public documentation on GitHub Free. Only generated documentation,
-including the documented example downloads and page sources, is published.
+The `Documentation` workflow publishes pushes to `main`, version tag pushes, and
+manual runs on `main` to [kcoral-docs](https://github.com/mlc-ai/kcoral-docs).
+Pull requests and manual runs on other branches only produce HTML artifacts.
 
-The deployment job uses the `DOCS_DEPLOY_KEY` Actions secret: an SSH deploy key
-with write access only to `mlc-ai/kcoral-docs`. Pull requests and manual runs on
-other branches only build an artifact; they cannot publish.
+Hosting setup:
 
-The hosting repository's Pages source is `main` at `/`, with custom domain
-`kcoral.mlc.ai`. Its root `CNAME` and `.nojekyll` files are maintained by the
-workflow. The `mlc.ai` DNS zone needs this record:
+- Set `DOCS_DEPLOY_KEY` to an SSH deploy key with write access to `kcoral-docs`.
+- In that repository, serve GitHub Pages from `main` at `/`, set the custom domain
+  to `kcoral.mlc.ai`, and enable **Enforce HTTPS** once the certificate is ready.
+- Add DNS record `CNAME kcoral mlc-ai.github.io`.
 
-```text
-CNAME  kcoral  mlc-ai.github.io
-```
+The workflow maintains `CNAME` and `.nojekyll`. Change or revert documentation in
+the source repository; deployment replaces the generated website.
 
-After GitHub issues the domain's certificate, enable **Enforce HTTPS** in the
-hosting repository's Pages settings. To undo a documentation change, revert it
-in the source repository and let the workflow publish again. Do not edit
-generated HTML in the hosting repository: the next deployment replaces it.
+## Package versions
+
+`setuptools-scm` derives package versions from Git tags: `v1.2.3` builds as
+`1.2.3`, `v1.2.3.post1` as `1.2.3.post1`, and later commits as development
+versions. Fetch history and tags before building; unshallow the clone if needed.
+No version constants need updating. The Rust crate has no separate release version.
+
+`Build wheels` checks Linux x86_64 and aarch64 wheels on every PR, push to `main`,
+and version tag push. It also accepts a tag, branch, or SHA through its manual
+`ref` input.
+
+## Publish a release to PyPI
+
+Only publishing a GitHub Release triggers a PyPI upload. `Publish to PyPI` calls
+`Build wheels` for the release tag and uploads both wheels after checks pass.
+
+Before the first release, create the `pypi` GitHub environment and configure a
+Trusted Publisher for `kcoral` on PyPI (a pending publisher for a new project):
+
+- Owner / repository: `mlc-ai` / `kcoral`
+- Workflow: `publish_pypi.yml`
+- Environment: `pypi`
+
+No PyPI API token is required. Each version can be published only once.
 
 ## Run project checks
 
-`--group test` adds pytest to the server environment from [installation](../getting-started/installation.md):
-
-```bash
-uv sync --no-editable --group test
-pytest -q
-ruff check python tests
-ruff format --check python tests
-```
-
-The GPU integration tests are opt-in, and need the server dependencies and a GPU:
-
-```bash
-KCORAL_GPU_TEST=1 pytest -q
-```
-
-The CPU compilation integration test needs the server extra and a CUDA
-toolchain, but no GPU. It runs whenever `nvcc`, `ninja` and a host C++ compiler
-are present, and skips itself otherwise:
+Run tests and Python formatting checks:
 
 ```bash
 uv run --no-editable --group test pytest -q
+uvx ruff check python tests
+uvx ruff format --check python tests
 ```
+
+Enable GPU integration tests on a machine with a configured GPU:
+
+```bash
+KCORAL_GPU_TEST=1 uv run --no-editable --group test pytest -q
+```
+
+CPU compilation tests run when `nvcc`, `ninja`, and a host C++ compiler are
+available, and skip otherwise. They do not require a GPU.
