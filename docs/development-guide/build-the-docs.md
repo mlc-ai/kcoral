@@ -3,6 +3,15 @@
 
 # Build the Docs
 
+Sphinx builds the site from the pages under `docs/`, using MyST to parse Markdown
+and Furo for the theme. `docs/index.md` defines navigation; `docs/conf.py`
+configures the build, with templates and assets in `docs/_templates/` and
+`docs/_static/`.
+
+The API reference in `docs/python-api/index.rst` uses autodoc to read docstrings
+from the installed KCoral package. `scripts/build_docs.py` assembles builds of
+the current checkout and release tags into the versioned website.
+
 Run these commands from the repository root with Python 3.12, `uv`, and the
 [source build tools](../getting-started/installation.md#get-the-source) installed.
 No GPU or CUDA toolkit is needed.
