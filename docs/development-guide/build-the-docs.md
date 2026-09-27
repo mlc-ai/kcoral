@@ -89,6 +89,11 @@ permanent URLs:
 /docs/v0.1.0/          documentation from tag v0.1.0
 ```
 
+The homepage links directly to `/docs/latest/` to avoid a redirect on navigation.
+The `/docs/` alias uses an early `location.replace()` redirect, preserving query
+strings and fragments without displaying an intermediate link or adding a
+history entry. A meta-refresh and link remain available when JavaScript is disabled.
+
 Switching versions opens that version's documentation home page. Tags must use
 the form `vMAJOR.MINOR.PATCH` and contain the documentation configuration and
 dependencies. Prerelease tags are not published. Treat published tags as
