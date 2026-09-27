@@ -103,13 +103,11 @@ def require_completed(result):
         )
 
 
-def parse_args(tool, argv, *, validate=None, profiling=False, allow_out=False, epilog=None):
+def parse_args(tool, argv, *, validate=None, profiling=False):
     parser = argparse.ArgumentParser(
         prog=f"kcoral run {tool}",
         allow_abbrev=False,
         description=f"Run {tool} on a KCoral worker.",
-        epilog=epilog,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     add_connection_args(parser)
     parser.add_argument(
@@ -164,9 +162,7 @@ def parse_args(tool, argv, *, validate=None, profiling=False, allow_out=False, e
             parser.error(f"environment variable {name} contains NUL")
         environment[name] = value
     args.env = environment
-    if allow_out and args.fetch and args.out is None:
-        parser.error("--fetch requires --out")
-    if not allow_out and not profiling and bool(args.fetch) != bool(args.out):
+    if not profiling and bool(args.fetch) != bool(args.out):
         parser.error("--fetch and --out must be used together")
     for name in args.fetch:
         try:

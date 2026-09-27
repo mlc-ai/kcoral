@@ -1,7 +1,0 @@
-{
-  "cases": [{"id": "small", "n": 1024}, {"id": "large", "n": 1048576}],
-  "warmup": 3,
-  "repeat": 50,
-  "atol": 0.00001,
-  "rtol": 0.00001
-}

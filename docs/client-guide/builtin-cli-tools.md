@@ -10,7 +10,6 @@ output through an existing KCoral server or Router.
 | [compute-sanitizer](#compute-sanitizer) | Find CUDA memory-access and synchronization errors. |
 | [ncu](#ncu) | Collect NVIDIA Nsight Compute kernel performance reports. |
 | [run-iket](#run-iket) | Collect instrumented kernel execution timelines. |
-| [bench](#bench) | Check correctness and measure a candidate using a local benchmark definition. |
 | [shell](#shell) | Run a shell script, uploaded executable, or program installed on the worker. |
 
 The common reference below defines KCoral's options and execution behavior.
@@ -30,13 +29,10 @@ kcoral run TOOL [KCoral options] -- [native arguments]
 Put connection, upload, environment, and download options **before** the first
 `--`. Everything after it belongs to the selected tool. For `ncu` and
 `run-iket`, a second `--` separates profiler options from the application.
-`bench` places its workload, version, and benchmark options after the same
-separator.
 
 ```bash
 kcoral run --help
 kcoral run python --help
-kcoral run bench --help
 ```
 
 These commands display KCoral's help locally without contacting a server.
@@ -54,7 +50,7 @@ KCoral does not select a server unless a connection option or a nonempty
 | `--url URL` | `KCORAL_URL` | Complete server URL, including an optional HTTPS scheme or path prefix. Cannot be combined with `--host` or `--port`. |
 | `--host HOST` | `127.0.0.1` when only `--port` is supplied | HTTP server hostname, IPv4 address, or IPv6 address. Supply the host without a scheme, port, or path; IPv6 brackets are optional. |
 | `--port PORT` | `8000` when only `--host` is supplied | HTTP server port, an integer from 1 through 65535. |
-| `--timeout SECONDS` | `300` | Positive integer execution deadline for each request, capped by the server's configured maximum. For `bench`, this applies separately to each workload request. |
+| `--timeout SECONDS` | `300` | Positive integer execution deadline for each request, capped by the server's configured maximum. |
 | `--output-limit-bytes N` | `268435456` (256 MiB) | Positive integer capture limit for **each** of stdout and stderr, capped by the server. Zero is not accepted by these CLI tools. |
 
 Select a server with an environment variable:
@@ -68,7 +64,6 @@ Or specify the address on the invocation:
 
 ```bash
 kcoral run python --host gpu.example.com --port 8000 --send experiment -- experiment/check.py
-kcoral run bench --host gpu.example.com --port 8000 -- examples/benchmarks/vector_add v0
 ```
 
 If either `--host` or `--port` is present, KCoral constructs `http://HOST:PORT`
@@ -95,7 +90,7 @@ prepares its inputs and collects its results.
 | `--send PATH` | No uploaded files | Upload a file or directory, preserving its name. Repeat for additional inputs. |
 | `-e NAME[=VALUE]`, `--env NAME[=VALUE]` | Worker environment | Set one remote environment variable, or copy one local variable by name. Repeat for additional variables. |
 | `--fetch PATH` | No selected outputs | Return a file or directory relative to the remote working directory. Repeat for additional outputs; requires `--out`. |
-| `--out DIRECTORY` | No download directory | New local destination for returned files or benchmark results. Required by profilers and by `--fetch`; bench can save results without `--fetch`. |
+| `--out DIRECTORY` | No download directory | New local destination for returned files. Required by profilers; other tools require `--fetch` and `--out` together. |
 
 ### Input layout and working directory
 
@@ -132,9 +127,8 @@ files written as `experiment/results/report.json` need `--fetch experiment/resul
 
 Send the files your program needs, including local modules and configuration.
 Sending a script does not discover its imports or upload its parent directory.
-Without `--send`, the tool starts in an empty working directory. Bench separately
-automatically uploads the selected benchmark directory. Relative paths in tool arguments
-are resolved in the working directory; absolute paths refer to the worker's
+Without `--send`, the tool starts in an empty working directory. Relative paths
+in tool arguments are resolved in that directory; absolute paths refer to the worker's
 filesystem, subject to the server's isolation settings.
 
 ### Environment variables and executable lookup
@@ -161,8 +155,7 @@ Variable names must start with a letter or underscore and contain only letters,
 digits, or underscores. `CUDA_VISIBLE_DEVICES` and `KCORAL_DIR` are managed by
 KCoral and cannot be overridden. Setting `PATH` with `--env` still leaves the
 worker's Python executable directory first in the executable search path.
-Overrides apply to this invocation; bench applies them separately to each
-workload and restores the worker environment afterward.
+Overrides apply only to this invocation's subprocess environment.
 
 Local variables are not copied automatically. For example, putting
 `MODE=debug` before the local `kcoral` command sets the client's environment;
@@ -196,9 +189,8 @@ apply:
   are not connected to a terminal.
 
 KCoral does not add a prefix to ordinary subprocess stdout. Its artifact
-messages and warnings use stderr. `bench` additionally prints workload progress,
-worker information, and a summary to stdout. Local redirection and pipelines
-still work, for example:
+messages and warnings use stderr. Local redirection and pipelines still work,
+for example:
 
 ```bash
 kcoral run python --send experiment -- experiment/check.py > run.log 2> run.err
@@ -212,9 +204,9 @@ Symbolic links and special files cannot be returned. `--out` must name a new
 local directory; parent directories are created automatically, and existing
 output is never overwritten.
 
-Files are collected after execution, including a subprocess failure or a normal
-Python exception from a benchmark. A hard timeout, worker failure, or response-size error can prevent their
-return. Each request has its own workspace; a later invocation is not a
+Files are collected after execution, including a subprocess failure. A hard
+timeout, worker failure, or response-size error can prevent their return.
+Each request has its own workspace; a later invocation is not a
 continuation of the earlier one. Keep related setup and execution steps in one
 invocation, or explicitly download and resend the needed files.
 
@@ -230,7 +222,6 @@ response limit is 256 MiB. A server may configure different limits. See
 | Requested output is missing | Return nonzero; preserve an existing nonzero subprocess exit code. |
 | Transport, worker execution, or artifact-return failure | Return `1` with a diagnostic on stderr. |
 | Invalid KCoral command line | Return `2` without running the tool. |
-| Benchmark run | Use the correctness and failure rules in the `bench` section. |
 
 ## python
 
@@ -541,290 +532,6 @@ kcoral run shell -- run-iket profile --help
 
 NVIDIA's [IKET profiling guide](https://docs.nvidia.com/cutlass/latest/media/docs/pythonDSL/cute_dsl_general/iket_profiling.html)
 describes kernel instrumentation and version-specific requirements.
-
-## bench
-
-### Purpose and requirements
-
-`bench` checks a candidate against a reference implementation, measures both the
-baseline and candidate on the worker, and summarizes results across test cases.
-KCoral provides the runner, correctness checks, CUPTI timing, and result
-format. A benchmark is an ordinary local directory containing its configuration,
-input generator, reference, and candidate files.
-
-The client needs only KCoral and the benchmark files. Benchmark Python code runs
-on the worker, which needs CUDA-enabled PyTorch, `cupti-python`, and any libraries imported by
-the benchmark or candidate. Inputs can be generated on the GPU or read from
-uploaded data files. No benchmark package or separate framework is required.
-
-### Command format and parameters
-
-```text
-kcoral run bench [KCoral options] -- WORKLOAD [VERSION]
-    [--repo PATH] [--warmup N] [--repeat N]
-```
-
-Put shared connection, execution, upload, environment, and output options before
-`--`. Put the workload, version, and benchmark-specific options after it. The
-separator is required.
-
-| Argument or option | Default | Meaning |
-| --- | --- | --- |
-| `WORKLOAD` | Required | Local directory containing `bench.json` and `bench.py`, for example `examples/benchmarks/vector_add`. Absolute paths are accepted. |
-| `VERSION` | `baseline` | Candidate file or filename stem inside that directory: `v0` selects `v0.py`. `baseline` checks and measures the baseline only. Subdirectory paths are not accepted. |
-| `--repo PATH` | Current local directory | Root for resolving a relative `WORKLOAD`. It has no effect on an absolute workload path and does not upload the whole root. |
-| `--warmup N` | `bench.json`, otherwise `3` | Requested untimed warmup calls for each implementation; the timer runs at least one. |
-| `--repeat N` | `bench.json`, otherwise `50` | Positive number of measured calls for each implementation. |
-
-Paths are resolved directly; KCoral does not search parent directories or use a
-registry of workload names. A path such as `kda/decode` works when that directory
-contains the files described below.
-
-Both help forms run locally without a configured server. The first includes the
-shared options, and the second shows only benchmark arguments:
-
-```bash
-kcoral run bench --help
-kcoral run bench -- --help
-```
-
-### Define a benchmark
-
-A minimal directory has three files:
-
-```text
-vector_add/
-  bench.json
-  bench.py
-  v0.py
-```
-
-`bench.json` lists cases and optional defaults:
-
-```json
-{
-  "cases": [{"id": "small", "n": 1024}, {"id": "large", "n": 1048576}],
-  "warmup": 3,
-  "repeat": 50,
-  "atol": 0.00001,
-  "rtol": 0.00001
-}
-```
-
-| Field | Default | Meaning |
-| --- | --- | --- |
-| `cases` | Required | Nonempty list of JSON objects. Each object is passed unchanged to `make_inputs`; use any fields your input generator needs. An optional `id` is shown in the summary. |
-| `warmup` | `3` | Nonnegative integer; the timer runs at least once. Overridden by the command-line option. |
-| `repeat` | `50` | Positive integer; overridden by the command-line option. |
-| `atol` | `1e-5` | Finite, nonnegative absolute tolerance for correctness checks. |
-| `rtol` | `1e-5` | Finite, nonnegative relative tolerance for correctness checks. |
-
-Unknown settings and non-finite numbers are rejected. Use JSON numbers, not
-strings, for counts and tolerances.
-
-`bench.py` defines input generation and the correctness reference:
-
-```python
-import torch
-
-
-def make_inputs(case):
-    generator = torch.Generator(device="cuda").manual_seed(0)
-    x = torch.randn(case["n"], device="cuda", generator=generator)
-    y = torch.randn(case["n"], device="cuda", generator=generator)
-    return x, y
-
-
-def reference(x, y):
-    return x + y
-```
-
-| Function | Contract |
-| --- | --- |
-| `make_inputs(case)` | Required. Return a tuple or list of positional arguments. Tensor allocation, file loading, and input generation happen once per case, outside timing. |
-| `reference(*inputs)` | Required. Return the expected output: a tensor, scalar, or nested list, tuple, or dictionary of comparable values. It must not return `None`. |
-| `baseline(*inputs)` | Optional. Return outputs with the same structure as the reference. Defaults to `reference`; use it to measure an optimized baseline while keeping an independent correctness reference. |
-
-KCoral passes separate copies of inputs to the reference, baseline, and candidate.
-Tensor views and shared storage are not preserved across those copies. Choose
-inputs accordingly, and construct any required views in your implementation.
-Seed input generation explicitly if cases must be reproducible across invocations.
-
-A candidate such as `v0.py` can define a simple `run` function:
-
-```python
-def run(x, y):
-    return x + y
-```
-
-For compilation or reusable output buffers, define `prepare` instead:
-
-```python
-import torch
-
-
-def prepare(x, y):
-    output = torch.empty_like(x)
-
-    def run():
-        torch.add(x, y, out=output)
-        return output
-
-    return run
-```
-
-`prepare(*inputs)` runs once per case and returns a zero-argument callable. If it
-is present, KCoral uses it instead of the module's `run(*inputs)`. The returned
-callable must return the outputs to check, including buffers written in place.
-Preparation is excluded from timing; work performed inside the callable is
-included. Baseline and candidate calls reuse their own input copies, so each
-call must produce the same result without accumulating changes in input state.
-
-Helper modules and data may live alongside these files. Imports such as
-`from .helper import make_data` are supported. The whole benchmark directory is
-uploaded, retaining its own name. Use `Path(__file__).parent` for paths relative
-to a definition file, or paths relative to the request working directory for
-extra inputs and outputs.
-
-### Run and compare candidates
-
-The repository includes the complete example above under
-`examples/benchmarks/vector_add`:
-
-```bash
-kcoral run bench -- examples/benchmarks/vector_add
-kcoral run bench --out artifacts/bench -- examples/benchmarks/vector_add v0
-kcoral run bench --host gpu.example.com --port 8000 \
-  -- vector_add v0 --repo /path/to/benchmarks --warmup 3 --repeat 50
-```
-
-The client reads the JSON configuration and snapshots the benchmark directory
-without importing its Python files. Every case gets a separate, self-contained
-request with the same files and its own input generation. A Router may send
-successive cases to different workers. The timeout and output limits apply to
-each request separately.
-
-Use `--send` for files outside the benchmark directory and `--env` for remote
-configuration. For example, `--send experiment` makes `experiment/data/input.json`
-available from the remote working directory. Avoid uploading the benchmark
-directory again with `--send`; duplicate paths are rejected.
-
-```bash
-kcoral run bench --send experiment -e MODE=debug -e MY_LOCAL_VARIABLE \
-  -- examples/benchmarks/vector_add v0
-```
-
-Environment overrides apply before definitions are imported. `KCORAL_DIR` points
-to the request's input directory, which contains both the benchmark directory
-and additional uploads. That input directory and the benchmark directory are
-added to Python's module search path. The worker's environment, working directory,
-and search path are restored afterward, and uploaded modules are removed from
-the import cache. Files created by one case are not available to the next.
-
-### Correctness and timing
-
-KCoral computes the reference output once and snapshots it. It checks the
-baseline twice and, when selected, the candidate twice before timing. It checks
-both again after timing to catch changes in state. Checks use
-`torch.testing.assert_close` with the configured absolute and relative tolerances;
-dtype and device differences are allowed, output shapes and structure must match,
-and NaNs do not compare equal. A failed pre-timing check skips timing for that
-case and continues with the next case.
-
-Reference, baseline, and candidate calls run with PyTorch gradient recording
-disabled. Timing uses
-`kcoral.builtins.benchmark` with CUPTI, NVIDIA's GPU activity tracing interface.
-After the configured warmup calls, each measured call runs with the GPU's L2
-cache flushed. KCoral waits for GPU work to complete and measures the interval
-from the first to the last GPU activity associated with that call. The reported
-latency is the median duration in milliseconds; host gaps between GPU activities
-are included. Input creation and candidate preparation are outside timing.
-
-CUPTI and a CUDA GPU are required. CUPTI failures stop the run; there is no
-fallback to a different timer. See [GPU benchmarking](../tutorials/benchmark-kernel.md#measuring-gpu-activity)
-for details of the timing method. The full `baseline_timing` and `kernel_timing`
-reports include median, mean, minimum, maximum, iteration counts, `flush_l2`,
-and `activities_stable`. A false `activities_stable` means different iterations
-launched different sets of GPU activities, so their timings mix different work.
-
-`speedup` is `baseline_ms / kernel_ms`. A baseline-only run reports the same
-latency in both columns and a speedup of `1`. A correctness failure has
-`passed=false` and a diagnostic message. Latencies are `null` when timing was
-skipped; a failure discovered after timing retains the measured latencies but
-has no speedup.
-
-### Returned results and files
-
-`--out` alone saves structured results. Add `--fetch` to collect files created by
-the definition or candidate; repeat it for multiple paths. Collection runs after
-each case, including after a normal Python exception. `--fetch` requires `--out`.
-
-```bash
-kcoral run bench --out artifacts/bench -- examples/benchmarks/vector_add v0
-kcoral run bench --fetch results --out artifacts/bench-debug \
-  -- my_benchmark v0
-```
-
-The second example assumes your benchmark writes a `results` directory. The
-output directory must be new and is created after local configuration and upload
-preparation succeed. Cases are numbered in their `bench.json` order:
-
-```text
-artifacts/bench-debug/
-  summary.json
-  workloads/
-    0001/
-      result.json
-      files/
-        results/
-          ...
-    0002/
-      result.json
-      files/
-        results/
-          ...
-```
-
-`files/` preserves selected paths and is omitted when no files are requested.
-Each `result.json` contains `index`, `worker` metadata, `rows`, a list of `missing`
-paths, and an `error` traceback or `null`.
-
-| Summary field | Meaning |
-| --- | --- |
-| `workload`, `version` | Requested local benchmark path and version. |
-| `config` | Effective warmup, repeat, and correctness tolerances. |
-| `completed` | All cases and the text summary finished; may be true despite incorrect results or missing requested files. |
-| `passed` | All cases completed, correctness checks passed, and requested files were present. |
-| `results` | Combined rows with `id`, `case`, `passed`, `baseline_ms`, `kernel_ms`, `speedup`, full `baseline_timing` and `kernel_timing` reports, and a diagnostic `message`. |
-| `workloads` | Numbered per-case records also saved in `result.json`. |
-| `error` | Command error description, or `null` after normal completion. |
-
-Once the output directory exists, KCoral attempts to save the summary even when
-execution stops early. A Python execution exception stops further requests;
-previous results and returned files remain saved. A hard timeout, worker failure,
-or response-size error can prevent the current case from returning anything.
-
-### Output, exit status, and troubleshooting
-
-Stdout includes request progress, worker information, captured benchmark output,
-and a table of correctness, baseline latency, candidate latency, and speedup.
-The final line reports how many cases passed. Save text output locally as needed:
-
-```bash
-kcoral run bench -- examples/benchmarks/vector_add v0 > bench.log 2> bench.err
-```
-
-The exit code is `0` when all cases and requested file returns succeed.
-Incorrect results and missing files yield `1` after the remaining cases finish.
-Configuration, import, execution, transport, and output-saving errors yield `1`
-and stop the run. Invalid CLI arguments yield `2`.
-
-For a missing definition, check `WORKLOAD/bench.json` and `WORKLOAD/bench.py`
-relative to `--repo` or the current directory. For a missing candidate, check
-`WORKLOAD/VERSION.py`. For import errors, upload helper files or install the
-required library on the worker. CUDA errors require a compatible GPU and
-CUDA-enabled PyTorch on the worker. There is no automatic task discovery or
-conversion of benchmark definitions from other frameworks.
 
 ## shell
 

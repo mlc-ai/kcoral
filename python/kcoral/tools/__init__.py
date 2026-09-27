@@ -6,6 +6,5 @@ COMMANDS = {
     "compute-sanitizer": "compute_sanitizer",
     "ncu": "ncu",
     "run-iket": "run_iket",
-    "bench": "bench",
     "shell": "shell",
 }
