@@ -36,14 +36,14 @@ cuBLAS is the reference to chase; a candidate is scored only if it passes on
   There is no local GPU work; local numbers mean nothing.
 - Never start, stop, restart or reconfigure the server, and never install
   anything on it. Report missing capabilities instead of repairing them.
-- Run commands with `uv run` from this directory; the locked environment
-  (`uv.lock`) is already set up.
+- Run commands with `uv run` from this directory; it uses the KCoral
+  repository's environment, which is already set up. There is no local TVM.
 
 ## 3. Files
 
 Locked (reading is fine, modifying invalidates the run): `bench.py`,
 `remote_bench.py`, `definition.json`, `workload.jsonl`, `initial_kernel.py`,
-`pyproject.toml`, `uv.lock`, this file.
+this file.
 
 Your workspace is `work/` (create it). Keep:
 
@@ -156,7 +156,7 @@ order and measure each.
    configurations chosen inside `build`. Also look for wave quantization:
    20 SMs is few, so the number of tiles per wave matters.
 
-### TIRx building blocks (verified on Thor with this TVM)
+### TIRx building blocks (verified on Thor with TVM 0.26.0)
 
 These fragments come from TVM's own tests and docs; they are the pieces, not a
 design.
@@ -238,14 +238,17 @@ row is 64 fp16 values, so `BK = 64` pairs naturally with swizzle mode 3.
 
 ### References
 
-- Installed TVM sources (the API reference for this exact version):
-  `.venv/lib/python*/site-packages/tvm/tirx/script/builder/tirx.py` (tile
-  operations), `.../tvm/backend/cuda/tile_primitive/gemm_async/tcgen05.py`,
-  `.../copy_async/tma.py`, `.../tvm/tirx/lang/` (pipeline, tile scheduler and
-  warp-role helpers), `.../tvm/tirx/layout.py`.
-- TVM `v0.26.0` documentation and tests (fetch the raw files from
-  `https://raw.githubusercontent.com/apache/tvm/v0.26.0/<path>`):
-  `docs/tirx/tile_primitives/gemm_async.rst`,
+- The TVM repository at the server's version is the API reference. Take the
+  version from `versions.tvm` in `curl -fsS "$KCORAL_URL/health"`; its tag is
+  `v<version>` (for example `v0.26.0`; for a development build, use the closest
+  release tag). Fetch raw files from
+  `https://raw.githubusercontent.com/apache/tvm/<tag>/<path>`, or make a local
+  copy with `git clone --depth 1 --branch <tag> https://github.com/apache/tvm work/tvm`.
+- TVM sources: `python/tvm/tirx/script/builder/tirx.py` (tile operations),
+  `python/tvm/backend/cuda/tile_primitive/gemm_async/tcgen05.py`,
+  `.../copy_async/tma.py`, `python/tvm/tirx/lang/` (pipeline, tile scheduler and
+  warp-role helpers), `python/tvm/tirx/layout.py`.
+- TVM documentation and tests: `docs/tirx/tile_primitives/gemm_async.rst`,
   `docs/tirx/tile_primitives/copy_async/tma.rst`,
   `docs/tirx/tile_primitives/copy_async/tcgen05_ldst.rst`,
   `docs/tirx/layout.rst`, `docs/tirx/native_basics/cuda/*.rst`, and

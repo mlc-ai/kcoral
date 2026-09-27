@@ -25,7 +25,6 @@ claims with one command.
 | `remote_bench.py` | Server-side harness that `bench.py` uploads with every request |
 | `PROMPT.md` | Self-contained instructions for the optimization agent |
 | `launch_server.sh` | Optional helper that starts a KCoral server on Thor over SSH |
-| `pyproject.toml`, `uv.lock` | Locked client environment |
 
 ## The task
 
@@ -59,10 +58,7 @@ cd examples/thor
 uv sync --locked
 ```
 
-This installs the KCoral client from this checkout and `apache-tvm==0.26.0`,
-the same TVM version the server uses. No GPU is needed locally. The TVM
-sources are there for the agent to read as the TIRx API reference. Kernels are
-always compiled on the server.
+This sets up the KCoral client, which is all your machine needs.
 
 ### 2a. Use an existing Thor server
 
