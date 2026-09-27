@@ -3,6 +3,7 @@
 A request is a program (an instruction sequence). See ``docs/client-guide/protocol.md``.
 """
 
+from importlib.metadata import version
 from typing import TYPE_CHECKING, Any
 
 from .artifacts import ReturnedFile, ReturnedFolder
@@ -38,7 +39,7 @@ __all__ = [
     "create_app",
     "parse_program",
 ]
-__version__ = "0.1.0"
+__version__ = version("kcoral")
 
 
 def __getattr__(name: str) -> Any:

@@ -69,6 +69,43 @@ dependency files and shared static assets stay at the documentation root.
 - Pull requests build the documentation and upload an HTML artifact for review.
   They do not publish a preview site.
 
+## Package versions
+
+Git tags are the source of package versions. `setuptools-scm` derives the version
+at build time: a clean checkout of `v1.2.3` produces version `1.2.3`, and commits
+after that tag produce development versions. Post-release tags such as
+`v1.2.3.post1` are also supported. There are no version constants to update before
+tagging a release. The bundled Rust crate is unpublished and has no separate
+release version.
+
+Use a checkout with Git history and tags available (`git fetch --tags`; unshallow
+the clone first if needed). Every pull request, push to `main`, and version tag
+push runs the `Build wheels` workflow; it can also be run manually with the tag
+as its `ref`. The installed package metadata, `kcoral.__version__`, and the HTTP
+API version all use the derived version.
+Source distributions preserve it for builds without Git; `git archive` exports
+carry version metadata through `.git_archival.txt`.
+
+## Publish a release to PyPI
+
+Publishing a GitHub Release triggers `Publish to PyPI`. It calls `Build wheels`
+for the release tag, then uploads the checked Linux x86_64 and aarch64 wheels
+after both builds succeed. Pull requests, pushes to `main`, tag pushes, and manual
+wheel builds only produce GitHub Actions artifacts; they do not upload to PyPI.
+Draft releases do not publish either.
+
+Before the first release, configure a GitHub Trusted Publisher for the `kcoral`
+project on PyPI (a pending publisher if the project does not yet exist):
+
+- Owner: `mlc-ai`
+- Repository: `kcoral`
+- Workflow: `publish_pypi.yml`
+- Environment: `pypi`
+
+Create the matching `pypi` GitHub environment. The publish job uses GitHub's OIDC
+token, so no PyPI API token secret is required. Publish each package version
+once; PyPI does not allow replacing an uploaded file.
+
 ## Build the versioned website
 
 The public website lives at <https://kcoral.mlc.ai/docs/>. Its sidebar includes

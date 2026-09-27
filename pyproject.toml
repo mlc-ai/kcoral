@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=77", "setuptools-rust>=1.11,<2"]
+requires = ["setuptools>=77", "setuptools-scm>=8", "setuptools-rust>=1.11,<2"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "kcoral"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Stateless remote execution engine for benchmarking GPU kernels (instruction-sequence protocol)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -52,6 +52,8 @@ environments = ["sys_platform == 'linux'"]
 [tool.setuptools.packages.find]
 where = ["python"]
 include = ["kcoral*"]
+
+[tool.setuptools_scm]
 
 [[tool.setuptools-rust.bins]]
 target = "kcoral-router"

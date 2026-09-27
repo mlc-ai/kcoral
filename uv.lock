@@ -597,7 +597,6 @@ wheels = [
 
 [[package]]
 name = "kcoral"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx", marker = "sys_platform == 'linux'" },

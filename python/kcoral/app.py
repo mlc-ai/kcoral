@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
-from . import sandbox
+from . import __version__, sandbox
 from .cache import ByteCache, DiskFileCache
 from .config import ServerConfig
 from .errors import ValidationError
@@ -216,7 +216,7 @@ def create_app(
             if cancelled:
                 raise asyncio.CancelledError
 
-    app = FastAPI(title="KCoral", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="KCoral", version=__version__, lifespan=lifespan)
 
     @app.get("/health", response_model=HealthResponse)
     async def health(request: Request) -> dict[str, object]:
