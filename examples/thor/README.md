@@ -48,7 +48,9 @@ You need:
 - This KCoral checkout.
 - One of the following:
   - access to a running Thor KCoral server;
-  - SSH access to a Jetson Thor (JetPack 7, CUDA 13 driver) to start one yourself.
+  - SSH access to a Jetson Thor (JetPack 7, CUDA 13 driver) with
+    [uv](https://docs.astral.sh/uv/getting-started/installation/) installed, to
+    start one yourself.
 
 ### 1. Client environment
 
@@ -68,42 +70,15 @@ curl -fsS "$KCORAL_URL/health"    # expect "status":"ok" and "arch":"sm_110a"
 
 ### 2b. Or start a server on Thor
 
-The server uses KCoral's own lockfile (`uv sync --locked --group gpu`). It
-installs torch from the PyTorch cu132 index and TVM from PyPI; both work with
-the JetPack 7 driver. The server listens only on `127.0.0.1` on the Thor host.
-You reach it through an SSH tunnel and never expose it on the network.
-
-The helper script does everything in one step:
-
 ```bash
-./launch_server.sh <thor-host>          # e.g. user@thor.local; --port 8000 by default
-```
-
-It copies this checkout to `~/.cache/kcoral-thor-example` on the host
-(`--dir` to change), installs the environment, starts `kcoral server` in the
-background and waits until it is healthy. It then prints the tunnel command.
-Rerunning it restarts the server, and `./launch_server.sh <thor-host> --stop`
-stops it.
-
-Or by hand:
-
-```bash
-# on Thor, once: install uv (see https://docs.astral.sh/uv/getting-started/installation/)
-# copy the checkout, e.g. from your machine: git ls-files -z | rsync -a --from0 --files-from=- ./ <thor-host>:kcoral/
-cd ~/kcoral
-uv sync --locked --group gpu --python 3.12
-# TVM compiles kernels with NVRTC and misses JetPack's CCCL headers without this.
-export TVM_CUDA_NVRTC_EXTRA_OPTS=-I/usr/local/cuda/include/cccl
-nohup .venv/bin/kcoral server --device gpu --gpus 0 --host 127.0.0.1 --port 8000 \
-  > server.log 2>&1 &
-```
-
-Then on your machine, keep a tunnel open and point the example at it:
-
-```bash
-ssh -N -L 8000:127.0.0.1:8000 <thor-host>
+./launch_server.sh <thor-host>                 # e.g. user@thor.local
+ssh -f -N -L 8000:127.0.0.1:8000 <thor-host>   # tunnel to the server, in the background
 export KCORAL_URL=http://127.0.0.1:8000
 ```
+
+`launch_server.sh` sets up and starts a KCoral server on Thor for you. The
+server listens only on the host's `127.0.0.1`, hence the tunnel. See the script
+for its options (`--port`, `--dir`, `--stop`).
 
 ### 3. Optional: stable clocks
 
@@ -233,7 +208,7 @@ kernel should land well above 100×.
   TVM 0.26 compiles with NVRTC and looks for the CCCL headers under
   `targets/aarch64-linux`, but JetPack installs the toolkit as
   `targets/sbsa-linux`. Start the server with
-  `TVM_CUDA_NVRTC_EXTRA_OPTS=-I/usr/local/cuda/include/cccl` (the setup script
+  `TVM_CUDA_NVRTC_EXTRA_OPTS=-I/usr/local/cuda/include/cccl` (`launch_server.sh`
   does this).
 - **A request is slow to start**: another request holds the GPU. KCoral runs
   one GPU request at a time and queues the rest.
