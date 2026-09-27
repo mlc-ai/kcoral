@@ -11,7 +11,6 @@ Examples::
     uv run python bench.py initial_kernel.py
     uv run python bench.py work/best.py work/new.py
     uv run python bench.py work/new.py --check-only --shapes 0
-    uv run python bench.py --health
 """
 
 from __future__ import annotations
@@ -31,6 +30,7 @@ HERE = Path(__file__).resolve().parent
 DEFINITION = HERE / "definition.json"
 WORKLOADS = HERE / "workload.jsonl"
 HARNESS = HERE / "remote_bench.py"
+RESULTS = HERE / "results"
 CLIENT_ERRORS = (KCoralError, TransportError, ProtocolError)
 CUBLAS = "cublas"
 INITIAL = "initial_kernel"
@@ -39,10 +39,7 @@ INITIAL = "initial_kernel"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
-        "kernels", nargs="*", type=Path, help="kernel files defining build(M, N, K)"
-    )
-    parser.add_argument(
-        "--health", action="store_true", help="print the server's health report and exit"
+        "kernels", nargs="+", type=Path, help="kernel files defining build(M, N, K)"
     )
     parser.add_argument(
         "--url",
@@ -53,24 +50,14 @@ def parse_args() -> argparse.Namespace:
         "--shapes", help="comma-separated row indices of workload.jsonl (default: all)"
     )
     parser.add_argument("--check-only", action="store_true", help="correctness only, no timing")
-    parser.add_argument(
-        "--emit-source",
-        action="store_true",
-        help="also save each kernel's generated CUDA C next to the results",
-    )
-    parser.add_argument(
-        "--out", type=Path, default=HERE / "results", help="directory for JSON results"
-    )
     parser.add_argument("--timeout", type=float, default=900, help="request timeout in seconds")
     return parser.parse_args()
 
 
 def kernel_names(paths: list[Path]) -> list[str]:
     names = [path.stem for path in paths]
-    if len(set(names)) != len(names):  # fall back to paths when file names collide
-        names = [path.with_suffix("").as_posix().replace("/", "_") for path in paths]
     if CUBLAS in names or len(set(names)) != len(names):
-        raise SystemExit(f"kernel names must be unique and must not be '{CUBLAS}': {names}")
+        raise SystemExit(f"kernel file names must be unique and must not be '{CUBLAS}': {names}")
     return names
 
 
@@ -200,15 +187,6 @@ def print_failures(report: dict) -> None:
 
 def main() -> int:
     args = parse_args()
-    if args.health:
-        with Client(args.url) as client:
-            try:
-                print(json.dumps(client.health(), indent=2))
-            except CLIENT_ERRORS as exc:
-                raise SystemExit(f"cannot reach KCoral server at {args.url}: {exc}") from exc
-        return 0
-    if not args.kernels:
-        raise SystemExit("give at least one kernel file (or --health)")
     for path in args.kernels:
         if not path.is_file():
             raise SystemExit(f"kernel file not found: {path}")
@@ -218,7 +196,6 @@ def main() -> int:
         "names": names,
         "shapes": indices,
         "check_only": args.check_only,
-        "emit_source": args.emit_source,
     }
     sources = [p.read_bytes() for p in args.kernels]
     program = build_program(DEFINITION.read_bytes(), WORKLOADS.read_bytes(), options, sources)
@@ -256,16 +233,8 @@ def main() -> int:
         print(f"warning: {warning}")
     print_failures(report)
 
-    args.out.mkdir(parents=True, exist_ok=True)
-    stem = f"{time.strftime('%Y%m%d-%H%M%S')}-{'-'.join(names)}"
-    out = args.out / f"{stem}.json"
-    for shape in report["shapes"]:
-        for name, info in shape["impls"].items():
-            source = info.pop("cuda_source", None)
-            if source:
-                path = args.out / f"{stem}-{name}-{shape['M']}x{shape['N']}x{shape['K']}.cu"
-                path.write_text(source)
-                print(f"generated CUDA: {path}")
+    RESULTS.mkdir(exist_ok=True)
+    out = RESULTS / f"{time.strftime('%Y%m%d-%H%M%S')}-{'-'.join(names)}.json"
     record = {
         "kernels": {name: str(path) for name, path in zip(names, args.kernels)},
         "summary": summary,
@@ -274,7 +243,7 @@ def main() -> int:
         "report": report,
     }
     out.write_text(json.dumps(record, indent=2))
-    print(f"results: {out.relative_to(HERE) if out.is_relative_to(HERE) else out}")
+    print(f"results: {out.relative_to(HERE)}")
     print("ALL PASSED" if all_passed else "SOME KERNELS FAILED")
     return 0 if all_passed else 1
 

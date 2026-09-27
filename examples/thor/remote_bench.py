@@ -73,42 +73,26 @@ def _read(path: str) -> str | None:
         return None
 
 
-def _devfreq_dir(keywords: tuple[str, ...]) -> str | None:
-    """First devfreq node whose name contains one of ``keywords`` (in priority order)."""
-    names = {
-        path: _read(os.path.join(path, "name")) or os.path.basename(path)
-        for path in sorted(glob.glob("/sys/class/devfreq/*"))
-    }
-    for keyword in keywords:
-        for path, name in names.items():
-            if keyword in name:
-                return path
-    return None
-
-
-# Thor exposes the GPU graphics clock as ``gpu-gpc-0`` and the memory clock as ``bwmgr``.
-GPU_CLOCK_KEYWORDS = ("gpu-gpc", "gpc", "gpu")
-MEM_CLOCK_KEYWORDS = ("bwmgr", "emc")
-
-
-def _gpu_thermal_zone() -> str | None:
-    for path in sorted(glob.glob("/sys/class/thermal/thermal_zone*")):
-        if "gpu" in (_read(os.path.join(path, "type")) or ""):
+def _find_node(pattern: str, name_file: str, needle: str) -> str | None:
+    """First sysfs node matching ``pattern`` whose ``name_file`` contains ``needle``."""
+    for path in sorted(glob.glob(pattern)):
+        if needle in (_read(os.path.join(path, name_file)) or os.path.basename(path)):
             return path
     return None
 
 
 def sample_telemetry() -> dict:
+    """GPU and memory clocks (Thor's ``gpu-gpc`` and ``bwmgr`` devfreq nodes), GPU temperature."""
     sample: dict = {"time_s": time.time()}
-    for prefix, keywords in (("", GPU_CLOCK_KEYWORDS), ("mem_", MEM_CLOCK_KEYWORDS)):
-        devfreq = _devfreq_dir(keywords)
+    for prefix, needle in (("", "gpu-gpc"), ("mem_", "bwmgr")):
+        devfreq = _find_node("/sys/class/devfreq/*", "name", needle)
         if devfreq is None:
             continue
         for key in ("cur_freq", "max_freq"):
             value = _read(os.path.join(devfreq, key))
             sample[f"{prefix}{key}_mhz"] = int(value) / 1e6 if value and value.isdigit() else None
         sample[f"{prefix}governor"] = _read(os.path.join(devfreq, "governor"))
-    zone = _gpu_thermal_zone()
+    zone = _find_node("/sys/class/thermal/thermal_zone*", "type", "gpu")
     if zone is not None:
         value = _read(os.path.join(zone, "temp"))
         sample["temp_c"] = int(value) / 1000 if value and value.lstrip("-").isdigit() else None
@@ -136,14 +120,6 @@ def _load_kernel_module(name: str, source: str, directory: str):
 def _short_traceback(limit: int = 4000) -> str:
     text = traceback.format_exc()
     return text if len(text) <= limit else "...\n" + text[-limit:]
-
-
-def _cuda_source(fn) -> str | None:
-    """Generated CUDA C of a compiled TVM executable, if ``fn`` is one."""
-    try:
-        return "\n\n".join(m.inspect_source() for m in fn.mod.imports)
-    except Exception:
-        return None
 
 
 def _cublas_fn(A, B, D) -> None:
@@ -319,25 +295,16 @@ def launched_kernels(fn, args) -> list[str] | None:
 
 def environment() -> dict:
     import torch
+    import tvm
 
     props = torch.cuda.get_device_properties(0)
-    major, minor = torch.cuda.get_device_capability()
-    env = {
+    return {
         "device": props.name,
-        "arch": f"sm_{major}{minor}a",
+        "arch": f"sm_{props.major}{props.minor}a",
         "sm_count": props.multi_processor_count,
-        "l2_bytes": props.L2_cache_size,
         "torch": torch.__version__,
-        "cuda": torch.version.cuda,
-        "python": sys.version.split()[0],
+        "tvm": tvm.__version__,
     }
-    try:
-        import tvm
-
-        env["tvm"] = tvm.__version__
-    except Exception as exc:
-        env["tvm"] = f"unavailable: {exc}"
-    return env
 
 
 def evaluate(
@@ -346,7 +313,7 @@ def evaluate(
     """Check and time every kernel plus cuBLAS on the workload's shapes.
 
     ``options_json`` holds ``names`` (one per kernel source), ``shapes`` (indices
-    into the workload rows, or null for all), ``check_only`` and ``emit_source``.
+    into the workload rows, or null for all) and ``check_only``.
     """
     import torch
 
@@ -408,10 +375,6 @@ def evaluate(
             except Exception:
                 info.update(status="ERROR", error=_short_traceback())
         entry["impls"][CUBLAS] = {}
-        if options.get("emit_source"):
-            for name in names:
-                if name in fns:
-                    entry["impls"][name]["cuda_source"] = _cuda_source(fns[name])
 
         outputs = {}
         for name, fn in list(fns.items()):

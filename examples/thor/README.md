@@ -133,7 +133,6 @@ forms:
 ```bash
 uv run python bench.py work/new.py --check-only --shapes 0   # quick correctness check
 uv run python bench.py work/best.py work/new.py             # A/B in one request
-uv run python bench.py work/new.py --emit-source            # also save generated CUDA C
 ```
 
 ## Let a coding agent optimize the kernel
@@ -230,7 +229,7 @@ kernel should land well above 100×.
 
 - **`cannot reach KCoral server`**: the server or your connection to it (for
   example the SSH tunnel) is down, or `KCORAL_URL` points elsewhere.
-  `uv run python bench.py --health` should answer.
+  `curl -fsS "$KCORAL_URL/health"` should answer.
 - **Every kernel fails with `cannot open source file "cuda/std/cstdint"`**:
   TVM 0.26 compiles with NVRTC and looks for the CCCL headers under
   `targets/aarch64-linux`, but JetPack installs the toolkit as

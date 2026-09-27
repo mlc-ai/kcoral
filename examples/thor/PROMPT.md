@@ -29,7 +29,7 @@ cuBLAS is the reference to chase; a candidate is scored only if it passes on
 ## 2. Environment
 
 - The GPU is remote. `$KCORAL_URL` points at a KCoral server on Thor. Check it
-  first: `uv run python bench.py --health` must report `"status": "ok"` and
+  first: `curl -fsS "$KCORAL_URL/health"` must report `"status": "ok"` and
   `"arch": "sm_110a"`. If it does not, stop and report; do not work around it.
 - Every compile, correctness check and timing run goes to that server through
   `bench.py` (or your own KCoral programs for diagnostics, see section 6).
@@ -104,9 +104,7 @@ uv run python bench.py work/best.py work/new.py             # timed A/B comparis
   throttles when hot. If `bench.py` warns that any implementation varied more
   than 5% across trials, or that the GPU clock fell below its maximum, the
   numbers are suspect: rerun before drawing any conclusion.
-- Results are saved under `results/`. Pass `--emit-source` to also save the
-  generated CUDA C of each kernel there, which is the quickest way to see what
-  TIRx produced.
+- Results are saved under `results/`.
 
 ## 6. Optimization guide
 
@@ -263,9 +261,12 @@ row is 64 fp16 values, so `BK = 64` pairs naturally with swizzle mode 3.
 - Develop at the smallest shape first (`--shapes 0`), then all shapes.
 - A hang is almost always an mbarrier phase or expected-byte-count mistake;
   a request that times out reports as a remote error.
-- `--emit-source` shows the generated CUDA. For other experiments you may send
-  your own KCoral programs (see `../../docs/client-guide/writing-a-program.md`
-  and `../../.claude/skills/kcoral-client/SKILL.md`); keep them in `work/`.
+- For other experiments you may send your own KCoral programs (see
+  `../../docs/client-guide/writing-a-program.md` and
+  `../../.claude/skills/kcoral-client/SKILL.md`); keep them in `work/`. The
+  quickest way to see what TIRx produced is to return the generated CUDA C of a
+  compiled kernel: `"\n".join(m.inspect_source() for m in fn.mod.imports)` for
+  the `fn` your `build` returns.
 
 ## 7. Iteration loop
 
