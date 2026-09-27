@@ -42,8 +42,7 @@ cuBLAS is the reference to chase; a candidate is scored only if it passes on
 ## 3. Files
 
 Locked (reading is fine, modifying invalidates the run): `bench.py`,
-`remote_bench.py`, `definition.json`, `workload.jsonl`, `initial_kernel.py`,
-this file.
+`definition.json`, `workload.jsonl`, `initial_kernel.py`, this file.
 
 Your workspace is `work/` (create it). Keep:
 

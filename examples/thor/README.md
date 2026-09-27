@@ -21,8 +21,7 @@ claims with one command.
 |---|---|
 | `initial_kernel.py` | The agent's starting point: shared-memory tiled GEMM on CUDA cores |
 | `definition.json`, `workload.jsonl` | The task in FlashInfer Trace format: the GEMM and its cuBLAS reference, and the shapes |
-| `bench.py` | Client CLI: checks and times kernels plus cuBLAS in one KCoral request |
-| `remote_bench.py` | Server-side harness that `bench.py` uploads with every request |
+| `bench.py` | Benchmark harness: checks and times kernels plus cuBLAS in one KCoral request (it uploads itself as the server-side code) |
 | `PROMPT.md` | Self-contained instructions for the optimization agent |
 | `launch_server.sh` | Optional helper that starts a KCoral server on Thor over SSH |
 
@@ -38,8 +37,8 @@ speedups it reports are comparable and repeatable. It also copes with Thor's
 load-dependent clocks. If you want the details, the task is defined in
 [FlashInfer Trace](https://bench.flashinfer.ai/docs/flashinfer-trace) format
 (`definition.json` for the operation and reference, `workload.jsonl` for the
-shapes), and the correctness rule and timing protocol are implemented in
-`remote_bench.py`.
+shapes), and the correctness rule and timing protocol are implemented in the
+server-side part of `bench.py`.
 
 ## Setup
 
