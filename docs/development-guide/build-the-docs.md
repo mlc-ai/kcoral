@@ -69,17 +69,30 @@ dependency files and shared static assets stay at the documentation root.
 - Pull requests build the documentation and upload an HTML artifact for review.
   They do not publish a preview site.
 
-## Build the versioned website
+<a id="build-the-versioned-website"></a>
 
-The public website lives at <https://kcoral.mlc.ai/docs/>. Its sidebar includes
-a version menu. `latest` follows `main`; stable release tags such as `v0.1.0`
-have their own permanent URLs:
+## Build the project website
+
+The project homepage lives at <https://kcoral.mlc.ai/>. Its source is plain HTML,
+CSS, and a small copy-button script in `website/`, with no frontend build tools
+or external assets. The site builder copies these files and the shared logos
+from `docs/_static/brand/` into the published site.
+
+Documentation lives under `/docs/`, with a version menu in its sidebar.
+`latest` follows `main`; stable release tags such as `v0.1.0` have their own
+permanent URLs:
 
 ```text
+/                      project homepage
 /docs/                 redirects to /docs/latest/
 /docs/latest/          documentation from main
 /docs/v0.1.0/          documentation from tag v0.1.0
 ```
+
+The homepage links directly to `/docs/latest/` to avoid a redirect on navigation.
+The `/docs/` alias uses an early `location.replace()` redirect, preserving query
+strings and fragments without displaying an intermediate link or adding a
+history entry. A meta-refresh and link remain available when JavaScript is disabled.
 
 Switching versions opens that version's documentation home page. Tags must use
 the form `vMAJOR.MINOR.PATCH` and contain the documentation configuration and
@@ -95,8 +108,9 @@ python scripts/build_docs.py
 python -m http.server 8008 --bind 127.0.0.1 --directory _site
 ```
 
-Open `http://127.0.0.1:8008/docs/`. The builder uses the current checkout for
-`latest` and extracts each stable tag into a temporary directory. Each version
+Open `http://127.0.0.1:8008/` for the homepage or `/docs/` for documentation.
+The builder uses the current checkout for the homepage and `latest`, and extracts
+each stable tag into a temporary directory. Each version
 gets a separate Python environment, its own locked documentation dependencies,
 and a non-editable installation of its own KCoral package. This ensures that
 the API reference describes the selected release. No GPU toolchain is needed.
@@ -112,8 +126,9 @@ The `Documentation` workflow rebuilds the website after a push to `main`, a
 version tag push, or a manual run on `main`. It publishes the HTML artifact to
 the public [kcoral-docs repository](https://github.com/mlc-ai/kcoral-docs), which
 serves it through GitHub Pages. This keeps the source repository private while
-allowing public documentation on GitHub Free. Only generated documentation,
-including the documented example downloads and page sources, is published.
+allowing a public website on GitHub Free. Only the homepage assets and generated
+documentation, including the documented example downloads and page sources,
+are published.
 
 The deployment job uses the `DOCS_DEPLOY_KEY` Actions secret: an SSH deploy key
 with write access only to `mlc-ai/kcoral-docs`. Pull requests and manual runs on

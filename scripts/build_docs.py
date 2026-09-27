@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build latest and stable release tags into a complete static documentation site.
+"""Build the project homepage and versioned documentation into a static website.
 
 Requires Python 3.12 and uv. Each ref gets its own non-editable package install
 so autodoc reads that version's API, not the API installed for another ref.
@@ -38,9 +38,11 @@ def redirect(path, target):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">\n'
-        f'<meta http-equiv="refresh" content="0; url={target}">\n'
+        f"<script>location.replace({json.dumps(target)}"
+        " + location.search + location.hash);</script>\n"
+        f'<noscript><meta http-equiv="refresh" content="0; url={target}"></noscript>\n'
         "<title>KCoral documentation</title></head>\n"
-        f'<body><a href="{target}">KCoral documentation</a></body></html>\n'
+        f'<body><noscript><a href="{target}">KCoral documentation</a></noscript></body></html>\n'
     )
 
 
@@ -112,7 +114,8 @@ def main():
                     files.extractall(source, filter="data")
             build_version(source, site / "docs" / name, name, versions, work / f"env-{name}")
 
-        redirect(site / "index.html", "docs/")
+        shutil.copytree(REPO / "website", site, dirs_exist_ok=True)
+        shutil.copytree(REPO / "docs" / "_static" / "brand", site / "assets" / "brand")
         redirect(site / "docs" / "index.html", "latest/")
         (site / ".nojekyll").touch()
         (site / MARKER).touch()
