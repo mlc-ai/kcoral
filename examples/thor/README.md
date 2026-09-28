@@ -143,44 +143,51 @@ uv run python bench.py initial_kernel.py work/best.py
 
 ## Results from our validation run
 
-One unattended run on 2026-09-24 used the `/goal` above with this setup:
+One unattended run on 2026-09-28 used the `/goal` above with this setup:
 
 | Setting | Value |
 |---|---|
-| Agent | Claude Code 2.1.282, headless (`claude -p`) |
+| Agent | Claude Code 2.1.283, headless (`claude -p`) |
 | Model | Claude Opus 5.5 (1M context), high effort |
-| Server | existing Thor KCoral server, JetPack 7 |
+| Server | fresh Thor KCoral server from `launch_server.sh`, JetPack 7 |
 | Clocks | default governor, not pinned |
 
-The agent stopped under the plateau rule after 10 rounds and about 45
-minutes. Its path, from `work/LOG.md`:
+The agent stopped under the plateau rule after 17 rounds and about 66
+minutes. The rounds that improved its best kernel, from `work/LOG.md`:
 
 | Round | Idea | Total ms (A/B run) |
 |---|---|---|
-| 0 | initial kernel: shared-memory tiled kernel on CUDA cores | 738.5 |
-| 1 | TMA + `tcgen05` into TMEM, 128×256 tile, no overlap | 14.75 |
-| 3 | 4-stage warp-specialized pipeline + L2-grouped tile order per shape | 5.58 |
-| 6 | persistent 2-CTA clusters with `cta_group=2` MMAs, double-buffered TMEM, overlapped epilogue | 5.04 |
-| 7 | 256×512 cluster tiles on the DRAM-bound shapes | 4.60 |
+| 0 | initial kernel: shared-memory tiled kernel on CUDA cores | 738.1 |
+| 1 | TMA + `tcgen05` into TMEM, 128×256 tile, no overlap | 16.69 |
+| 3 | L2-grouped tile order with a per-shape group size, on a 4-stage warp-specialized pipeline | 8.38 |
+| 4 | 16-byte vectorized epilogue stores | 5.72 |
+| 6 | persistent 2-CTA clusters with `cta_group=2` MMAs and double-buffered TMEM | 5.03 |
+| 7 | 256×512 cluster tiles on the large and long-K shapes | 4.73 |
+| 11 | K-direction serpentine walk over consecutive tiles | 4.34 |
+| 14 | per-tile widths and L2-capacity-aware grouping on `m2048-n11008-k4096` | 4.22 |
 
-Rounds 2, 4, 5 and 8–10 tried other ideas without a confirmed gain; the log
-records why. We then re-measured the final kernel independently three times
-with `bench.py initial_kernel.py work/best.py`:
+The other rounds tried ideas such as a TMA-store epilogue, L2 cache hints and
+explicit prefetching without a confirmed gain; the log records why. Two calls
+were the agent's own: it did not count rounds 8–10 as three different ideas
+(round 10 re-applied round 8 per shape), so it kept going past round 13; and it
+promoted round 14 although both confirmation runs warned about spread, which
+came from the previous best's bimodal timing on `m2048-n11008-k4096`.
 
-| | Run 1 | Run 2 | Run 3 |
+Its final verification, `bench.py initial_kernel.py work/best.py`, passed
+without warnings:
+
+| | Total ms | vs initial kernel | vs cuBLAS |
 |---|---|---|---|
-| correctness | ALL PASSED | ALL PASSED | ALL PASSED |
-| total ms, best / cuBLAS | 4.67 / 5.01 | 4.84 / 5.00 | 5.03 / 5.01 |
-| speedup vs initial kernel | 158× | 152× | 147× |
-| ratio vs cuBLAS | 1.07× | 1.03× | 1.00× |
+| initial kernel | 738.2 | 1× | 0.007× |
+| cuBLAS | 5.00 | 148× | 1× |
+| agent's kernel | **4.21** | **175×** | **1.19×** |
 
-Per shape, the kernel is about 1.2× faster than cuBLAS on the long-K
-`m2048-n4096-k11008` projection and within a few percent of it on the square
-shapes. On `m2048-n11008-k4096` its timing is bimodal: `bench.py` flags a
-10–24% spread across trials there. That is the kind of lead a further run could
-pick up. Your numbers will differ with clocks, temperature, the model and
-effort level you run, and the agent's choices. The speedup over the initial
-kernel should land well above 100×.
+The kernel beats cuBLAS on every shape, by 1.04–1.07× on three of them and by
+1.42× on the long-K `m2048-n4096-k11008`. Re-running the same command afterwards
+on the same server reproduced it within 1.18–1.20× of cuBLAS (4.23–4.24 ms) in
+four warning-free runs. Your numbers will differ with clocks, temperature, the
+model and effort level you run, and the agent's choices. The speedup over the
+initial kernel should land well above 100×.
 
 ## Troubleshooting
 
