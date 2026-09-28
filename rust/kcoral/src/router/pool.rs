@@ -1144,6 +1144,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn queued_request_is_not_starved_by_later_arrivals() {
+        let mut cfg = config();
+        cfg.queue_wait_timeout = Duration::from_millis(200);
+        let pool = NodePool::new(cfg).unwrap();
+        pool.record_status(None, "control", status("one", true, "cpu"))
+            .await
+            .unwrap();
+        pool.register_slot(slot("one", "only")).await.unwrap();
+
+        let mut holder = pool.acquire(None, "holder").await.unwrap();
+        let queued_pool = pool.clone();
+        let queued = tokio::spawn(async move { queued_pool.acquire(None, "queued").await });
+        while pool.snapshot().await["queue_length"] != 1 {
+            tokio::task::yield_now().await;
+        }
+
+        // Each time the slot frees up, a new request arrives before the queued
+        // request is scheduled. A fair queue hands the slot to the queued request.
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while !queued.is_finished() && Instant::now() < deadline {
+            holder.finish().await;
+            match pool.try_acquire(None, "later").await {
+                Some(next) => holder = next,
+                None => break,
+            }
+            tokio::task::yield_now().await;
+        }
+        let result = queued.await.unwrap();
+        assert!(
+            result.is_ok(),
+            "queued request timed out while later arrivals took the slot"
+        );
+    }
+
+    #[tokio::test]
     async fn cancellation_releases_capacity_even_with_a_full_outgoing_queue() {
         let pool = NodePool::new(config()).unwrap();
         pool.record_status(None, "control", status("one", true, "cpu"))
