@@ -98,8 +98,10 @@ back to resending every local blob if the cache changes between the two
 requests. Returned tensors decode to CPU `numpy.ndarray` (`bfloat16` and
 `float8_*` via `ml_dtypes`).
 
-`upload_folder` snapshots a local directory into ordinary file upload
-instructions; retries send the same instructions with different blob parts.
+`upload_folder` packs a local directory into one uncompressed tar archive and
+one `kind="folder"` upload; retries send the same instruction and archive bytes.
+The server caches the complete archive on disk and extracts it per request.
+Changing one file resends the whole archive; use `upload_file` for per-file caching.
 It includes hidden files, rejects links, special files and repeated directories,
 and omits empty directories and original permissions/timestamps. A failed call
 leaves the program unchanged. Caching is automatic and best-effort.
@@ -122,12 +124,12 @@ A field is accepted exactly for the kinds it lists:
 
 | Field | Kinds | Required for | Notes |
 |---|---|---|---|
-| `id` | module, tensor, bytes, library | module, tensor, bytes, library | Unique handle name; rejected for file |
-| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, or `"library"` |
+| `id` | module, tensor, bytes, library | module, tensor, bytes, library | Unique handle name; rejected for file/folder |
+| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, `"folder"`, or `"library"` |
 | `source` | module | module | UTF-8 Python or CUDA source defining a module |
 | `language` | module | — | `"python"` (default) or `"cuda"` |
-| `blob` | tensor, bytes, file, library | tensor, bytes, file, library | SHA-256 of the raw bytes |
-| `path` | file | file | Relative path in the request working directory |
+| `blob` | tensor, bytes, file, folder, library | tensor, bytes, file, folder, library | SHA-256 of the raw bytes |
+| `path` | file, folder | file, folder | Relative path in the request working directory |
 | `dtype` | tensor | tensor | Tensor data type |
 | `shape` | tensor | tensor | Tensor shape |
 
@@ -148,6 +150,11 @@ Python client, where `blob` is bytes-like;
 the wire field holds its SHA-256. The server copies it into the request's private
 working directory with mode `0600` and removes that directory after execution.
 Its content can remain in the disk cache across requests and server restarts.
+
+A `folder` upload also returns no register. `upload_folder(folder, path=...)`
+creates a deterministic, uncompressed archive containing regular files only.
+The server rejects unsafe paths, links, special/sparse members, and destination
+conflicts, then materializes each file with the same rules as `kind="file"`.
 
 ### `get_function`
 

@@ -6,11 +6,12 @@ import pytest
 from support.programs import harness_function
 
 from kcoral import Program
+from kcoral.folder_archive import archive_files
 from kcoral.keys import compute_blob_hash
 from kcoral.schemas import parse_program
 
 
-def test_folder_expands_to_fixed_file_uploads_and_deduplicates(tmp_path):
+def test_folder_packs_one_fixed_archive(tmp_path):
     (tmp_path / "sub").mkdir()
     (tmp_path / "empty").mkdir()
     (tmp_path / "a").write_bytes(b"shared")
@@ -21,18 +22,43 @@ def test_folder_expands_to_fixed_file_uploads_and_deduplicates(tmp_path):
     assert program.upload_folder(tmp_path, path="./assets//") is None
     program.run(id="after", fn=harness_function(program, "structural", "after"))
     original = program.instructions
-    items = [
-        item for item in program.instructions if item["op"] in {"run"} or item.get("kind") == "file"
-    ]
+    items = [item for item in original if item["op"] == "run" or item.get("kind") == "folder"]
     assert items[0]["id"] == "before" and items[-1]["id"] == "after"
-    assert [item["path"] for item in items[1:-1]] == ["assets/.hidden", "assets/a", "assets/sub/b"]
-    assert all(set(item) == {"op", "kind", "blob", "path"} for item in items[1:-1])
-    assert all(item["op"] == "upload" and item["kind"] == "file" for item in items[1:-1])
-    assert program._blobs == {compute_blob_hash(b"shared"): b"shared", compute_blob_hash(b""): b""}
-    parse_program({"instructions": program.instructions})
+    assert len(items) == 3
+    assert items[1] == {
+        "op": "upload",
+        "kind": "folder",
+        "path": "assets",
+        "blob": next(iter(program._blobs)),
+    }
+    archive = program._blobs[items[1]["blob"]]
+    assert unpack(archive) == {".hidden": b"", "a": b"shared", "sub/b": b"shared"}
+    assert len(program._blobs) == 1
+    parse_program({"instructions": original})
     (tmp_path / "a").write_bytes(b"changed")
     assert program.instructions == original
-    assert program._blobs[compute_blob_hash(b"shared")] == b"shared"
+    assert program._blobs == {compute_blob_hash(archive): archive}
+
+
+def unpack(archive):
+    return {name: archive[offset : offset + size] for name, offset, size in archive_files(archive)}
+
+
+def test_archive_cache_key_ignores_metadata_and_destination_but_tracks_contents(tmp_path):
+    (tmp_path / "a").write_bytes(b"old")
+    (tmp_path / "b").write_bytes(b"unchanged")
+    first = Program()
+    first.upload_folder(tmp_path, path="first")
+    (tmp_path / "a").chmod(0o777)
+    os.utime(tmp_path / "a", ns=(1, 1))
+    second = Program()
+    second.upload_folder(tmp_path, path="second")
+    assert first._blobs == second._blobs
+    (tmp_path / "a").write_bytes(b"new")
+    third = Program()
+    third.upload_folder(tmp_path, path="first")
+    assert set(third._blobs).isdisjoint(first._blobs)
+    assert unpack(next(iter(third._blobs.values()))) == {"a": b"new", "b": b"unchanged"}
 
 
 def test_empty_folder_is_a_noop(tmp_path):
@@ -99,7 +125,7 @@ def test_deep_folder_does_not_use_the_python_call_stack(tmp_path):
     finally:
         sys.setrecursionlimit(original_limit)
     assert len(program.instructions) == 1
-    assert program._blobs == {compute_blob_hash(b"deep"): b"deep"}
+    assert list(unpack(next(iter(program._blobs.values()))).values()) == [b"deep"]
 
 
 @pytest.mark.parametrize("existing", ["assets", "assets/a", "assets/a/child"])

@@ -134,7 +134,7 @@ Example `program` part:
 | Part | Content type | Required | Meaning |
 | --- | --- | --- | --- |
 | `program` | `application/json` | yes | The program object below |
-| `blob:<sha256>` | `application/octet-stream` | when not cached | Raw tensor, byte, file or library content referenced by an upload |
+| `blob:<sha256>` | `application/octet-stream` | when not cached | Raw tensor, byte, file, folder archive or library content referenced by an upload |
 
 SHA-256 is the content hash used to identify binary data. `<sha256>` is its
 lowercase 64-character hexadecimal digest over the raw bytes.
@@ -174,10 +174,10 @@ Every instruction is a JSON object with an `op` field. The four values are
 | Common field | Meaning |
 | --- | --- |
 | `op` | Required operation name; determines the accepted fields |
-| `id` | Required, nonempty, unique identifier when the operation produces a handle; absent for file uploads and `return` |
+| `id` | Required, nonempty, unique identifier when the operation produces a handle; absent for file/folder uploads and `return` |
 | `{"$ref": "id"}` | A reference value naming an earlier handle; it is not a top-level instruction field |
 
-A handle names a value inside this request. `upload` except file upload,
+A handle names a value inside this request. `upload` except file/folder upload,
 `get_function` and `run` produce handles. References are resolved recursively
 inside arrays and objects, must have exactly the `$ref` key, and cannot refer
 forward or cross request boundaries. Return keys are unique in a separate
@@ -186,7 +186,7 @@ unlisted fields are rejected.
 
 ### upload
 
-Upload source or binary data. A file upload materializes a file; other kinds
+Upload source or binary data. File/folder uploads materialize workspace files; other kinds
 produce a handle.
 
 ```json
@@ -203,12 +203,12 @@ produce a handle.
 | Field | Kinds | Required for | Notes |
 |---|---|---|---|
 | `op` | all | all | `"upload"` |
-| `id` | module, tensor, bytes, library | module, tensor, bytes, library | Unique handle name; rejected for file |
-| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, or `"library"` |
+| `id` | module, tensor, bytes, library | module, tensor, bytes, library | Unique handle name; rejected for file/folder |
+| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, `"folder"`, or `"library"` |
 | `source` | module | module | UTF-8 Python or CUDA source defining a module |
 | `language` | module | — | `"python"` (default) or `"cuda"` |
-| `blob` | tensor, bytes, file, library | tensor, bytes, file, library | SHA-256 of the raw bytes |
-| `path` | file | file | Relative destination in the request working directory |
+| `blob` | tensor, bytes, file, folder, library | tensor, bytes, file, folder, library | SHA-256 of the raw bytes |
+| `path` | file, folder | file, folder | Relative destination in the request working directory |
 | `dtype` | tensor | tensor | Tensor data type |
 | `shape` | tensor | tensor | Tensor shape |
 
@@ -290,6 +290,39 @@ components are removed, so `./data//tensor.bin` becomes `data/tensor.bin`.
 Normalized paths must be unique and cannot conflict as a file and directory;
 for example, one program cannot upload both `data` and `data/tensor.bin`. The
 server creates and opens every component without following symbolic links.
+
+##### Folder
+
+```json
+{
+  "op": "upload",
+  "kind": "folder",
+  "blob": "<sha256-of-complete-tar>",
+  "path": "inputs"
+}
+```
+
+`blob` identifies one uncompressed tar archive, cached as a whole in the persistent
+file cache. The server unpacks its files beneath `path` when this instruction runs.
+It returns no handle, accepts no `id`, and does not acquire the GPU. The request's
+normal workspace cleanup also removes the extracted files.
+
+Archive members must be non-sparse regular files with relative POSIX paths; links,
+directory entries, special files, compressed archives, `..`, absolute paths and
+backslashes are rejected. Parent directories are created implicitly. The Python
+client includes hidden files, omits empty directories, and generates sorted tar
+entries with fixed metadata so cache identity depends only on relative filenames
+and contents. As with file uploads, extracted files use mode `0600` and newly
+created directories use `0700`; archived permissions and ownership are ignored.
+An empty client folder adds no instruction; an empty wire archive writes no files.
+
+All member paths are validated before extraction. Duplicate destinations and
+file/directory conflicts, including across folder and file uploads, are rejected
+before execution once the required archives are available. Disjoint archives may
+share a destination directory. Extraction refuses to follow existing symlinks or
+overwrite existing files. The archive remains one blob: a cache hit sends no archive
+bytes, while any changed filename or content requires the complete new archive.
+Use individual `upload_file` calls when per-file cache reuse is preferred.
 
 ##### Library
 
@@ -432,7 +465,7 @@ cache miss occurs. Cache retention is an optimization rather than a guarantee.
 
 #### File cache
 
-File uploads use a separate persistent disk cache. Its default directory is
+File contents and complete folder archives use a separate persistent disk cache. Its default directory is
 `$XDG_CACHE_HOME/kcoral/files` when `XDG_CACHE_HOME` is absolute, otherwise
 `~/.cache/kcoral/files`. The default budget is 16384 MiB (16 GiB); MiB means
 1024 squared bytes. Configure `disk_cache_dir` and
@@ -449,7 +482,7 @@ or worker crash. The content cache may remain. Requests retain their own resolve
 bytes, so disk eviction does not invalidate an admitted request.
 
 The same digest may exist in either or both cache categories. A request using
-that digest for both a file and a tensor, byte string or library can share the
+that digest for both a file/folder and a tensor, byte string or library can share the
 resolved bytes; newly supplied content is offered to each referenced category.
 A hit in one category does not generally guarantee a hit in the other.
 
@@ -762,7 +795,7 @@ A `FAILED` response's `error` describes that instruction:
 | `message` | string | Human-readable description |
 | `instruction_index` | integer | Zero-based position in `instructions` |
 | `instruction_op` | string | `"upload"`, `"get_function"`, `"run"`, or `"return"` |
-| `instruction_id` | string \| null | The instruction's `id`; `null` for `return` and file upload |
+| `instruction_id` | string \| null | The instruction's `id`; `null` for `return` and file/folder upload |
 | `traceback` | string | Server-side traceback, truncated to 8192 bytes |
 
 Instruction error kinds are `parse`, `compile`, `runtime`, `gpu_access`,
@@ -863,8 +896,8 @@ Follow the [quickstart](../getting-started/quickstart.md) for a first request, t
 [program guide](writing-a-program.md) for client construction and lifecycle, and the
 [Python interface reference](../python-api/index.rst) for signatures and errors.
 
-`upload_folder` expands into ordinary file-upload instructions and introduces
-no new protocol operation. File uploads return no register; see
+`upload_folder` packs a local directory into one `upload` with `kind="folder"`.
+File and folder uploads return no register; see
 [files used by uploaded scripts](writing-a-program.md#files-used-by-uploaded-scripts).
 
 File/folder results decode to `ReturnedFile` and `ReturnedFolder`; see

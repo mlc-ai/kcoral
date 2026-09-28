@@ -16,12 +16,14 @@ from . import sandbox
 from .artifacts import ReturnedFile, ReturnedFolder
 from .errors import ExecutionError, GPUAccessViolation
 from .file_transfer import collect
+from .folder_archive import archive_files
 from .keys import compute_blob_hash
 from .lease import Lease
 from .schemas import (
     DTYPE_ITEM_SIZES,
     FileReturn,
     FileUpload,
+    FolderUpload,
     GetFunction,
     Instruction,
     Program,
@@ -117,6 +119,13 @@ def _execute_in_workspace(
                             workspace_dir,
                             instruction.path,
                             program.blob_bytes[instruction.blob],
+                        )
+                    elif isinstance(instruction, FolderUpload):
+                        _materialize_folder(
+                            workspace_dir,
+                            instruction.path,
+                            program.blob_bytes[instruction.blob],
+                            entries=program.folder_entries.get(instruction.blob),
                         )
                     elif isinstance(instruction, Upload):
                         if instruction.kind == "module":
@@ -274,7 +283,7 @@ def _working_directory(directory: str) -> Iterator[None]:
         os.close(previous)
 
 
-def _materialize_file(workspace_dir: str, path: str, data: bytes) -> None:
+def _materialize_file(workspace_dir: str, path: str, data: bytes | memoryview) -> None:
     """Copy one blob beneath ``workspace_dir`` without following symlinks."""
     try:
         path = normalize_file_path(path)
@@ -310,11 +319,35 @@ def _materialize_file(workspace_dir: str, path: str, data: bytes) -> None:
         ) from exc
 
 
+def _materialize_folder(
+    workspace_dir: str,
+    path: str,
+    data: bytes,
+    *,
+    entries: list[tuple[str, int, int]] | None = None,
+) -> None:
+    """Reuse validated members, or validate first when called without the front-end."""
+    try:
+        destination = normalize_file_path(path)
+        if entries is None:
+            entries = archive_files(data)
+        paths = [normalize_file_path(f"{destination}/{name}") for name, _, _ in entries]
+        contents = memoryview(data)
+        for target, (_, offset, size) in zip(paths, entries, strict=True):
+            _materialize_file(workspace_dir, target, contents[offset : offset + size])
+    except ExecutionError:
+        raise
+    except Exception as exc:
+        raise ExecutionError(
+            "runtime", f"cannot materialize folder {path!r}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 def _place(
     instruction: Instruction, off_gpu: frozenset[Ref], runtime: Runtime, lease: Lease
 ) -> None:
     """Hold or drop the GPU for the instruction about to run."""
-    if isinstance(instruction, (FileUpload, FileReturn)):
+    if isinstance(instruction, (FileUpload, FolderUpload, FileReturn)):
         _drop_gpu(runtime, lease)
         return
     if isinstance(instruction, Run) and instruction.fn in off_gpu:

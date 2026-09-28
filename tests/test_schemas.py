@@ -3,6 +3,7 @@ import pytest
 from kcoral.errors import ValidationError
 from kcoral.schemas import (
     FileUpload,
+    FolderUpload,
     GetFunction,
     Ref,
     Return,
@@ -421,3 +422,16 @@ def test_strict_json_rejects_duplicate_keys_and_non_finite_numbers():
         strict_json_loads('{"instructions": [], "instructions": []}')
     with pytest.raises(ValidationError, match="non-finite"):
         strict_json_loads('{"value": NaN}')
+
+
+def test_folder_upload_has_no_handle_and_references_one_blob():
+    wire = {"op": "upload", "kind": "folder", "blob": TENSOR_HASH, "path": "./data//"}
+    program = parse_program({"instructions": [wire]})
+    assert program.instructions == [FolderUpload(blob=TENSOR_HASH, path="data")]
+    assert program.blob_uploads() == program.instructions
+    for field, value in [("id", "folder"), ("source", "text"), ("dtype", "uint8")]:
+        with pytest.raises(ValidationError, match="unknown field"):
+            parse_program({"instructions": [{**wire, field: value}]})
+    for field, value in [("blob", "invalid"), ("path", "../outside")]:
+        with pytest.raises(ValidationError):
+            parse_program({"instructions": [{**wire, field: value}]})

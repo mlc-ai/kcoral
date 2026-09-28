@@ -195,6 +195,10 @@ def test_folder_upload_reuses_identical_wire_program_for_every_attempt(
     counter = tmp_path / "executions"
     program = Program()
     program.upload_folder(source, path="data")
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "b").write_bytes(b)
+    program.upload_folder(other, path="other")
     # Changing a local file after construction must not change any retry.
     (source / "a").write_bytes(b"changed")
     module = program.upload(
@@ -222,7 +226,8 @@ def test_folder_upload_reuses_identical_wire_program_for_every_attempt(
         runtime_factory=fake_runtime_factory,
     )
     server, thread, url = _start_server(app)
-    blobs = {"a": a, "b": b}
+    archives = [item["blob"] for item in program.instructions if item.get("kind") == "folder"]
+    blobs = {"a": program._blobs[archives[0]], "b": program._blobs[archives[1]]}
     keys = {name: compute_blob_hash(data) for name, data in blobs.items()}
     requests = []
     statuses = []
@@ -273,6 +278,74 @@ def test_folder_upload_reuses_identical_wire_program_for_every_attempt(
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+
+
+def test_folder_cache_survives_restart_and_changed_file_resends_the_whole_archive(tmp_path):
+    import io
+    import tarfile
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "a").write_bytes(b"first")
+    (source / "b").write_bytes(b"unchanged")
+    config = ServerConfig(
+        sandbox="none",
+        workers_per_gpu=1,
+        max_requests_per_worker=0,
+        disk_cache_dir=tmp_path / "cache",
+    )
+    original = None
+    for restart in range(2):
+        app = create_app(config, runtime_factory=fake_runtime_factory)
+        server, thread, url = _start_server(app)
+        try:
+            with Client(url) as client:
+                requests = []
+
+                def record(request):
+                    parts = parse_multipart(request.headers["content-type"], request.read())
+                    requests.append(
+                        {
+                            part.name.removeprefix("blob:"): part.data
+                            for part in parts
+                            if part.name.startswith("blob:")
+                        }
+                    )
+
+                client._http.event_hooks = {"request": [record]}
+                for changed in (False, True) if restart else (False, False):
+                    if changed:
+                        (source / "a").write_bytes(b"changed")
+                    program = Program()
+                    program.upload_folder(source, path="data")
+                    program.return_folder(key="tree", path="data")
+                    requests.clear()
+                    result = client.execute(program)
+                    assert result.completed, result.error
+                    expected = {"a": b"changed" if changed else b"first", "b": b"unchanged"}
+                    assert {
+                        name: file.read_bytes() for name, file in result["tree"].files.items()
+                    } == expected
+                    digest, archive = next(iter(program._blobs.items()))
+                    if original is None or changed:
+                        assert requests == [{}, {digest: archive}]
+                        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
+                            assert {
+                                member.name: bundle.extractfile(member).read() for member in bundle
+                            } == expected
+                    else:
+                        assert digest == original
+                        assert requests == [{}]
+                    if original is None:
+                        original = digest
+                    if changed:
+                        assert digest != original
+                    assert app.state.file_cache.get(digest) == archive
+                    assert app.state.cache.get(digest) is None
+                    assert app.state.file_cache.get(compute_blob_hash(b"unchanged")) is None
+        finally:
+            server.should_exit = True
+            thread.join(timeout=10)
 
 
 def test_cache_miss_retry_returns_the_router_affinity_header():

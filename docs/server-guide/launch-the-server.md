@@ -149,7 +149,7 @@ for clamping and [errors](../client-guide/protocol.md#errors) for request failur
 
 ### File upload cache
 
-File uploads use a persistent disk cache; tensors, bytes and libraries use the
+File uploads and complete folder archives use a persistent disk cache; tensors, bytes and libraries use the
 memory cache. The default directory is `$XDG_CACHE_HOME/kcoral/files` when
 `XDG_CACHE_HOME` is an absolute path, otherwise `~/.cache/kcoral/files`.
 
