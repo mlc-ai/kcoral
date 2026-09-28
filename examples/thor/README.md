@@ -80,18 +80,6 @@ export KCORAL_URL=http://127.0.0.1:8000
 server listens only on the host's `127.0.0.1`, hence the tunnel. See the script
 for its options (`--port`, `--dir`, `--stop`).
 
-### 3. Optional: stable clocks
-
-Jetson Thor scales its GPU and memory clocks with load and throttles when hot.
-`bench.py` copes with the default governor. For the most repeatable
-numbers, run the board in its maximum power mode with clocks pinned (this
-needs root on Thor):
-
-```bash
-sudo nvpmodel -m 0        # MAXN power mode
-sudo jetson_clocks        # pin clocks at maximum; `sudo jetson_clocks --restore` undoes it
-```
-
 ## Run the initial kernel
 
 ```bash
@@ -142,21 +130,16 @@ Everything the agent claims can be re-measured independently:
 uv run python bench.py initial_kernel.py work/best.py
 ```
 
-- **Untouched harness.** `git status .` should show no changes: the
-  benchmark files, the initial kernel and `PROMPT.md` must be as committed. The
-  agent's `work/` and `results/` output is git-ignored.
-- **Correctness.** Every row must read `PASS` and the run must end with
-  `ALL PASSED` (the exit code is non-zero otherwise).
-- **Speedup.** The aggregate line gives `speedup_vs_initial` and
-  `ratio_vs_cublas` for `best`. Run the command two or three times.
-  Differences smaller than the `spread` column and the warnings are noise.
-- **Measurement conditions.** Check the telemetry line. A GPU clock below its
-  maximum or a stability warning means the numbers are suspect, so rerun.
-- **What actually ran.** `results/<run>.json` lists, per shape, the GPU kernel
-  names each implementation launched. A candidate that calls cuBLAS is failed
-  automatically.
-- **How it got there.** Read `work/LOG.md` for the round-by-round history and
-  `work/RESULTS.md` for the agent's own summary.
+- **Correctness.** The run must end with `ALL PASSED` (the exit code is
+  non-zero otherwise), and `git status .` must show the example's files
+  unchanged; the agent's `work/` and `results/` are git-ignored.
+- **Speed.** The aggregate line gives `speedup_vs_initial` and
+  `ratio_vs_cublas`. Rerun two or three times: differences within the
+  `spread` column are noise, and a stability warning means the numbers are
+  suspect.
+- **Details.** `results/<run>.json` lists the GPU kernels each implementation
+  launched (a candidate that calls cuBLAS fails automatically); `work/LOG.md`
+  and `work/RESULTS.md` hold the agent's history and summary.
 
 ## Results from our validation run
 
@@ -204,20 +187,9 @@ kernel should land well above 100×.
 - **`cannot reach KCoral server`**: the server or your connection to it (for
   example the SSH tunnel) is down, or `KCORAL_URL` points elsewhere.
   `curl -fsS "$KCORAL_URL/health"` should answer.
-- **Every kernel fails with `cannot open source file "cuda/std/cstdint"`**:
-  TVM 0.26 compiles with NVRTC and looks for the CCCL headers under
-  `targets/aarch64-linux`, but JetPack installs the toolkit as
-  `targets/sbsa-linux`. Start the server with
-  `TVM_CUDA_NVRTC_EXTRA_OPTS=-I/usr/local/cuda/include/cccl` (`launch_server.sh`
-  does this).
-- **A request is slow to start**: another request holds the GPU. KCoral runs
-  one GPU request at a time and queues the rest.
-- **The server log warns `bubblewrap could not start`**: some hosts forbid the
-  unprivileged namespaces KCoral's sandbox uses. The server then runs without
-  filesystem isolation. That is fine on a machine you control; pass
-  `--sandbox none` to silence the warning.
-- **A kernel hangs until the request times out**: usually an mbarrier phase or
-  expected-transaction byte count is wrong. The request fails with a timeout
-  and the next request gets a fresh worker.
+- **Every kernel fails with `cannot open source file "cuda/std/cstdint"`**: TVM
+  0.26's NVRTC misses JetPack's CCCL headers. Start the server with
+  `TVM_CUDA_NVRTC_EXTRA_OPTS=-I/usr/local/cuda/include/cccl`, as
+  `launch_server.sh` does.
 - **Large spread or clock warnings**: the board is throttling or other work is
-  running on it. Let it cool down, pin clocks (see above) and rerun.
+  running on it. Let it cool down and rerun.
