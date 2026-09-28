@@ -63,11 +63,10 @@ class BenchConfig:
     seeds: tuple[int, ...] = (0, 1)
     atol: float = 0.1
     rtol: float = 0.01
-    # Timing: per trial, ``warmup`` untimed then ``repeat`` timed calls.
+    # Timing: per trial, ``warmup`` untimed then ``repeat`` timed calls, L2 flushed before each.
     warmup: int = 10
     repeat: int = 50
     trials: int = 3
-    flush_l2: bool = True
     # Thor's clocks follow the load. Implementations slower than ``slow_call_ms`` per
     # call are timed on their own first; then cuBLAS ramps the clocks for ``ramp_s``
     # and each remaining implementation runs untimed for ``settle_s`` before timing.
@@ -262,8 +261,7 @@ def run_for(fn, args, seconds: float, flush) -> None:
 
     deadline = time.perf_counter() + seconds
     while time.perf_counter() < deadline:
-        if flush is not None:
-            flush.zero_()
+        flush.zero_()
         fn(*args)
         torch.cuda.synchronize()
 
@@ -278,14 +276,12 @@ def time_calls(fn, args, settle_s: float, warmup: int, repeat: int, flush) -> li
 
     run_for(fn, args, settle_s, flush)
     for _ in range(warmup):
-        if flush is not None:
-            flush.zero_()
+        flush.zero_()
         fn(*args)
     starts = [torch.cuda.Event(enable_timing=True) for _ in range(repeat)]
     ends = [torch.cuda.Event(enable_timing=True) for _ in range(repeat)]
     for i in range(repeat):
-        if flush is not None:
-            flush.zero_()
+        flush.zero_()
         starts[i].record()
         fn(*args)
         ends[i].record()
@@ -317,15 +313,12 @@ def launched_kernels(fn, args) -> list[str] | None:
 
 def environment() -> dict:
     import torch
-    import tvm
 
     props = torch.cuda.get_device_properties(0)
     return {
         "device": props.name,
         "arch": f"sm_{props.major}{props.minor}a",
         "sm_count": props.multi_processor_count,
-        "torch": torch.__version__,
-        "tvm": tvm.__version__,
     }
 
 
@@ -345,8 +338,6 @@ def evaluate(
     reference = load_reference(definition)
     options = json.loads(bytes(options_json))
     names = list(options["names"])
-    if len(names) != len(kernel_sources) or CUBLAS in names:
-        raise ValueError("kernel names must match the sources and must not be 'cublas'")
     check_only = bool(options.get("check_only", False))
     indices = options.get("shapes")
     selected = [workloads[i] for i in indices] if indices is not None else workloads
@@ -364,10 +355,8 @@ def evaluate(
         except Exception:
             load_errors[name] = _short_traceback()
 
-    flush = None
-    if cfg.flush_l2:
-        l2_bytes = torch.cuda.get_device_properties(0).L2_cache_size or (64 << 20)
-        flush = torch.empty(2 * l2_bytes, dtype=torch.uint8, device="cuda")
+    l2_bytes = torch.cuda.get_device_properties(0).L2_cache_size or (64 << 20)
+    flush = torch.empty(2 * l2_bytes, dtype=torch.uint8, device="cuda")
 
     results = []
     for workload in selected:
@@ -515,14 +504,12 @@ CLIENT_ERRORS = (KCoralError, TransportError, ProtocolError)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument(
-        "kernels", nargs="+", type=Path, help="kernel files defining build(M, N, K)"
+    parser = argparse.ArgumentParser(
+        description=__doc__.split("\n\n")[0],
+        epilog="The server URL comes from $KCORAL_URL (default: http://127.0.0.1:8000).",
     )
     parser.add_argument(
-        "--url",
-        default=os.environ.get("KCORAL_URL", "http://127.0.0.1:8000"),
-        help="KCoral server URL (default: $KCORAL_URL or http://127.0.0.1:8000)",
+        "kernels", nargs="+", type=Path, help="kernel files defining build(M, N, K)"
     )
     parser.add_argument(
         "--shapes", help="comma-separated row indices of workload.jsonl (default: all)"
@@ -626,7 +613,7 @@ def stability_warnings(report: dict) -> list[str]:
         if low < cfg.min_clock_fraction:
             warnings.append(
                 f"GPU clock sampled after timing fell to {low:.0%} of its maximum; "
-                "the governor or thermal throttling lowered it (see README: stable clocks)"
+                "the governor or thermal throttling lowered it; let the board cool down and rerun"
             )
     return warnings
 
@@ -654,18 +641,19 @@ def print_failures(report: dict) -> None:
         for name, info in shape["impls"].items():
             if info.get("status") == "PASS":
                 continue
-            label = f"{name} @ {shape['M']}x{shape['N']}x{shape['K']}"
+            label = f"{name} @ {shape['uuid']}"
             if "error" in info:
                 print(f"\n[{info.get('status')}] {label}:\n{info['error']}")
-            for key in ("check", "check_after_timing"):
-                runs = info.get(key, {}).get("runs") if key == "check" else [info.get(key)]
-                for run in runs or []:
-                    if run and not run["passed"]:
-                        print(f"\n[FAIL] {label} ({key}): {json.dumps(run)}")
+            checks = [("check", run) for run in info.get("check", {}).get("runs", [])]
+            checks.append(("check after timing", info.get("check_after_timing")))
+            for kind, run in checks:
+                if run and not run["passed"]:
+                    print(f"\n[FAIL] {label} ({kind}): {json.dumps(run)}")
 
 
 def main() -> int:
     args = parse_args()
+    url = os.environ.get("KCORAL_URL", "http://127.0.0.1:8000")
     here = Path(__file__).resolve().parent  # __file__ exists only on the client side
     for path in args.kernels:
         if not path.is_file():
@@ -682,20 +670,20 @@ def main() -> int:
     workloads = (here / "workload.jsonl").read_bytes()
     program = build_program(definition, workloads, options, sources)
 
-    with Client(args.url) as client:
+    with Client(url) as client:
         try:
             health = client.health()
         except CLIENT_ERRORS as exc:
-            raise SystemExit(f"cannot reach KCoral server at {args.url}: {exc}") from exc
+            raise SystemExit(f"cannot reach KCoral server at {url}: {exc}") from exc
         arch = health.get("target", {}).get("arch")
-        print(f"server {args.url}: {arch}, versions {health.get('versions')}")
+        print(f"server {url}: {arch}, versions {health.get('versions')}")
         if arch != "sm_110a":
             print(f"warning: this example targets Thor (sm_110a); the server reports {arch}")
         started = time.time()
         try:
             result = client.execute(program, timeout_seconds=args.timeout)
         except CLIENT_ERRORS as exc:
-            raise SystemExit(f"request to {args.url} failed: {exc}") from exc
+            raise SystemExit(f"request to {url} failed: {exc}") from exc
     if not result.completed:
         print(result.stdout or "", end="")
         print(result.stderr or "", end="", file=sys.stderr)
@@ -705,8 +693,8 @@ def main() -> int:
     lines, summary, all_passed = summarize(report)
     env = report["environment"]
     print(
-        f"device {env['device']} ({env['arch']}, {env['sm_count']} SMs), torch {env['torch']}, "
-        f"tvm {env['tvm']}; request {time.time() - started:.1f}s"
+        f"device {env['device']} ({env['arch']}, {env['sm_count']} SMs); "
+        f"request {time.time() - started:.1f}s"
     )
     print("\n".join(lines))
     print(telemetry_line(report))
@@ -723,6 +711,7 @@ def main() -> int:
         "summary": summary,
         "warnings": warnings,
         "request_id": result.request_id,
+        "server_versions": health.get("versions"),
         "report": report,
     }
     out.write_text(json.dumps(record, indent=2))
