@@ -11,7 +11,6 @@ instructions and decodes the selected results. The
 ## Create and close a client
 
 Use a context manager so the client's HTTP connections are closed when you finish.
-HTTP is the request-and-response protocol used between the client and server.
 One client can submit many programs to the same server.
 
 ```python
@@ -86,7 +85,6 @@ name; it is not the value itself.
 `Program` automatically generates an ID for each value-producing instruction.
 Use the optional `id` field to customize it.
 
-The name `return_` has a trailing underscore because `return` is a Python keyword.
 Use the [Python API](../python-api/index.rst) for complete signatures and parameter types.
 
 ### Upload and select a function

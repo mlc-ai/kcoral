@@ -1,9 +1,8 @@
 # KCoral
 
 KCoral runs programs on remote GPU workers. Upload code and data,
-call functions, check correctness and return measurements. A GPU is a graphics
-processing unit; a CPU is a central processing unit. CPU compilation services
-can build kernels for a separate GPU server.
+call functions, check correctness and return measurements. CPU compilation
+services can build kernels for a separate GPU server.
 
 ```{warning}
 KCoral allows clients to execute arbitrary code on its workers. Only allow

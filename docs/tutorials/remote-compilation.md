@@ -1,9 +1,9 @@
 # Remote Compilation
 
 In large-scale kernel evaluation, compilation can take much longer than kernel
-execution. Build steps that need only a CPU (central processing unit) can run
-separately from execution on a GPU. Running that
-host work on expensive GPU servers can increase cost and leave GPUs underutilized.
+execution. Build steps that need only a CPU can run separately from execution
+on a GPU. Running that host work on expensive GPU servers can increase cost
+and leave GPUs underutilized.
 Some compiler APIs query CUDA or load GPU modules during compilation; those
 steps need GPU access.
 
@@ -25,7 +25,7 @@ has its own `Program` and its own handles:
 
 Both programs use `POST /execute`. The complete client below compiles a CUDA C
 add-one kernel and then checks and benchmarks it over 1,048,576 `float32`
-elements. CUDA C is NVIDIA's GPU extension to C++.
+elements.
 
 ## Prepare the two servers
 
@@ -38,10 +38,8 @@ The two server roles have different requirements:
 | CPU compiler | The [compiler environment](../getting-started/installation.md#server-system-requirements), the CUDA toolkit with `nvcc`, and a host C++ compiler |
 | GPU executor | The [GPU worker environment](../getting-started/installation.md#server-system-requirements), including PyTorch, TVM FFI and CUPTI for benchmarking |
 
-`nvcc` compiles CUDA source. TVM FFI is a foreign-function interface for calling
-compiled code and exchanging tensors. CUPTI is NVIDIA's CUDA Profiling Tools
-Interface, used to collect GPU activity timestamps. This example uploads Python
-that builds CUDA C through TVM FFI.
+This example uploads Python that builds CUDA C through TVM FFI, then uses
+CUPTI to collect GPU activity timestamps.
 
 On the compilation host, start a CPU server:
 
@@ -171,7 +169,7 @@ submission; automatic blob-cache negotiation may add HTTP attempts to a
 submission. The second call uploads the library through the normal client
 cache protocol.
 
-On success, the script prints the library size in KiB (1024 bytes), the target
+On success, the script prints the library size in KiB, the target
 architecture, each request's GPU lease time, and the kernel's median duration
 in microseconds. A lease gives a worker exclusive access to its GPU; the CPU
 compilation request holds no GPU lease. The execution request's

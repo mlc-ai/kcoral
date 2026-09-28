@@ -2,9 +2,8 @@
 
 # KCoral Protocol
 
-KCoral exposes two client HTTP endpoints. HTTP is the request-and-response transport;
-JSON is the text format used for structured fields. A program is an ordered list
-of instructions, executed in one request with no persistent session handles.
+KCoral exposes two client HTTP endpoints. A program is an ordered list of
+instructions, executed in one request with no persistent session handles.
 This page describes a direct server. The [Router](../server-guide/router.md) preserves
 the execution protocol while adding node selection and routing metadata.
 
@@ -79,9 +78,8 @@ Retries after `CACHE_MISS` are separate HTTP attempts with separate IDs.
 
 ### POST /execute
 
-Submit one program. The request body uses `multipart/form-data`, a format that
-combines named parts with individual content types. It carries a JSON `program`
-part and optional binary data parts. The request has no query fields.
+Submit one program. The request body uses `multipart/form-data` with a JSON
+`program` part and optional binary data parts. The request has no query fields.
 
 Example `program` part:
 
@@ -410,8 +408,8 @@ does not use this blob cache. Reusing bytes does not reuse a previous tensor,
 compiled module or execution: instructions still create request-local values.
 
 The memory budget is `cache_capacity_bytes` (`--cache-capacity-bytes`, default
-16 GiB). GiB means 1024 cubed bytes. Less recently used, unpinned entries may
-be evicted. Referenced cached bytes are pinned while requests execute. An object
+16 GiB). Less recently used, unpinned entries may be evicted. Referenced cached
+bytes are pinned while requests execute. An object
 larger than one quarter of the budget is not retained by default, but supplied
 bytes still work for that request. Restarting the Python server loses this cache.
 
@@ -434,9 +432,8 @@ cache miss occurs. Cache retention is an optimization rather than a guarantee.
 
 File uploads use a separate persistent disk cache. Its default directory is
 `$XDG_CACHE_HOME/kcoral/files` when `XDG_CACHE_HOME` is absolute, otherwise
-`~/.cache/kcoral/files`. The default budget is 16384 MiB (16 GiB); MiB means
-1024 squared bytes. Configure `disk_cache_dir` and
-`disk_cache_capacity_mbytes`, or the corresponding server flags.
+`~/.cache/kcoral/files`. The default budget is 16384 MiB (16 GiB). Configure
+`disk_cache_dir` and `disk_cache_capacity_mbytes`, or the corresponding server flags.
 
 An empty directory option (`None` in Python) or zero capacity disables file
 caching. It does not move files into the memory cache. Entries can survive a

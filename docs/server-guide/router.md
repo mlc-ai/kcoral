@@ -16,9 +16,8 @@ binaries so their internal protocols match.
 | `kcoral server --router ...` | Each compute node | Supervise one Python server process tree and report its health |
 | Python server | Each compute node | Execute programs with the existing worker pool |
 
-HTTP is the public request-and-response protocol. Internally, gRPC is the
-streaming remote-call protocol connecting each node to the Router. It uses
-Protocol Buffers, a binary message format, over HTTP/2.
+Clients connect over HTTP. Nodes connect to the Router over gRPC streams,
+using Protocol Buffers over HTTP/2.
 
 The node manager opens `ConnectSupervisor`, a stream of health, instance and
 capacity reports. The Python server opens one `ConnectSlot` stream per local
@@ -26,14 +25,13 @@ worker. A slot is one connection able to carry one execution at a time. Both
 connections originate on the node; the Router sends work over these existing
 streams. The node manager never handles execution bodies.
 
-Request and response bytes travel in frames of at most 256 KiB, where KiB means
-1024 bytes. Small bounded queues and HTTP/2 flow control limit buffering in the
-tunnel. The Python `/execute` implementation still assembles the complete
-request before parsing it.
+Request and response bytes travel in frames of at most 256 KiB. Small bounded
+queues and HTTP/2 flow control limit buffering in the tunnel. The Python
+`/execute` implementation still assembles the complete request before parsing it.
 
 ## Build and launch
 
-Use Rust 1.87 or newer and Cargo, Rust's build tool. The build supplies its own
+Use Rust 1.87 or newer and Cargo. The build supplies its own
 Protocol Buffers compiler. Build from the repository root:
 
 ```bash
@@ -60,10 +58,10 @@ kcoral server \
 
 The examples run on one machine. For remote nodes, bind the Router with
 `--host 0.0.0.0` and replace `127.0.0.1` with its reachable address. Give each node
-a distinct stable `node-id`. The example uses
-plain HTTP for a controlled network; an HTTPS endpoint requires TLS (transport
-encryption) terminated by a compatible proxy. The optional token authenticates
-node streams; it does not provide public client authorization or encryption.
+a distinct stable `node-id`. The example uses plain HTTP for a controlled
+network; an HTTPS endpoint requires TLS terminated by a compatible proxy.
+The optional token authenticates node streams; it does not provide public
+client authorization or encryption.
 
 With `--router`, `kcoral server` starts a supervisor (the node manager) that
 manages the Python server using the current Python environment. Its health-check address follows
@@ -165,7 +163,7 @@ The node manager checks local health every 2 seconds by default, with a 1-second
 probe timeout, 3-failure threshold and 30-second startup grace. Restart delays
 grow from 1 to 30 seconds with jitter, and reset after 60 seconds of stable running.
 
-To stop a node, send SIGTERM, the normal termination signal, to the `kcoral server` process.
+To stop a node, send SIGTERM to the `kcoral server` process.
 It withdraws healthy status and signals the Python child. Idle slots close and
 active requests finish before the child exits. Normal shutdown waits for that
 exit without imposing an additional timeout.

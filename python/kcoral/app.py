@@ -72,9 +72,8 @@ def create_app(
     :returns: An application to run with an HTTP server such as uvicorn.
     :raises ValueError: If the device mode or disk cache capacity is invalid.
 
-    FastAPI is the web application framework used by the server. Worker
-    processes start during the application's serving lifecycle, not when
-    this function is imported. Install the ``server`` extra to use it.
+    Worker processes start during the application's serving lifecycle, not
+    when this function is imported. Install the ``server`` extra to use it.
     """
     config = config or ServerConfig()
     if config.device not in ("cpu", "gpu"):

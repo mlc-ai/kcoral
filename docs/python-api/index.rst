@@ -1,9 +1,8 @@
 Python API
 ==========
 
-The application programming interface (API) below is the set of Python objects
-KCoral exposes to callers. Install the client for program construction and
-submission; install the ``server`` extra when using ``create_app``.
+Install the client for program construction and submission; install the
+``server`` extra when using ``create_app``.
 
 .. currentmodule:: kcoral
 

@@ -462,9 +462,8 @@ for section sets, filters, replay, and platform requirements.
 
 ### Purpose and requirements
 
-The instrumented kernel execution timeline profiler (IKET) records execution
-traces from supported, instrumented kernels. The worker needs `run-iket`, a
-compatible CuTe domain-specific language (DSL) distribution with IKET support,
+IKET records execution traces from supported, instrumented kernels. The worker
+needs `run-iket`, a compatible CuTeDSL distribution with IKET support,
 and the GPU and driver required by that distribution. The application's kernel
 must contain suitable instrumentation for the timeline you want to collect;
 KCoral does not add instrumentation to uploaded source.

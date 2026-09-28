@@ -1,9 +1,7 @@
 # Agent Integration Guide
 
 A coding agent can write KCoral programs using the repository's `kcoral-client`
-skill. A skill is a Markdown instruction file that gives an agent a reusable
-workflow and project-specific facts. It is not a Python dependency and does not
-run the server or submit requests by itself.
+skill.
 
 ## Give the agent the skill
 
@@ -31,7 +29,6 @@ the actual method signatures.
 Provide the server address, kernel source or function to implement, tensor
 shapes and types, correctness tolerance, and the outputs you want. Say whether
 compilation should happen on the GPU server, on a separate CPU server, or locally.
-CPU means central processing unit.
 
 For example, give the agent this prompt from the repository checkout:
 

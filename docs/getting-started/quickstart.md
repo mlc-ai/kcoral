@@ -7,13 +7,12 @@ tensor on its GPU and returns the result.
 
 You need one Linux machine with an NVIDIA GPU and a compatible driver. Install
 the [GPU server environment](installation.md#server-system-requirements) on it; this
-also installs the client. The example uses PyTorch, a tensor library included
-in that environment, and does not compile a custom kernel.
+also installs the client. The example uses PyTorch and does not compile a
+custom kernel.
 
 The steps below run the server and client on that same machine, in two
-terminals. A CPU (central processing unit) compilation server cannot run this
-program: the uploaded function checks that the tensor is on a GPU before
-doing arithmetic.
+terminals. A CPU compilation server cannot run this program: the uploaded
+function checks that the tensor is on a GPU before doing arithmetic.
 
 ## Launch the server
 
