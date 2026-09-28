@@ -7,7 +7,7 @@ compilation and measurement code.
 
 ## Prerequisites
 
-Install the [GPU worker environment](../getting-started/installation.md#gpu-server)
+Install the [GPU worker environment](../getting-started/installation.md#server-system-requirements)
 and [launch the server](../server-guide/launch-the-server.md). The first example
 uses TIRx, TVM's Python-embedded kernel language.
 
@@ -140,7 +140,7 @@ KCORAL_URL=http://localhost:8000 python examples/remote_compile_client.py
 This client builds a CUDA C library locally for the server's target architecture,
 then uploads, checks and measures it. The client machine needs the CUDA toolkit,
 a host C++ compiler and TVM FFI from the
-[compiler environment](../getting-started/installation.md#cpu-compilation-server).
+[compiler environment](../getting-started/installation.md#server-system-requirements).
 
 ```bash
 KCORAL_URL=http://localhost:8000 python examples/library_upload_client.py

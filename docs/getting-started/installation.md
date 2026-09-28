@@ -1,37 +1,24 @@
 # Installation
 
-Install the client on the machine that submits programs. If you also host a
-KCoral server, install a server environment on each machine that runs it.
-The steps below install KCoral from source.
+KCoral can be installed from a prebuilt package or built from source. Install
+the client on the machine that submits programs. If you also host a KCoral
+server, install the server dependencies on each machine that runs it.
 
-## Get the source
+Python 3.10 or newer is required.
 
-You need Git and Python 3.10 or newer. The server commands below use Python 3.12
-on Linux. Building from source also requires Rust 1.87 or newer, Cargo, and
-a C/C++ build toolchain for the bundled Rust executables.
+## Method 1: Install a prebuilt package
 
-```bash
-git clone https://github.com/mlc-ai/kcoral.git
-cd kcoral
-```
-
-Run the remaining commands from this repository directory.
+Prebuilt wheels are available on [PyPI](https://pypi.org/project/kcoral/).
 
 <a id="the-client"></a>
 
-## Install the client
-
-Create and activate a virtual environment, then install KCoral:
+### Install the client
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install .
+python -m pip install kcoral
 ```
 
-This installs the package with client dependencies. Running the client needs no
-GPU, CUDA toolkit, or compiler. CUDA is NVIDIA's GPU
-programming platform.
+This installs the package with client dependencies. Running the clients needs no GPU.
 
 Verify that the client imports successfully:
 
@@ -39,108 +26,74 @@ Verify that the client imports successfully:
 python -c "from kcoral import Client, Program; print('KCoral client is ready')"
 ```
 
-If you already have a server address, continue to
-[Your First Program](quickstart.md).
-
 <a id="the-server"></a>
 
-## Install the server
+### Install the server
 
-On the server machine, get the source as above and install
-[uv](https://docs.astral.sh/uv/getting-started/installation/), a Python package
-and environment manager. The default `server` dependency group selects the
-`server` extra for `uv sync`. The commands below create `.venv` and
-use the versions recorded in `uv.lock`. uv downloads Python 3.12 if needed.
-
-For [filesystem isolation](../server-guide/launch-the-server.md#isolate-worker-files-with-bubblewrap),
-install [bubblewrap](https://github.com/containers/bubblewrap) separately on Linux.
-It needs `--disable-userns` support and permission to create unprivileged user
-namespaces, including inside containers. If unavailable, the server warns and
-runs without isolation.
-
-<a id="running-gpu-programs"></a>
-
-### GPU server
-
-Use this environment to execute and benchmark GPU kernels. Before installing:
-
-- Install an NVIDIA driver compatible with the installed PyTorch CUDA runtime.
-  Confirm that `nvidia-smi` lists your GPU.
-- To compile CUDA C kernels on this server, also install the
-  [CUDA toolkit](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/)
-  and a supported host C++ compiler. Confirm that `nvcc --version` and
-  `c++ --version` work in your shell.
-
-Install the Python packages and activate the environment:
-
-```bash
-uv sync --locked --no-editable --group server --python 3.12
-source .venv/bin/activate
-```
-
-The server extra includes the tensor, compilation and profiling libraries
-available to uploaded Python programs. It does not install the system driver or
-host C++ compiler.
-
-Check that PyTorch, the tensor library used by workers, can access the GPU:
-
-```bash
-python -c "import torch, tvm_ffi; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))"
-kcoral server --help
-```
-
-The first command should print your GPU's name. The second should display the
-server's command-line options. Continue to
-[Launch the server](../server-guide/launch-the-server.md) to start it.
-
-<a id="running-cpu-compilation-workers"></a>
-
-### CPU compilation server
-
-Use this environment to compile CUDA C on a CPU (central processing unit), then
-send the compiled library to a GPU server for execution. This machine needs the
-[CUDA toolkit](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/),
-including `nvcc`, and a supported host C++ compiler; it does not need a GPU.
-Install the toolkit's compiler components without the GPU driver on this host.
-
-```bash
-uv sync --locked --no-editable --group server --python 3.12
-source .venv/bin/activate
-```
-
-This installs the same server extra, including GPU-related Python packages,
-TVM FFI (a foreign-function interface for compiled code), and Ninja (a build
-tool). CPU mode does not require GPU hardware. Verify the package and compiler tools:
-
-```bash
-python -c "import tvm_ffi; print('KCoral compiler dependencies are ready')"
-nvcc --version
-c++ --version
-ninja --version
-kcoral server --help
-```
-
-Each command should succeed. Follow
-[Remote Compilation](../tutorials/remote-compilation.md) to launch the CPU and
-GPU servers and pass a compiled library between them.
+Install the `server` extra:
 
 <a id="front-end-engine-and-client"></a>
-
-### Install the server with pip
-
-For an existing Python environment managed with pip, install the server extra
-from the checkout:
+<a id="install-the-server-with-pip"></a>
 
 ```bash
-python -m pip install '.[server]'
+python -m pip install 'kcoral[server]'
 ```
 
-This supplies the same declared dependencies for GPU execution and CPU
-compilation. Unlike `uv sync --locked`, pip resolves versions from the package
-requirements rather than `uv.lock`. The system requirements above still apply.
+The `server` extra supports both GPU execution and CPU compilation. See
+[system requirements](#server-system-requirements).
 
-## Use the environment
+## Method 2: Build from source
 
-In a new terminal, return to the repository and run `source .venv/bin/activate`
-before invoking `python` or `kcoral`. Repeat the appropriate installation command
-after updating the source to reinstall KCoral and its dependencies.
+Use a source installation to modify KCoral or install a specific revision.
+
+### Get the source
+
+Rust 1.87 or newer is required.
+
+```bash
+git clone https://github.com/mlc-ai/kcoral.git
+cd kcoral
+```
+
+Run the remaining source installation commands from this repository directory.
+
+### Install in editable mode
+
+Install the client:
+
+```bash
+python -m pip install -e .
+```
+
+To include the server dependencies, use:
+
+```bash
+python -m pip install -e '.[server]'
+```
+
+(gpu-server)=
+(cpu-compilation-server)=
+## Server system requirements
+
+<a id="running-gpu-programs"></a>
+<a id="running-cpu-compilation-workers"></a>
+
+| Server mode | Purpose | Hardware |
+| --- | --- | --- |
+| GPU (`--device gpu`) | Compile, execute, and benchmark kernels | NVIDIA GPU and driver |
+| CPU (`--device cpu`) | Compile CUDA C for execution on a GPU server | No GPU or GPU driver required |
+
+Compiling CUDA C in either mode requires the
+[CUDA toolkit](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/)
+and a compatible C++ compiler.
+
+Install [bubblewrap](https://github.com/containers/bubblewrap) 0.8.0 or newer for
+[filesystem isolation](../server-guide/launch-the-server.md#isolate-worker-files-with-bubblewrap).
+On Debian/Ubuntu:
+
+```bash
+sudo apt install bubblewrap
+```
+
+For deployment, see [Launch the server](../server-guide/launch-the-server.md)
+and [Remote Compilation](../tutorials/remote-compilation.md).

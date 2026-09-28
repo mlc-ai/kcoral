@@ -58,11 +58,13 @@ See [logs](logging.md) to follow a request and diagnose worker replacement.
 
 ## Isolate worker files with bubblewrap
 
+The host or container must allow unprivileged user namespaces.
+
 By default, the server checks whether bubblewrap can start before creating
 workers. If the check fails or times out, it warns and disables isolation for
 that server run. Restart to check again. Set `--sandbox none` or
 `ServerConfig(sandbox="none")` to disable isolation and skip the check.
-See [installation requirements](../getting-started/installation.md#install-the-server).
+See [installation requirements](../getting-started/installation.md#server-system-requirements).
 
 When enabled, each worker can write ordinary files only under its private
 `/work`. Other workers' files and the server's cache and logs are hidden;

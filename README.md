@@ -30,13 +30,13 @@ Use `--sandbox none` to disable it explicitly.
 <a id="running-gpu-programs"></a>
 <a id="running-cpu-compilation-workers"></a>
 
-Python 3.10 or newer is required. From this checkout:
+Python 3.10 or newer is required. Install the prebuilt package from PyPI:
 
 ```bash
-pip install .
+pip install kcoral
 ```
 
-This installs the package with client dependencies. Use `pip install ".[server]"`
+This installs the package with client dependencies. Use `pip install "kcoral[server]"`
 for both GPU execution and CPU compilation dependencies. See
 [installation](docs/getting-started/installation.md) for source build and system requirements.
 
