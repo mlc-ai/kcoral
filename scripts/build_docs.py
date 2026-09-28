@@ -38,11 +38,9 @@ def redirect(path, target):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">\n'
-        f"<script>location.replace({json.dumps(target)}"
-        " + location.search + location.hash);</script>\n"
-        f'<noscript><meta http-equiv="refresh" content="0; url={target}"></noscript>\n'
+        f'<meta http-equiv="refresh" content="0; url={target}">\n'
         "<title>KCoral documentation</title></head>\n"
-        f'<body><noscript><a href="{target}">KCoral documentation</a></noscript></body></html>\n'
+        f'<body><a href="{target}">KCoral documentation</a></body></html>\n'
     )
 
 
