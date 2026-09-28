@@ -1,3 +1,9 @@
 [workspace]
 members = ["rust/kcoral"]
 resolver = "3"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
