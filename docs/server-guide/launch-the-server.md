@@ -144,7 +144,7 @@ GPU lease. It defaults to 5 minutes and is capped at 15 minutes, so a long queue
 wait does not give a running program a longer execution budget.
 
 Request `timeout_seconds` and `output_limit_bytes` override their respective
-defaults, up to these server maximums. See [protocol options](../client-guide/protocol.md#options)
+defaults, up to these server maximums. See {ref}`protocol options <options>`
 for clamping and [errors](../client-guide/protocol.md#errors) for request failures.
 
 ### File upload cache

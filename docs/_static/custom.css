@@ -12,6 +12,40 @@
   overflow-wrap: anywhere;
 }
 
+.code-example {
+  margin: 1rem 0;
+  border: 1px solid var(--color-sidebar-background-border);
+  border-radius: 0.4rem;
+}
+
+.code-example > details > summary {
+  padding: 0.65rem 0.85rem;
+  cursor: pointer;
+}
+
+.code-example > details:not([open]) > summary {
+  border-top: 1px solid var(--color-sidebar-background-border);
+}
+
+.code-example > details > summary:focus-visible {
+  outline: 2px solid var(--color-brand-primary);
+  outline-offset: 2px;
+}
+
+.code-example div[class*="highlight-"] {
+  margin: 0;
+}
+
+.code-example:has(> details[open]) > .code-example-preview,
+.code-example-collapse,
+.code-example > details[open] .code-example-expand {
+  display: none;
+}
+
+.code-example > details[open] .code-example-collapse {
+  display: inline;
+}
+
 .version-switcher {
   margin: 0.5rem 1rem 1rem;
   padding: 0.5rem 0.75rem;

@@ -175,8 +175,8 @@ protocol lifetime of a register.
 
 File and memory caches retain uploaded bytes as an optimization. A cache hit
 does not preserve a previous tensor's mutations, a compiled callable, or an
-execution's output. Learn the separate rules in the protocol's
-[memory cache](protocol.md#memory-cache) and [file cache](protocol.md#file-cache) sections.
+execution's output. Compare their lifetimes and limits in the protocol's
+[cache table](protocol.md#caching).
 
 ## Tensors
 

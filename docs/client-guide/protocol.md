@@ -65,69 +65,22 @@ A CPU compilation server has an empty compilation target. Read the target from
 the GPU server and supply it when compiling on a CPU server. Workers on one GPU
 server must agree on the target; the server rejects a mixed-target pool.
 
-Through the Rust router, `/execute` uses the same program and response format.
-`X-KCoral-Node` identifies the selected node and serves as a cache-retry
-preference. A missing or unavailable preference falls back to another eligible
-node.
-
-Each HTTP attempt has an `X-Request-ID` header matching the result/error
-`request_id` and the server events. The router generates a UUID before admission
-and forwards it to Python. A direct Python request may supply exactly one
-canonical lowercase UUID; absent, duplicate, or invalid IDs are replaced.
-Retries after `CACHE_MISS` are separate HTTP attempts with separate IDs.
-
 ### POST /execute
 
 Submit one program. The request body uses `multipart/form-data` with a JSON
 `program` part and optional binary data parts. The request has no query fields.
 
-Example `program` part:
+See the [complete example](#example) below. The Router uses the same program
+and response format.
 
-```json
-{
-  "instructions": [
-    {
-      "op": "upload",
-      "id": "harness",
-      "kind": "module",
-      "source": "def main(x): return x + 1"
-    },
-    {
-      "op": "get_function",
-      "id": "main",
-      "module": {
-        "$ref": "harness"
-      },
-      "name": "main",
-      "cpu_only": true
-    },
-    {
-      "op": "run",
-      "id": "output",
-      "fn": {
-        "$ref": "main"
-      },
-      "args": [
-        41
-      ]
-    },
-    {
-      "op": "return",
-      "key": "output",
-      "value": {
-        "$ref": "output"
-      }
-    }
-  ],
-  "options": {
-    "timeout_seconds": 30
-  }
-}
-```
+| Header | Behavior |
+| --- | --- |
+| `X-Request-ID` | Identifies each HTTP attempt and matches the result/error `request_id` and server events. The Router generates a UUID before admission and forwards it to Python. A direct Python request may supply exactly one canonical lowercase UUID; absent, duplicate, or invalid IDs are replaced. Cache-miss retries get separate IDs. |
+| `X-KCoral-Node` | Identifies the node selected by the Router. Send it back as a cache-retry preference; a missing or unavailable preference falls back to another eligible node. |
 
 <a id="request-envelope"></a>
 
-#### Request fields
+<a id="request-fields"></a>
 
 | Part | Content type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -147,22 +100,18 @@ duplicate or malformed part names, wrong content types and hashes that do not
 match the supplied bytes. JSON objects reject duplicate keys, unknown fields,
 and non-finite numbers such as NaN and Infinity.
 
-#### Response fields
+(options)=
 
-The response includes `status` and `request_id`. Execution outcomes also carry
-`results`, request timings and captured output; `FAILED` adds an `error` object.
-`CACHE_MISS` instead carries `missing_blobs` and means no instructions ran.
-The full [response fields and encodings](#response) are defined below.
+**Options**
 
-| Outcome | HTTP status | Body |
-| --- | --- | --- |
-| Program completed | 200 | `status: COMPLETED` |
-| An instruction failed | 200 | `status: FAILED` |
-| Referenced bytes are missing | 200 | `status: CACHE_MISS` |
-| Request, capacity, timeout or server failure | 400, 413, 503, 504 or 500 | `status: ERROR`; see [Errors](#errors) |
+Both `options` fields are optional. Values above either maximum are clamped to it.
 
-`X-Request-ID` also carries the request identifier. Returned bytes or tensors
-make the response multipart; otherwise it is `application/json`.
+| Field | Type | Default | Meaning and limit |
+| --- | --- | --- | --- |
+| `timeout_seconds` | number | `300` | Worker execution deadline; maximum `900` |
+| `output_limit_bytes` | integer | `1048576` | Maximum bytes returned for each of stdout and stderr; maximum `16777216`; `0` disables capture |
+
+See [Response](#response) for HTTP statuses, result fields, and value encodings.
 
 ## Operations
 
@@ -176,10 +125,10 @@ Every instruction is a JSON object with an `op` field. The four values are
 | `{"$ref": "id"}` | A reference value naming an earlier handle; it is not a top-level instruction field |
 
 A handle names a value inside this request. `upload` except file upload,
-`get_function` and `run` produce handles. References are resolved recursively
-inside arrays and objects, must have exactly the `$ref` key, and cannot refer
-forward or cross request boundaries. Return keys are unique in a separate
-namespace from instruction identifiers. The operation's field table is exhaustive:
+`get_function` and `run` produce handles. References must have exactly the `$ref`
+key and cannot refer forward or cross request boundaries. Each operation below
+specifies where references are resolved. Return keys are unique in a separate
+namespace from instruction identifiers. Each field table is exhaustive:
 unlisted fields are rejected.
 
 ### upload
@@ -196,7 +145,7 @@ produce a handle.
 }
 ```
 
-#### Fields
+<a id="fields"></a>
 
 | Field | Kinds | Required for | Notes |
 |---|---|---|---|
@@ -210,86 +159,52 @@ produce a handle.
 | `dtype` | tensor | tensor | Tensor data type |
 | `shape` | tensor | tensor | Tensor shape |
 
-#### Details
+<a id="details"></a>
 
-##### Module
-
-`source` is text carried directly in the program. `language` selects its loader:
-`python` by default or `cuda`. Python source executes to form a namespace;
-CUDA source is retained for compilation. Upload binds the whole module, and
-`get_function` selects an object from it. A selected object need not be directly
-callable: a compiler tool may consume it first.
-
-All Python-based kernel languages use the same module upload shape; their
-compilation is implemented by uploaded harness code. See the
-[benchmark tutorial](../tutorials/benchmark-kernel.md#on-a-gpu-server).
+| Kind | Content and result |
+| --- | --- |
+| <a id="module"></a>`module` | Inline `source`. `language="python"` executes it to form a namespace; `language="cuda"` retains it for compilation. The handle binds the whole module. |
+| <a id="tensor"></a>`tensor` | Raw contiguous row-major bytes, copied to the assigned GPU. The byte length must equal `product(shape) * dtype.itemsize`. |
+| <a id="bytes"></a>`bytes` | The blob's bytes unchanged in CPU memory. Pass them to uploaded Python to parse files or other binary formats. |
+| `file` | Materialize the blob at `path` in the request workspace. Creates no handle, rejects `id`, and needs no GPU. See the file rules below. |
+| `library` | An ELF shared object for the server's platform, loaded with `tvm_ffi.load_module`. The handle binds the loaded module; see [Library](#library). |
 
 <a id="cuda-c-modules"></a>
 <a id="cutedsl-modules"></a>
 <a id="triton-modules"></a>
 
-##### Tensor
+For modules, `get_function` selects an object from the namespace or CUDA source.
+The object need not be directly callable: a compiler tool may consume it first.
+All Python-based kernel languages use the same module upload shape; uploaded
+harness code handles compilation. See the
+[benchmark tutorial](../tutorials/benchmark-kernel.md#on-a-gpu-server).
+
+For each uncached binary upload, supply the bytes in a multipart part named
+`blob:<sha256>`. For example:
 
 ```json
-{
-  "op": "upload",
-  "id": "input",
-  "kind": "tensor",
-  "blob": "<sha256>",
-  "dtype": "float16",
-  "shape": [32, 128]
-}
+[
+  {"op": "upload", "id": "input", "kind": "tensor", "blob": "<sha256>",
+   "dtype": "float16", "shape": [32, 128]},
+  {"op": "upload", "id": "file", "kind": "bytes", "blob": "<sha256>"},
+  {"op": "upload", "kind": "file", "blob": "<sha256>", "path": "data/tensor.bin"}
+]
 ```
 
-`blob` names raw contiguous row-major bytes. Their length must equal
-`product(shape) * dtype.itemsize`. Supply those bytes in a multipart part named
-`blob:<sha256>` when the blob is not already cached. The tensor is copied to the
-assigned GPU.
+(file)=
 
-##### Bytes
+**File upload rules**
 
-```json
-{
-  "op": "upload",
-  "id": "file",
-  "kind": "bytes",
-  "blob": "<sha256>"
-}
-```
+| Rule | Behavior |
+| --- | --- |
+| Path | Relative POSIX path naming a file. Rejects `..` components, backslashes, and NUL. |
+| Normalization | Removes `.` and repeated `/` components: `./data//tensor.bin` becomes `data/tensor.bin`. |
+| Conflicts | Normalized paths must be unique and cannot conflict as a file and directory; a program cannot upload both `data` and `data/tensor.bin`. |
+| Filesystem access | Creates a regular file with mode `0600` and missing parent directories with mode `0700`. Creates and opens every component without following symbolic links. |
+| Workspace | A fresh temporary working directory per request, owned by the parent process and removed after completion, failure, timeout, or worker crash. |
+| Lifetime | File uploads cannot be referenced or returned as handles. Blob cache entries remain available after materialized files are removed. |
 
-The handle binds the blob's bytes unchanged. They stay in CPU memory and can be
-passed to uploaded Python code, which makes this kind suitable for files and
-other binary formats that the server should parse.
-
-##### File
-
-```json
-{
-  "op": "upload",
-  "kind": "file",
-  "blob": "<sha256>",
-  "path": "data/tensor.bin"
-}
-```
-
-The blob is copied to `path` as a regular file with mode `0600`. Missing parent
-directories are created with mode `0700`. The instruction is a filesystem side
-effect rather than a handle, so it has no `id` and cannot be referenced or
-returned. It does not need the GPU.
-
-Every program runs with a fresh temporary directory as its current working
-directory. That directory is owned by the parent process and removed after the
-program completes, fails, times out, or crashes its worker. Blob cache entries
-remain available after the materialized files have been removed.
-
-`path` uses POSIX `/` separators. It must be relative, must name a file, and must
-not contain a `..` component, a backslash, or NUL. `.` and repeated `/`
-components are removed, so `./data//tensor.bin` becomes `data/tensor.bin`.
-Normalized paths must be unique and cannot conflict as a file and directory;
-for example, one program cannot upload both `data` and `data/tensor.bin`. The
-server creates and opens every component without following symbolic links.
-
-##### Library
+#### Library
 
 A library is an already-built shared object, whether its bytes came from the
 client's toolchain or a preceding CPU-server request. The GPU server compiles
@@ -311,16 +226,11 @@ that cannot be loaded, or a requested function that is absent, fails with a
 `compile` error. Nothing else about the object is inspected, so any producer
 TVM FFI can load is accepted. Three are usual:
 
-- `TVM_FFI_DLL_EXPORT_TYPED_FUNC`, which `tvm_ffi.cpp.build` applies for you,
-  emitting a `__tvm_ffi_<name>` symbol. A code generator that emits that symbol
-  directly works equally well;
-- `tvm.Executable.export_library`, which embeds a module blob rather than a
-  plain symbol. Unpacking one needs the loader the TVM CUDA runtime registers,
-  so it requires a server with tvm installed;
-- CuTeDSL's `--enable-tvm-ffi` export, which emits the same `__tvm_ffi_<name>`
-  symbol but leaves the object linked against `libcute_dsl_runtime.so`, so it
-  requires a server whose `versions` reports `cutlass`. An object built against a
-  newer cutlass than the server's fails to load, naming the symbol it wanted.
+| Producer | Export | Server requirement |
+| --- | --- | --- |
+| C++ / `tvm_ffi.cpp.build` | `TVM_FFI_DLL_EXPORT_TYPED_FUNC` emits `__tvm_ffi_<name>`; `tvm_ffi.cpp.build` applies it automatically. A code generator can emit the symbol directly. | TVM FFI |
+| `tvm.Executable.export_library` | Embedded module blob | TVM installed, including the loader registered by its CUDA runtime |
+| CuTeDSL with `--enable-tvm-ffi` | `__tvm_ffi_<name>`, linked against `libcute_dsl_runtime.so` | `versions` must report `cutlass`. Building against a newer cutlass than the server's fails to load, naming the missing symbol. |
 
 The function takes DLPack-compatible tensors, and its device code must be built
 for the architecture `GET /health` reports. Building for another one fails later,
@@ -398,58 +308,6 @@ Select the exported function, then call it; no compile instruction appears.
 ]
 ```
 
-<a id="blob-cache"></a>
-
-#### Memory cache
-
-Tensor, byte-string and library uploads share a server-process memory cache
-keyed by the raw content's SHA-256. Module source is carried in the program and
-does not use this blob cache. Reusing bytes does not reuse a previous tensor,
-compiled module or execution: instructions still create request-local values.
-
-The memory budget is `cache_capacity_bytes` (`--cache-capacity-bytes`, default
-16 GiB). Less recently used, unpinned entries may be evicted. Referenced cached
-bytes are pinned while requests execute. An object
-larger than one quarter of the budget is not retained by default, but supplied
-bytes still work for that request. Restarting the Python server loses this cache.
-
-To use a cached upload, send its hash but omit its binary part. If required
-bytes are absent, the server returns before executing any instruction:
-
-```json
-{
-  "status": "CACHE_MISS",
-  "request_id": "7f61b94e-034a-4e80-b67d-eca52bb952cc",
-  "missing_blobs": ["<sha256>"]
-}
-```
-
-Resend the same program with the listed parts. The Python client does this
-automatically, then makes one final attempt with every local blob if another
-cache miss occurs. Cache retention is an optimization rather than a guarantee.
-
-#### File cache
-
-File uploads use a separate persistent disk cache. Its default directory is
-`$XDG_CACHE_HOME/kcoral/files` when `XDG_CACHE_HOME` is absolute, otherwise
-`~/.cache/kcoral/files`. The default budget is 16384 MiB (16 GiB). Configure
-`disk_cache_dir` and `disk_cache_capacity_mbytes`, or the corresponding server flags.
-
-An empty directory option (`None` in Python) or zero capacity disables file
-caching. It does not move files into the memory cache. Entries can survive a
-server restart but may be evicted, unavailable or too large to retain. Storage
-failure does not prevent execution when the request supplies the bytes.
-
-Cached content and materialized files have different lifetimes. Each request
-gets its own working directory; it is removed on completion, failure, timeout
-or worker crash. The content cache may remain. Requests retain their own resolved
-bytes, so disk eviction does not invalidate an admitted request.
-
-The same digest may exist in either or both cache categories. A request using
-that digest for both a file and a tensor, byte string or library can share the
-resolved bytes; newly supplied content is offered to each referenced category.
-A hit in one category does not generally guarantee a hit in the other.
-
 <a id="get_function"></a>
 
 ### get_function
@@ -465,7 +323,7 @@ Select a named object from an earlier module or library upload.
 }
 ```
 
-#### Fields
+<a id="id1"></a>
 
 | Field | Type | Required | Notes |
 |---|---|---:|---|
@@ -475,16 +333,13 @@ Select a named object from an earlier module or library upload.
 | `name` | string | yes | Non-empty function or object name |
 | `cpu_only` | boolean | no | Defaults to `false`; `true` declares that the function does not access the GPU |
 
-#### Details
+<a id="id2"></a>
 
-For Python source, the name indexes the executed namespace. For CUDA source it
-returns an object containing the uploaded text as `source` and the selected
-function name as `name`. For example, uploading `"void add() {}"` and selecting
-`"add"` gives an object whose `source == "void add() {}"` and `name == "add"`.
-A compiler can read those fields to build the function. C++ `main` and
-non-identifiers are rejected. For a
-TVM-FFI library it calls the loaded module's `get_function`; the function keeps
-its defining module alive.
+| Source | Selection behavior |
+| --- | --- |
+| Python module | Looks up `name` in the executed namespace. |
+| CUDA module | Returns an object with the uploaded text as `source` and the selected function name as `name`, for a compiler to consume. Uploading `"void add() {}"` and selecting `"add"` yields `source == "void add() {}"` and `name == "add"`. C++ `main` and non-identifiers are rejected. |
+| TVM-FFI library | Calls the loaded module's `get_function`. The selected function keeps its defining module alive. |
 
 Given a library that exports `init` and `step`, the Python client writes:
 
@@ -519,7 +374,7 @@ earlier instructions.
 }
 ```
 
-#### Fields
+<a id="id3"></a>
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -528,13 +383,17 @@ earlier instructions.
 | `fn` | reference | yes | An earlier callable handle, `{"$ref": id}` |
 | `args` | array | no | Positional arguments, default `[]` |
 
-#### Details
+<a id="id4"></a>
 
-Top-level reference values in `args` resolve to earlier handles. References
-nested inside lists or objects remain literals. Other JSON values pass as
-literals. Selecting an object with `get_function` does not prove it is callable;
-using a non-callable object here fails at execution. `run` binds the computed
-value but does not include it in the response; add a `return` to expose it.
+| Value in `args` | Passed to the callable |
+| --- | --- |
+| Top-level `{"$ref": id}` | Value of the earlier handle |
+| Reference-shaped object nested in a list or object | Literal JSON; not resolved |
+| Other JSON value | Literal value |
+
+Selecting an object with `get_function` does not prove it is callable; using a
+non-callable object here fails at execution. `run` binds the computed value but
+does not include it in the response; add a `return` to expose it.
 
 Uploaded Python can perform tasks such as allocation, compilation, correctness
 checks and measurement. A callable returned by a `run` can be used by a later
@@ -552,7 +411,7 @@ Select an earlier value for the response.
 }
 ```
 
-#### Fields
+<a id="id5"></a>
 
 | Field | Type | Required | Notes |
 |---|---|---:|---|
@@ -562,7 +421,7 @@ Select an earlier value for the response.
 | `kind` | string | For file/folder returns | `"file"` or `"folder"`; omit `value` |
 | `path` | string or `{"$ref": id}` | For file/folder returns | Workspace path, supplied literally or through an earlier handle |
 
-#### Details
+<a id="id6"></a>
 
 `return` has no `id` and creates no handle. Instructions run in the order given
 and a `return` may appear anywhere after the instruction it references, so a
@@ -570,7 +429,9 @@ program can interleave returns with the uploads and runs that follow them. A
 `return` that has already run contributes its entry to `results` even if a later
 instruction fails.
 
-#### File and folder selection
+<a id="file-and-folder-selection"></a>
+
+**File and folder returns**
 
 ```json
 {"op": "return", "key": "report", "kind": "file", "path": "outputs/report.txt"}
@@ -582,33 +443,107 @@ To return a folder whose path is held in an earlier register:
 {"op": "return", "key": "debug", "kind": "folder", "path": {"$ref": "output_path"}}
 ```
 
-These variants accept exactly `op`, `key`, `kind`, and `path`. `kind` is `file`
-or `folder`; `path` is a literal string or an earlier reference resolving to one.
-Paths follow file-upload rules and are relative to the original request workspace,
-even if code changes cwd. Return keys are unique across all variants.
+| Rule | Behavior |
+| --- | --- |
+| Fields | Exactly `op`, `key`, `kind`, and `path`. `kind` is `file` or `folder`; `path` is a literal string or an earlier reference resolving to one. Return keys are unique across all variants. |
+| Paths | Follow [file-upload rules](#file), relative to the original request workspace even if code changes cwd. |
+| Snapshot | Contents are captured at that instruction, without holding the GPU lease. Folders include hidden files and empty directories; original metadata is omitted. |
+| Rejected content | Symlinks, special files, repeated directories, and observable changes during reads |
+| Failures | Missing paths, wrong types, invalid runtime paths, read failures, and collection limits fail that return with `serialization`. Failed returns add no result or binary parts; earlier returns survive ordinary instruction failures. |
+| Size limit | Contents are buffered in the response and count against `max_response_bytes` (default 256 MiB). `output_limit_bytes` controls only stdout/stderr. |
 
-Each return snapshots contents at that instruction, without holding the GPU lease.
-Folders include hidden files and empty directories; original metadata is omitted.
-Symlinks, special files, repeated directories, and observable changes during reads
-are rejected. Missing paths, wrong types, invalid runtime paths, read failures,
-and collection limits fail that return with `serialization`. Failed returns add
-no result or binary parts; earlier returns survive ordinary instruction failures.
+## Caching
 
-Contents are buffered in the execution response. The existing `max_response_bytes`
-limit (default 256 MiB) applies. `output_limit_bytes` controls only stdout/stderr.
+<a id="blob-cache"></a>
+<a id="memory-cache"></a>
+<a id="file-cache"></a>
 
-## Options
+| Property | Memory cache | File cache |
+| --- | --- | --- |
+| Upload kinds | `tensor`, `bytes`, `library` | `file` |
+| Storage | Python server process | Persistent disk cache |
+| Key | SHA-256 of raw content | SHA-256 of raw content |
+| Default budget | 16 GiB | 16384 MiB (16 GiB) |
+| Budget setting | `cache_capacity_bytes` / `--cache-capacity-bytes` | `disk_cache_capacity_mbytes` / `--disk-cache-capacity-mbytes` |
+| Retention | Less recently used, unpinned entries may be evicted. Objects larger than one quarter of the budget are not retained by default. | Entries may be evicted, unavailable, or too large to retain. |
+| Active requests | Referenced cached bytes are pinned while the request executes. | Requests retain their resolved bytes; eviction does not invalidate an admitted request. |
+| Server restart | Cache is lost. | Entries can survive. |
 
-| Field | Type | Required | Default | Notes |
-|---|---|---:|---|---|
-| `timeout_seconds` | number | no | `300` | Worker execution deadline; maximum `900` |
-| `output_limit_bytes` | integer | no | `1048576` | Maximum bytes returned for each of stdout and stderr; maximum `16777216`; `0` disables capture |
+Module source travels inline and does not use either cache. Cached bytes do not
+preserve a previous tensor's mutations, a compiled module, or an execution;
+instructions still create request-local values.
 
-A value above either maximum is clamped to it, not rejected.
+The file cache defaults to `$XDG_CACHE_HOME/kcoral/files` when `XDG_CACHE_HOME`
+is absolute, otherwise `~/.cache/kcoral/files`. Set `disk_cache_dir` or
+`--disk-cache-dir` to change it. An empty directory option (`None` in Python) or
+zero capacity disables file caching; it does not move files into the memory cache.
+Storage failure or content too large to cache does not prevent execution when
+the request supplies the bytes.
 
----
+Materialized files live in a separate workspace per request. It is removed on
+completion, failure, timeout, or worker crash; cached content may remain.
+
+To use a cached upload, send its hash but omit its binary part. If required
+bytes are absent, the server returns before executing any instruction:
+
+```json
+{
+  "status": "CACHE_MISS",
+  "request_id": "7f61b94e-034a-4e80-b67d-eca52bb952cc",
+  "missing_blobs": ["<sha256>"]
+}
+```
+
+Resend the same program with the listed parts. The Python client does this
+automatically, then makes one final attempt with every local blob if another
+cache miss occurs. Cache retention is an optimization rather than a guarantee.
+
+The same digest may exist in either or both cache categories. A request using
+that digest for both a file and a tensor, byte string or library can share the
+resolved bytes; newly supplied content is offered to each referenced category.
+A hit in one category does not generally guarantee a hit in the other.
 
 ## Response
+
+<a id="response-fields"></a>
+
+| HTTP | Body | Meaning |
+|---:|---|---|
+| 200 | `status: COMPLETED` | Program completed |
+| 200 | `status: FAILED` | An instruction failed or terminated its worker; `results` holds the returns that ran |
+| 200 | `status: CACHE_MISS` | Referenced blobs are missing; program did not run |
+| 400 | `status: ERROR` | Malformed request or program, including duplicate JSON keys and NaN/Infinity |
+| 413 | `status: ERROR` | Request body exceeds the server's size limit |
+| 503 | `status: ERROR` | No worker is available; includes `Retry-After` |
+| 504 | `status: ERROR`, `error.kind: timeout` | Execution timed out |
+| 500 | `status: ERROR`, `error.kind: engine` | Worker failure outside an instruction, or server failure |
+| 500 | `status: ERROR`, `error.kind: response_too_large` | Results exceed the server's response-size limit |
+
+<a id="fields-1"></a>
+
+<a id="id7"></a>
+
+A 200 response carries the fields below. A non-200 carries the smaller error
+body described under [Errors](#errors) instead.
+
+| Field | Type | Present | Notes |
+|---|---|---|---|
+| `status` | string | always | `COMPLETED`, `FAILED`, or `CACHE_MISS` |
+| `request_id` | string | always | Also sent as `X-Request-ID` |
+| `queue_ms` | number | run | Worker wait time |
+| `elapsed_ms` | number | run | Worker execution and serialization time |
+| `lease_wait_ms` | number | run | Waiting for the GPU another worker held |
+| `lease_held_ms` | number | run | Holding the GPU — the request's GPU time |
+| `results` | object | run | Entries for every `return` that ran; may be empty |
+| `error` | object | `FAILED` | See [Errors](#errors) |
+| `missing_blobs` | array | `CACHE_MISS` | Blob hashes the server does not hold |
+| `stdout` | string | run | Captured standard output |
+| `stderr` | string | run | Captured standard error |
+| `stdout_truncated` | boolean | run | Whether `stdout` hit `output_limit_bytes` |
+| `stderr_truncated` | boolean | run | Whether `stderr` hit `output_limit_bytes` |
+
+"run" marks fields present whenever the worker returned an outcome, so on both
+`COMPLETED` and `FAILED` but not on `CACHE_MISS`.
 
 For a successful program, HTTP status is `200`:
 
@@ -645,32 +580,6 @@ and `lease_held_ms` holding it. What is left,
 `lease_held_ms` measures how long the request reserves the GPU, including any
 host work performed while holding the lease. Kernel measurements are reported
 separately by the uploaded program.
-
-<a id="fields-1"></a>
-
-### Fields
-
-A 200 response carries the fields below. A non-200 carries the smaller error
-body described under [Errors](#errors) instead.
-
-| Field | Type | Present | Notes |
-|---|---|---|---|
-| `status` | string | always | `COMPLETED`, `FAILED`, or `CACHE_MISS` |
-| `request_id` | string | always | Also sent as `X-Request-ID` |
-| `queue_ms` | number | run | Worker wait time |
-| `elapsed_ms` | number | run | Worker execution and serialization time |
-| `lease_wait_ms` | number | run | Waiting for the GPU another worker held |
-| `lease_held_ms` | number | run | Holding the GPU — the request's GPU time |
-| `results` | object | run | Entries for every `return` that ran; may be empty |
-| `error` | object | `FAILED` | See [Errors](#errors) |
-| `missing_blobs` | array | `CACHE_MISS` | Blob hashes the server does not hold |
-| `stdout` | string | run | Captured standard output |
-| `stderr` | string | run | Captured standard error |
-| `stdout_truncated` | boolean | run | Whether `stdout` hit `output_limit_bytes` |
-| `stderr_truncated` | boolean | run | Whether `stderr` hit `output_limit_bytes` |
-
-"run" marks fields present whenever the worker returned an outcome, so on both
-`COMPLETED` and `FAILED` but not on `CACHE_MISS`.
 
 ### Value encoding
 
@@ -768,18 +677,6 @@ error means a `cpu_only` function that entered the CUDA API; it adds
 `cuda_call`, `location`, and `interfered_request_id`, and its `traceback` is
 the stack at that call.
 
-| HTTP | Body | Meaning |
-|---:|---|---|
-| 200 | `status: COMPLETED` | Program completed |
-| 200 | `status: FAILED` | An instruction failed or terminated its worker; `results` holds the returns that ran |
-| 200 | `status: CACHE_MISS` | Referenced blobs are missing; program did not run |
-| 400 | `status: ERROR` | Malformed request or program, including duplicate JSON keys and NaN/Infinity |
-| 413 | `status: ERROR` | Request body exceeds the server's size limit |
-| 503 | `status: ERROR` | No worker is available; includes `Retry-After` |
-| 504 | `status: ERROR`, `error.kind: timeout` | Execution timed out |
-| 500 | `status: ERROR`, `error.kind: engine` | Worker failure outside an instruction, or server failure |
-| 500 | `status: ERROR`, `error.kind: response_too_large` | Results exceed the server's response-size limit |
-
 `ERROR` is not a program outcome, so its body is much smaller: `status`,
 `request_id`, and an `error` of `kind` and `message` only, with no `results`,
 timings, or captured output.
@@ -795,16 +692,12 @@ timings, or captured output.
 Its `kind` is `parse`, `request_too_large`, `busy`, `timeout`, `engine`, or
 `response_too_large` — a separate set from the instruction kinds above.
 
-The dividing line is whether the failure can be attributed to an instruction.
-A worker terminated by native uploaded code answers `FAILED` for the active
-instruction after the server replaces it. A CUDA error that poisons a worker's
-context also answers `FAILED` for the active instruction; the server replaces
-only that worker process before it accepts another program. A non-sticky CUDA
-launch error found while draining the request also answers `FAILED`, but the
-server clears the error and keeps that healthy worker. A timeout, a worker
-failure outside an instruction, or a server failure answers `ERROR`.
-
----
+| Failure | Outcome and recovery |
+| --- | --- |
+| Native uploaded code terminates its worker | `FAILED` for the active instruction after the server replaces the worker |
+| CUDA error poisons the worker's context | `FAILED` for the active instruction; only that worker process is replaced before it accepts another program |
+| Non-sticky CUDA launch error found while draining the request | `FAILED`; the server clears the error and keeps the healthy worker |
+| Timeout, worker failure outside an instruction, or server failure | `ERROR` |
 
 ## Example
 
@@ -853,16 +746,13 @@ failure outside an instruction, or a server failure answers `ERROR`.
 This program uploads its own harness and returns `42`; it needs no binary parts.
 The same upload/get_function/run shape supports GPU harnesses and compiler tools.
 
-## Python client
+<a id="python-client"></a>
 
 The Python package constructs request parts, hashes and response values for you.
-Follow the [quickstart](../getting-started/quickstart.md) for a first request, the
-[program guide](writing-a-program.md) for client construction and lifecycle, and the
-[Python interface reference](../python-api/index.rst) for signatures and errors.
 
-`upload_folder` expands into ordinary file-upload instructions and introduces
-no new protocol operation. File uploads return no register; see
-[files used by uploaded scripts](writing-a-program.md#files-used-by-uploaded-scripts).
-
-File/folder results decode to `ReturnedFile` and `ReturnedFolder`; see
-[client usage](writing-a-program.md#returning-files-and-folders).
+| Task | Python client reference |
+| --- | --- |
+| Submit a first request | [Quickstart](../getting-started/quickstart.md) |
+| Construct programs and manage clients | [Program guide](writing-a-program.md); [API signatures and errors](../python-api/index.rst) |
+| Upload files and folders | `upload_folder` expands into ordinary file-upload instructions with no new operation. File uploads return no register. See [files used by uploaded scripts](writing-a-program.md#files-used-by-uploaded-scripts). |
+| Receive files and folders | Results decode to `ReturnedFile` and `ReturnedFolder`. See [client usage](writing-a-program.md#returning-files-and-folders). |

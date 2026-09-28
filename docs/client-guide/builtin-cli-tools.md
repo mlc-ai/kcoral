@@ -18,7 +18,7 @@ arguments, returned files, and failure handling.
 
 ## Common reference
 
-### Command structure and help
+<a id="command-structure-and-help"></a>
 
 All tools use this structure:
 
@@ -39,10 +39,14 @@ These commands display KCoral's help locally without contacting a server.
 For the native executable's options, use the commands in each tool section.
 Native options are interpreted by the version installed on the worker.
 
-### Connection and execution options
+<a id="connection-and-execution-options"></a>
+
+### Options
 
 KCoral does not select a server unless a connection option or a nonempty
 `KCORAL_URL` is supplied.
+
+<a id="input-environment-and-output-options"></a>
 
 | Option | Default | Meaning and accepted values |
 | --- | --- | --- |
@@ -52,6 +56,10 @@ KCoral does not select a server unless a connection option or a nonempty
 | `--port PORT` | `8000` when only `--host` is supplied | HTTP server port, an integer from 1 through 65535. |
 | `--timeout SECONDS` | `300` | Positive integer execution deadline for each request, capped by the server's configured maximum. |
 | `--output-limit-bytes N` | `268435456` (256 MiB) | Positive integer capture limit for **each** of stdout and stderr, capped by the server. Zero is not accepted by these CLI tools. |
+| `--send PATH` | No uploaded files | Upload a file or directory, preserving its name. Repeat for additional inputs. |
+| `-e NAME[=VALUE]`, `--env NAME[=VALUE]` | Worker environment | Set one remote environment variable, or copy one local variable by name. Repeat for additional variables. |
+| `--fetch PATH` | No selected outputs | Return a file or directory relative to the remote working directory. Repeat for additional outputs; requires `--out`. |
+| `--out DIRECTORY` | No download directory | New local destination for returned files. Required by profilers; other tools require `--fetch` and `--out` together. |
 
 Select a server with an environment variable:
 
@@ -66,33 +74,24 @@ Or specify the address on the invocation:
 kcoral run python --host gpu.example.com --port 8000 --send experiment -- experiment/check.py
 ```
 
-If either `--host` or `--port` is present, KCoral constructs `http://HOST:PORT`
-using the defaults in the table for any omitted component. It does not inherit
-any component from `KCORAL_URL`. If that environment variable is also nonempty,
-KCoral warns on stderr and prints the address it will use:
+| Connection selection | Result |
+| --- | --- |
+| `--url URL` | Uses this URL, overriding `KCORAL_URL`. Supports HTTPS and path prefixes. |
+| `--host`, `--port`, or both | Constructs `http://HOST:PORT`, using the defaults above for omitted components. No component is inherited from `KCORAL_URL`. |
+| Nonempty `KCORAL_URL`, with no connection flags | Uses the environment variable. |
+| `KCORAL_URL` unset or empty, with no connection flags | No server is selected. |
+| `--url` combined with `--host` or `--port` | Local argument error. |
+
+When `--host` or `--port` overrides a nonempty `KCORAL_URL`, KCoral warns on
+stderr and prints the selected address:
 
 ```text
 kcoral: warning: --host/--port override KCORAL_URL; using http://gpu.example.com:8000
 ```
 
-An explicit `--url` also overrides `KCORAL_URL`. Use it when the endpoint needs
-HTTPS or a path prefix. Supplying `--url` with either host/port option is a
-local argument error.
+<a id="input-layout-and-working-directory"></a>
 
-### Input, environment, and output options
-
-These options control uploaded files, remote environment variables, and returned files.
-Use them before the first `--`; the tool sections describe how each command
-prepares its inputs and collects its results.
-
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `--send PATH` | No uploaded files | Upload a file or directory, preserving its name. Repeat for additional inputs. |
-| `-e NAME[=VALUE]`, `--env NAME[=VALUE]` | Worker environment | Set one remote environment variable, or copy one local variable by name. Repeat for additional variables. |
-| `--fetch PATH` | No selected outputs | Return a file or directory relative to the remote working directory. Repeat for additional outputs; requires `--out`. |
-| `--out DIRECTORY` | No download directory | New local destination for returned files. Required by profilers; other tools require `--fetch` and `--out` together. |
-
-### Input layout and working directory
+### Files and workspace
 
 `--send` snapshots local inputs before execution. The worker receives regular
 files in a fresh working directory; `KCORAL_DIR` points to that directory.
@@ -105,17 +104,14 @@ files in a fresh working directory; `KCORAL_DIR` points to that directory.
 | `--send /local/path/experiment` containing `check.py` | `experiment/check.py` |
 | `--send .` from a directory named `experiment` | `experiment/...` |
 
-A directory keeps its own name and internal layout; local parent directories
-are not included. A trailing slash does not change this behavior. Selecting `.`
-uses the current directory's name. The filesystem root cannot be selected
-because it has no directory name. A selected file uses its filename alone.
-Multiple `--send` selections share one remote working directory: differently
-named directories can contain identically named files, while duplicate or
-conflicting remote file paths are rejected. Symbolic links and special files
-are rejected. Python
-`__pycache__` entries are skipped; other hidden files are included. Empty input
-directories are not uploaded. Executable bits are preserved, but full original
-permission modes are not.
+| Input rule | Behavior |
+| --- | --- |
+| Names and layout | A directory keeps its name and internal layout, without local parent directories. A file uses its filename alone. Trailing slashes do not change the layout. |
+| `.` and filesystem root | `.` uses the current directory's name. The filesystem root cannot be selected because it has no directory name. |
+| Multiple selections | Share one remote workspace. Differently named directories may contain identically named files; duplicate or conflicting remote file paths are rejected. |
+| File types | Symbolic links and special files are rejected. |
+| Hidden and empty entries | Skips Python `__pycache__` entries and empty input directories; includes other hidden files. |
+| Permissions | Preserves executable bits, not full original permission modes. |
 
 The command runs from the remote working directory, **not** from inside the
 uploaded directory. For `--send experiment`, pass `experiment/check.py` to Python
@@ -131,7 +127,9 @@ Without `--send`, the tool starts in an empty working directory. Relative paths
 in tool arguments are resolved in that directory; absolute paths refer to the worker's
 filesystem, subject to the server's isolation settings.
 
-### Environment variables and executable lookup
+<a id="environment-variables-and-executable-lookup"></a>
+
+### Environment
 
 Environment overrides are optional. Without them, execution uses the
 worker's environment, including its assigned GPU. The worker's Python executable
@@ -163,52 +161,37 @@ it reaches the worker only if selected with `--env MODE`. Your local shell
 also expands expressions such as `$HOME` before invoking KCoral unless they
 are quoted appropriately.
 
-### Standard input and output
+<a id="standard-input-and-output"></a>
 
-These tools run without an interactive terminal. The launched subprocess starts
-with closed standard input; local stdin is not forwarded, and interactive prompts
-are unsupported. Upload input files and pass their paths, or invoke a remote
-shell to redirect an uploaded file into a child program's stdin. No interactive
-session is kept between requests.
+### Output and exit status
 
-Output is captured during execution and replayed after each request finishes.
-Normal UTF-8 text preserves its content, line breaks, and order within each
-stream. KCoral writes the captured stdout to local stdout and the captured
-stderr to local stderr. The following differences from direct local execution
-apply:
+| Stream behavior | Rule |
+| --- | --- |
+| Standard input | Closed for the launched subprocess. Local stdin is not forwarded; interactive prompts and sessions between requests are unsupported. |
+| Display timing | Captured during execution and replayed after the request finishes. Output is not streamed, including with Python's `-u`. |
+| Replay order | Captured stdout goes to local stdout, then captured stderr to local stderr. Each stream preserves text, line breaks, and order; original interleaving is lost. |
+| Encoding | UTF-8 with invalid bytes replaced. Return files for binary data or exact log bytes. |
+| Capture limits | Apply independently to each stream. Truncation warns on stderr and does not itself change the subprocess exit code. |
+| Terminal detection | No interactive terminal is allocated; programs may change colors or progress displays. |
+| KCoral diagnostics | Ordinary subprocess stdout has no added prefix. Artifact messages and warnings use stderr. |
 
-- Output is not streamed. Python's `-u` flag does not make the client display it
-  before the request completes.
-- Stdout and stderr are collected separately and replayed in that order; their
-  original interleaving is not preserved.
-- Output is decoded as UTF-8 with invalid bytes replaced. Use returned files for
-  binary data or for logs whose exact original bytes matter.
-- The capture limit applies independently to each stream. Truncation produces
-  a warning on stderr and does not by itself change the subprocess exit code.
-- Programs may change colors or progress displays when they detect that they
-  are not connected to a terminal.
-
-KCoral does not add a prefix to ordinary subprocess stdout. Its artifact
-messages and warnings use stderr. Local redirection and pipelines still work,
-for example:
+Upload input files and pass their paths, or use a remote shell to redirect an
+uploaded file into a child program's stdin. Local redirection and pipelines
+still work:
 
 ```bash
 kcoral run python --send experiment -- experiment/check.py > run.log 2> run.err
 ```
 
-### Returned files, limits, and exit status
+<a id="returned-files-limits-and-exit-status"></a>
 
-`--fetch` paths must be relative, without `..` components. Returned files and
-directories retain their relative layout, including empty output directories.
-Symbolic links and special files cannot be returned. `--out` must name a new
-local directory; parent directories are created automatically, and existing
-output is never overwritten.
-
-Files are collected after execution, including a subprocess failure. A hard
-timeout, worker failure, or response-size error can prevent their return.
-Each request has its own workspace; a later invocation is not a
-continuation of the earlier one. Keep related setup and execution steps in one
-invocation, or explicitly download and resend the needed files.
+| Returned-file rule | Behavior |
+| --- | --- |
+| Selection | `--fetch` paths must be relative, without `..` components. Symbolic links and special files cannot be returned. |
+| Layout | Preserves relative paths, including empty output directories. |
+| Local destination | `--out` must name a new directory. Parent directories are created automatically; existing output is never overwritten. |
+| Collection | Runs after execution, including a subprocess failure. Hard timeouts, worker failures, and response-size errors can prevent files from returning. |
+| Workspace lifetime | Each request has its own workspace. Keep related setup and execution in one invocation, or download and resend the needed files. |
 
 The server caps execution time, captured output, and serialized responses.
 Its default maximum requested capture is 16 MiB per stream, and its default
@@ -225,14 +208,14 @@ response limit is 256 MiB. A server may configure different limits. See
 
 ## python
 
-### Purpose and requirements
+<a id="purpose-and-requirements"></a>
 
 Use `python` for scripts, module entry points, or inline Python commands. It
 runs the **worker's Python interpreter**, not the client's interpreter. The
 worker must have the imported packages and any required GPU libraries installed.
 Upload your own modules and data along with the entry-point script.
 
-### Command format and arguments
+<a id="command-format-and-arguments"></a>
 
 ```text
 kcoral run python [KCoral options] -- [Python options] SCRIPT [script arguments]
@@ -255,7 +238,7 @@ A script, module, or inline command is required. The Python prompt, `-i`, and
 stdin execution with `-` are not supported. Options after the first KCoral `--`
 are Python or program arguments, even if they have names such as `--host`.
 
-### Run a script or module
+<a id="run-a-script-or-module"></a>
 
 Given this local directory:
 
@@ -277,7 +260,7 @@ kcoral run python --send experiment -- -W ignore -X dev experiment/check.py
 kcoral run python -- -c 'import sys; print(sys.version)'
 ```
 
-### Return results and interpret failures
+<a id="return-results-and-interpret-failures"></a>
 
 If `check.py` writes `results/report.json`, download its containing directory:
 
@@ -285,16 +268,15 @@ If `check.py` writes `results/report.json`, download its containing directory:
 kcoral run python --send experiment --fetch results --out artifacts/python -- experiment/check.py
 ```
 
-The local result is `artifacts/python/results/report.json`. For exact binary
-output, write a remote file and fetch it instead of writing binary bytes to
-stdout. Results are still collected after `sys.exit(N)` or an uncaught exception,
-provided execution reaches normal subprocess completion.
-
-`sys.exit(N)` becomes the CLI exit code. An uncaught exception normally produces
-a traceback on stderr and a nonzero code. A missing module usually means it was
-neither uploaded nor installed on the worker; installing it only on the client
-does not make it available remotely. A missing script often means the command
-used `check.py` instead of `experiment/check.py` after `--send experiment`.
+| Result or failure | Behavior or check |
+| --- | --- |
+| Returned report | Saved as `artifacts/python/results/report.json`. |
+| Exact binary output | Write a remote file and fetch it; stdout is decoded as text. |
+| `sys.exit(N)` | Becomes the CLI exit code. |
+| Uncaught exception | Normally produces a traceback on stderr and a nonzero exit code. |
+| File collection after failure | Still runs after `sys.exit(N)` or an uncaught exception if execution reaches normal subprocess completion. |
+| Missing module | Upload it or install it on the worker. A client-only installation is insufficient. |
+| Missing script | Check the uploaded path: `--send experiment` needs `experiment/check.py`, not `check.py`. |
 
 To inspect native Python help on the worker, use
 `kcoral run shell -- python --help`. Python's
@@ -303,14 +285,14 @@ the native interpreter options.
 
 ## compute-sanitizer
 
-### Purpose and requirements
+<a id="id1"></a>
 
 NVIDIA Compute Sanitizer runs a CUDA application under a selected correctness
 checker. The worker needs the `compute-sanitizer` executable, a compatible CUDA
 driver and GPU, and the application's dependencies. KCoral invokes the installed
 executable; it does not install the checker or compile the application for you.
 
-### Command format and checker selection
+<a id="command-format-and-checker-selection"></a>
 
 ```text
 kcoral run compute-sanitizer [KCoral options] -- [sanitizer options] APPLICATION [arguments]
@@ -332,7 +314,7 @@ These are native options placed **after** `--`. Other options supported by the
 installed Compute Sanitizer are also forwarded. The application can be a program
 installed on the worker or an uploaded executable such as `./experiment/check`.
 
-### Check a Python or compiled application
+<a id="check-a-python-or-compiled-application"></a>
 
 Run the default checker, select a race check, or check an uploaded executable:
 
@@ -348,7 +330,7 @@ A compiled program must target the worker's platform and preserve its executable
 bit in the upload. For useful source locations, build it with the line
 information recommended by Compute Sanitizer.
 
-### Save findings and handle failures
+<a id="save-findings-and-handle-failures"></a>
 
 ```bash
 kcoral run compute-sanitizer --send experiment \
@@ -356,15 +338,12 @@ kcoral run compute-sanitizer --send experiment \
   -- --tool memcheck --error-exitcode 1 --log-file sanitizer.log python experiment/check.py
 ```
 
-The returned log is `artifacts/check/sanitizer.log`. Selecting `--log-file`
-changes where the native tool writes its diagnostics; do not assume the same
-text will also appear on stdout.
-
-KCoral preserves **Compute Sanitizer's** exit code. It does not parse the log to
-turn findings into failure, so set `--error-exitcode` explicitly when needed.
-A missing requested log also makes the invocation fail. If instrumented execution
-exceeds the timeout, increase `--timeout` within the server's configured maximum;
-a hard timeout may prevent log collection.
+| Result or failure | Behavior or check |
+| --- | --- |
+| Returned log | Saved as `artifacts/check/sanitizer.log`. `--log-file` changes where native diagnostics are written; the same text may not appear on stdout. |
+| Checker findings | KCoral preserves Compute Sanitizer's exit code and does not parse the log to turn findings into failure. Set `--error-exitcode` when findings must fail automation. |
+| Missing requested log | Makes the invocation fail. |
+| Instrumentation exceeds the deadline | Increase `--timeout` within the server's configured maximum. A hard timeout may prevent log collection. |
 
 Use `kcoral run shell -- compute-sanitizer --help` to inspect the installed
 version. See NVIDIA's [Compute Sanitizer manual](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html)
@@ -372,14 +351,14 @@ for checker coverage and native options.
 
 ## ncu
 
-### Purpose and requirements
+<a id="id2"></a>
 
 NVIDIA Nsight Compute measures GPU kernel performance and produces a report for
 later inspection. The worker needs `ncu`, an application compatible with the
 worker's GPU, and permission to collect the required GPU performance counters.
 The application must actually launch kernels selected by the profiling options.
 
-### Command format and options
+<a id="command-format-and-options"></a>
 
 ```text
 kcoral run ncu [KCoral options] --out DIRECTORY -- [ncu options] -- APPLICATION [arguments]
@@ -399,17 +378,14 @@ Both separators are required, even when no native profiler options are supplied.
 | `--kernel-name FILTER` | Select kernels using Nsight Compute's name-filter syntax. |
 | `--section IDENTIFIER` | Select a metric section supported by the installed version. |
 
-KCoral sets the export path and launches the application in capture mode.
-It rejects native `--export`/`-o`, `--import`/`-i`, `--mode`, `--config-file`,
-and `--config-file-path` options, including abbreviations that conflict with
-these managed options. Use the local report for later import or inspection.
+| KCoral-managed setting | Behavior |
+| --- | --- |
+| Capture and export | KCoral selects the export path and launches the application in capture mode. Import or inspect the downloaded report locally. |
+| Rejected native options | `--export`/`-o`, `--import`/`-i`, `--mode`, `--config-file`, `--config-file-path`, and abbreviations that conflict with these options |
+| Configuration files | Implicit Nsight configuration files are disabled. |
+| Profiler environment | Sets `NCU_PROFILE=1` unless overridden with `--env`. Timing helpers that honor it can avoid a competing profiler subscription. |
 
-Implicit Nsight configuration files are disabled. The subprocess receives
-`NCU_PROFILE=1` unless you explicitly supply another value with `--env`; this
-allows timing helpers that honor the variable to avoid a competing profiler
-subscription.
-
-### Capture a report
+<a id="capture-a-report"></a>
 
 Collect one launch with the basic set:
 
@@ -432,7 +408,7 @@ Native filtering and replay behavior are controlled by the installed profiler.
 Profiling time is not the same as an ordinary benchmark run: collecting more
 metrics may require repeated executions of the kernel.
 
-### Report location and failure handling
+<a id="report-location-and-failure-handling"></a>
 
 For `--out artifacts/ncu`, the report is always:
 
@@ -447,12 +423,11 @@ Nsight Compute installation, or print it with a local CLI:
 ncu --import artifacts/ncu/capture.ncu-rep
 ```
 
-KCoral returns the profiler's exit status and attempts to download any report
-that exists, even when the profiler or application fails. If no report was
-created, the command fails with a missing-artifact message even if `ncu` exited
-with zero. Common causes include filters that match no kernels, no CUDA kernel
-launches, unavailable performance counters, or failure before report creation.
-A hard timeout can prevent the report from being returned.
+| Result or failure | Behavior or check |
+| --- | --- |
+| Profiler or application exits | Returns the profiler's exit status and attempts to download any existing report, including after failure. |
+| No report created | Fails with a missing-artifact message even if `ncu` exited with zero. Check for unmatched filters, no CUDA kernel launches, unavailable performance counters, or failure before report creation. |
+| Hard timeout | Can prevent the report from being returned. |
 
 For native help without creating a report, run `kcoral run shell -- ncu --help`.
 See the [Nsight Compute CLI manual](https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html)
@@ -460,7 +435,7 @@ for section sets, filters, replay, and platform requirements.
 
 ## run-iket
 
-### Purpose and requirements
+<a id="id3"></a>
 
 IKET records execution traces from supported, instrumented kernels. The worker
 needs `run-iket`, a compatible CuTeDSL distribution with IKET support,
@@ -468,7 +443,7 @@ and the GPU and driver required by that distribution. The application's kernel
 must contain suitable instrumentation for the timeline you want to collect;
 KCoral does not add instrumentation to uploaded source.
 
-### Command format and options
+<a id="id4"></a>
 
 ```text
 kcoral run run-iket [KCoral options] --out DIRECTORY -- profile [profile options] -- APPLICATION [arguments]
@@ -486,13 +461,13 @@ application are required.
 | `--keep` | Retain intermediate profiling outputs when supported by the installed version. |
 | `--use-config PATH` | Use a profiler configuration available on the worker; upload it with the experiment when needed. |
 
-Available options and postprocessing formats depend on the installed IKET
-version. KCoral forwards them to `run-iket`. It owns the profiler's output and
-working directories and rejects native `--output-dir`/`-o` and `--working-dir`
-options. The wrapper supports the `profile` workflow, not standalone native
-postprocessing subcommands.
+| KCoral-managed setting | Behavior |
+| --- | --- |
+| Native arguments | Forwarded to the installed `run-iket`; available options and postprocessing formats depend on its version. |
+| Directories | KCoral owns the profiler's output and working directories. Native `--output-dir`/`-o` and `--working-dir` are rejected. |
+| Workflow | Requires `profile`; standalone native postprocessing subcommands are unsupported. |
 
-### Collect and retrieve a timeline
+<a id="collect-and-retrieve-a-timeline"></a>
 
 ```bash
 kcoral run run-iket --send experiment --out artifacts/iket \
@@ -506,24 +481,18 @@ kcoral run run-iket --send experiment --out artifacts/iket-debug --timeout 600 \
   -- profile --postprocess json --keep -- python experiment/capture.py
 ```
 
-All files left in the profiler's managed output directory are downloaded under
-`--out`, preserving their layout. Trace filenames and intermediate subdirectories
-are determined by the native profiler version; KCoral does not rename them.
-Inspect the returned directory and use a viewer compatible with the selected
-postprocessing format.
+<a id="exit-behavior-and-troubleshooting"></a>
 
-### Exit behavior and troubleshooting
+| Result or failure | Behavior or check |
+| --- | --- |
+| Returned files | All files left in the managed output directory are downloaded under `--out`, preserving layout. The native version determines trace names and intermediate directories; KCoral does not rename them. |
+| Profiler exit | Preserves the native exit code and returns available files after an unsuccessful subprocess exit as well. |
+| No output files | Reports missing output and returns nonzero. |
+| Empty or unusable trace | Check kernel instrumentation, native diagnostics, and the expected kernel activity. Existing files alone do not guarantee a useful timeline. Use a viewer compatible with the selected postprocessing format. |
+| Missing executable | Install IKET in the worker environment. |
+| Custom configuration | Upload any referenced files. |
 
-The command returns the native profiler's exit code. Available output files are
-returned after an unsuccessful subprocess exit as well. If the managed output
-directory contains no files, KCoral reports missing output and returns nonzero.
-The existence of output files alone does not guarantee a useful timeline; check
-that the returned trace contains the expected instrumented kernel activity.
-
-If the executable is missing, install IKET in the worker environment. If the
-application runs but the trace is empty, check kernel instrumentation and native
-profiler diagnostics. Upload any files referenced by a custom configuration.
-When inspecting a native option or format mismatch, run:
+For a native option or format mismatch, inspect the installed help:
 
 ```bash
 kcoral run shell -- run-iket profile --help
@@ -534,14 +503,14 @@ describes kernel instrumentation and version-specific requirements.
 
 ## shell
 
-### Purpose and requirements
+<a id="id5"></a>
 
 `shell` runs the command after `--` directly. It is not limited to Bash and does
 not automatically insert a shell. Use it for shell scripts, uploaded executables,
 or programs installed on the worker. The selected executable and any interpreter
 it needs must be available in the worker environment or uploaded working directory.
 
-### Command format and argument handling
+<a id="command-format-and-argument-handling"></a>
 
 ```text
 kcoral run shell [KCoral options] -- EXECUTABLE [arguments]
@@ -563,7 +532,7 @@ KCoral does not expand wildcards or interpret shell operators on its own.
 A bare program name is searched on the worker's `PATH`; use `./program` to
 select an uploaded executable in the current directory.
 
-### Run scripts and return their files
+<a id="run-scripts-and-return-their-files"></a>
 
 These forms use different interpreters or direct execution:
 
@@ -587,7 +556,7 @@ For direct execution, make the script executable before uploading it and use a
 first line such as `#!/bin/sh` that selects an interpreter available remotely.
 Uploaded compiled binaries must be compatible with the worker platform.
 
-### Shell syntax, environment, and setup steps
+<a id="shell-syntax-environment-and-setup-steps"></a>
 
 Use an explicit remote shell when commands need shell syntax. Keep expressions
 quoted so the local shell does not expand them first:
@@ -616,18 +585,13 @@ For example, `kcoral run shell -- echo hello > result.txt` writes a **local**
 file after receiving the remote output. To create a remote file, use a command
 such as `sh -c 'echo hello > result.txt'` and select it with `--fetch result.txt`.
 
-### Exit behavior and troubleshooting
+<a id="id6"></a>
 
-The direct executable's exit code becomes the CLI exit code, subject to the
-common artifact and execution failure rules. With `bash -c` or `sh -c`, the
-shell determines the status. For example, `setup && check` prevents `check`
-from running if setup fails, whereas a successful final command can hide an
-earlier failure in a semicolon-separated sequence. Use the shell's own failure
-handling when writing multi-command scripts.
-
-A missing executable means its path was not found on the worker. An executable
-permission or format error commonly means the uploaded file lacks an executable
-bit, has an unavailable interpreter, or targets a different platform. A command
-that expects input may exit or report end-of-file because stdin is closed.
-Select output files with `--fetch` before the request ends; output collection
-cannot turn an interactive program into a supported batch command.
+| Result or failure | Behavior or check |
+| --- | --- |
+| Direct executable exits | Preserves its exit code, subject to the common artifact and execution failure rules. |
+| `bash -c` or `sh -c` exits | The shell determines the status. `setup && check` skips `check` if setup fails; a successful final command can hide earlier failures in a semicolon-separated sequence. Use the shell's failure handling for multi-command scripts. |
+| Missing executable | Check that the path exists on the worker. |
+| Permission or format error | Check the uploaded executable bit, interpreter availability, and compatibility with the worker platform. |
+| Program expects stdin | May exit or report EOF because stdin is closed. Redirect an uploaded file remotely; interactive use is unsupported. |
+| Output files | Select them with `--fetch` before the request ends. |

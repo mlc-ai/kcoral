@@ -17,9 +17,24 @@ uses TIRx, TVM's Python-embedded kernel language.
 KCORAL_URL=http://localhost:8000 python examples/benchmark_kernel.py
 ```
 
+<div class="code-example">
+<div class="code-example-preview">
+
+```{literalinclude} ../../examples/benchmark_kernel.py
+:language: python
+:lines: 1-24
+```
+
+</div>
+<details>
+<summary><span class="code-example-expand">Show full source</span><span class="code-example-collapse">Show less</span>: <code>benchmark_kernel.py</code></summary>
+
 ```{literalinclude} ../../examples/benchmark_kernel.py
 :language: python
 ```
+
+</details>
+</div>
 
 {download}`Download the example <../../examples/benchmark_kernel.py>`.
 
@@ -129,9 +144,24 @@ Set `KCORAL_URL` to the GPU server address.
 KCORAL_URL=http://localhost:8000 python examples/remote_compile_client.py
 ```
 
+<div class="code-example">
+<div class="code-example-preview">
+
+```{literalinclude} ../../examples/remote_compile_client.py
+:language: python
+:lines: 1-24
+```
+
+</div>
+<details>
+<summary><span class="code-example-expand">Show full source</span><span class="code-example-collapse">Show less</span>: <code>remote_compile_client.py</code></summary>
+
 ```{literalinclude} ../../examples/remote_compile_client.py
 :language: python
 ```
+
+</details>
+</div>
 
 {download}`Download the client <../../examples/remote_compile_client.py>`.
 
@@ -146,9 +176,24 @@ a host C++ compiler and TVM FFI from the
 KCORAL_URL=http://localhost:8000 python examples/library_upload_client.py
 ```
 
+<div class="code-example">
+<div class="code-example-preview">
+
+```{literalinclude} ../../examples/library_upload_client.py
+:language: python
+:lines: 1-24
+```
+
+</div>
+<details>
+<summary><span class="code-example-expand">Show full source</span><span class="code-example-collapse">Show less</span>: <code>library_upload_client.py</code></summary>
+
 ```{literalinclude} ../../examples/library_upload_client.py
 :language: python
 ```
+
+</details>
+</div>
 
 {download}`Download the client <../../examples/library_upload_client.py>`.
 
