@@ -8,11 +8,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+  pages: write
 
 concurrency:
   group: documentation-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PUBLISH: ${{ github.repository == 'mlc-ai/kcoral' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
 
 jobs:
   build:
@@ -33,33 +37,18 @@ jobs:
             docs/requirements.txt
             pyproject.toml
       - name: Build the documentation website
-        env:
-          LATEST_ONLY: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
-        run: |
-          if [ "$LATEST_ONLY" = "true" ]; then
-            python scripts/build_docs.py --latest-only
-          else
-            python scripts/build_docs.py
-          fi
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        run: python scripts/build_docs.py ${{ github.event_name == 'pull_request' && '--latest-only' || '' }}
+      - name: Publish to gh-pages
+        if: env.PUBLISH == 'true'
+        uses: peaceiris/actions-gh-pages@329bcc8f12caed2cefe5a5b80781499a6f3b361b # v4
         with:
-          path: _site
-
-  deploy:
-    if: >-
-      github.repository == 'mlc-ai/kcoral' &&
-      github.event_name != 'pull_request' &&
-      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: _site
+          publish_branch: gh-pages
+          cname: kcoral.mlc.ai
+      - name: Request GitHub Pages build
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # GITHUB_TOKEN pushes do not automatically trigger a Pages build.
+        run: gh api --method POST "repos/$GITHUB_REPOSITORY/pages/builds"
