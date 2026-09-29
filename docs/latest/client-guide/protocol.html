@@ -1,0 +1,1667 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Write a client program" href="writing-a-program.html"><link rel="prev" title="Your First Program" href="../getting-started/quickstart.html">
+        <link rel="canonical" href="https://kcoral.mlc.ai/docs/latest/client-guide/protocol.html">
+        <link rel="prefetch" href="../_static/brand/kcoral-logo-light.png" as="image">
+        <link rel="prefetch" href="../_static/brand/kcoral-logo-dark.png" as="image">
+
+    <link rel="shortcut icon" href="../_static/kcoral-icon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
+        <title>KCoral Protocol - KCoral documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=93852728" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  --color-brand-primary: #0f766e;
+  --color-brand-content: #0f766e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-brand-primary: #5eead4;
+  --color-brand-content: #5eead4;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-brand-primary: #5eead4;
+  --color-brand-content: #5eead4;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">KCoral documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  <div class="sidebar-logo-container">
+    <img class="sidebar-logo only-light" src="../_static/brand/kcoral-logo-light.png" alt="Light Logo"/>
+    <img class="sidebar-logo only-dark" src="../_static/brand/kcoral-logo-dark.png" alt="Dark Logo"/>
+  </div>
+  
+  <span class="sidebar-brand-text">KCoral documentation</span>
+  
+</a>
+<details class="version-switcher">
+  <summary>Version: latest</summary>
+  <nav aria-label="Documentation versions">
+    <ul>
+      
+      <li>
+        <a href="../../latest/index.html" aria-current="true">latest</a>
+      </li>
+      
+      <li>
+        <a href="../../v0.1.0/index.html">v0.1.0</a>
+      </li>
+      
+    </ul>
+  </nav>
+</details>
+<form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../getting-started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting-started/quickstart.html">Your First Program</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<ul class="current">
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">KCoral Protocol</a></li>
+<li class="toctree-l1"><a class="reference internal" href="writing-a-program.html">Write a client program</a></li>
+<li class="toctree-l1"><a class="reference internal" href="builtin-cli-tools.html">Builtin CLI Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/launch-the-server.html">Launch the server</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Router</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials/benchmark-kernel.html">Benchmark a Kernel with KCoral</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials/remote-compilation.html">Remote Compilation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials/agent-integration.html">Agent Integration Guide</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Development Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../development-guide/build-the-docs.html">Build the Docs</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../python-api/index.html">Python API</a></li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          
+<div class="view-this-page">
+  <a class="muted-link repository-link" href="https://github.com/mlc-ai/kcoral/"
+     title="GitHub repository">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"
+         fill="currentColor" aria-hidden="true" focusable="false">
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59
+        .4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49
+        -2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13
+        -.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82
+        .72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07
+        -1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15
+        -.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82
+        .64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27
+        1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12
+        .51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95
+        .29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2
+        0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+    </svg>
+    <span class="visually-hidden">GitHub repository</span>
+  </a>
+</div>
+
+
+<div class="view-this-page">
+  <a class="muted-link" href="https://github.com/mlc-ai/kcoral/blob/main/docs/client-guide/protocol.md?plain=true" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div><div class="edit-this-page">
+  <a class="muted-link" href="https://github.com/mlc-ai/kcoral/edit/main/docs/client-guide/protocol.md" rel="edit" title="Edit this page">
+    <svg><use href="#svg-pencil"></use></svg>
+    <span class="visually-hidden">Edit this page</span>
+  </a>
+</div><div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <p><a id="instruction-protocol"></a></p>
+<section id="kcoral-protocol">
+<h1>KCoral Protocol<a class="headerlink" href="#kcoral-protocol" title="Link to this heading">¶</a></h1>
+<p>KCoral exposes two client HTTP endpoints. A program is an ordered list of
+instructions, executed in one request with no persistent session handles.
+This page describes a direct server. The <a class="reference internal" href="../server-guide/router.html"><span class="std std-doc">Router</span></a> preserves
+the execution protocol while adding node selection and routing metadata.</p>
+<section id="endpoints">
+<h2>Endpoints<a class="headerlink" href="#endpoints" title="Link to this heading">¶</a></h2>
+<section id="get-health">
+<h3>GET /health<a class="headerlink" href="#get-health" title="Link to this heading">¶</a></h3>
+<p>Read endpoint health, request load, and the compilation environment.</p>
+<div class="highlight-http notranslate"><div class="highlight"><pre><span></span><span class="nf">GET</span> <span class="nn">/health</span> <span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span>
+<span class="na">Host</span><span class="o">:</span> <span class="l">localhost:8000</span>
+</pre></div>
+</div>
+<p>Example response from a GPU server with two workers:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ok"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"instance_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"09dc4eaa-a8b1-46cf-b5fb-a3448dcd7ca6"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"started_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-29T18:42:11.019012Z"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"gpu_count"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"load"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"request_capacity"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"requests_in_progress"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"requests_waiting"</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"target"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"arch"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sm_100a"</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"versions"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"torch"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2.14.0+cu132"</span><span class="p">,</span><span class="w"> </span><span class="nt">"cuda"</span><span class="p">:</span><span class="w"> </span><span class="s2">"13.2"</span><span class="p">,</span><span class="w"> </span><span class="nt">"tvm_ffi"</span><span class="p">:</span><span class="w"> </span><span class="s2">"0.1.13.post2"</span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Version strings above are illustrative; use the values returned by your server.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Field</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Meaning</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">status</span></code></p></td>
+<td><p>string</p></td>
+<td><p>Direct server: <code class="docutils literal notranslate"><span class="pre">ok</span></code> when the handler responds. Router: <code class="docutils literal notranslate"><span class="pre">ok</span></code> when a ready node has connected execution resources, otherwise <code class="docutils literal notranslate"><span class="pre">unavailable</span></code> with HTTP 503</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">instance_id</span></code></p></td>
+<td><p>string</p></td>
+<td><p>Changes on each endpoint restart</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">started_at</span></code></p></td>
+<td><p>string</p></td>
+<td><p>Endpoint startup time in UTC (RFC 3339)</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">gpu_count</span></code></p></td>
+<td><p>integer or null</p></td>
+<td><p>Configured GPUs; <code class="docutils literal notranslate"><span class="pre">0</span></code> on CPU servers; <code class="docutils literal notranslate"><span class="pre">null</span></code> on routers</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">load.request_capacity</span></code></p></td>
+<td><p>integer</p></td>
+<td><p>Serviceable request capacity, occupied and free</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">load.requests_in_progress</span></code></p></td>
+<td><p>integer</p></td>
+<td><p>Assigned requests, including compilation, GPU waiting, and cleanup</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">load.requests_waiting</span></code></p></td>
+<td><p>integer</p></td>
+<td><p>Requests awaiting assignment at this endpoint</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">target</span></code></p></td>
+<td><p>object</p></td>
+<td><p>Compilation target, including <code class="docutils literal notranslate"><span class="pre">arch</span></code> on a GPU server; empty on a CPU server</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">versions</span></code></p></td>
+<td><p>object</p></td>
+<td><p>Runtime and toolchain version strings</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Direct-server capacity counts workers, excluding background replacements, and
+becomes zero during shutdown. Router capacity counts execution connections on
+eligible nodes; its request counts cover submissions through that router.</p>
+<p>Counts can change before submission. During recovery or cleanup, in-progress
+requests may exceed capacity. Assigned requests can wait for GPU access even
+when <code class="docutils literal notranslate"><span class="pre">requests_waiting</span></code> is zero.</p>
+<p>On the router, <code class="docutils literal notranslate"><span class="pre">instance_id</span></code> and <code class="docutils literal notranslate"><span class="pre">started_at</span></code> describe the router process.
+SIGTERM or Ctrl+C starts graceful shutdown.</p>
+<p>A CPU compilation server has an empty compilation target. Read the target from
+the GPU server and supply it when compiling on a CPU server. Workers on one GPU
+server must agree on the target; the server rejects a mixed-target pool.</p>
+</section>
+<section id="post-execute">
+<h3>POST /execute<a class="headerlink" href="#post-execute" title="Link to this heading">¶</a></h3>
+<p>Submit one program. The request body uses <code class="docutils literal notranslate"><span class="pre">multipart/form-data</span></code> with a JSON
+<code class="docutils literal notranslate"><span class="pre">program</span></code> part and optional binary data parts. The request has no query fields.</p>
+<p>See the <a class="reference internal" href="#example">complete example</a> below. The Router uses the same program
+and response format.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Header</p></th>
+<th class="head"><p>Behavior</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">X-Request-ID</span></code></p></td>
+<td><p>Identifies each HTTP attempt and matches the result/error <code class="docutils literal notranslate"><span class="pre">request_id</span></code> and server events. The Router generates a UUID before admission and forwards it to Python. A direct Python request may supply exactly one canonical lowercase UUID; absent, duplicate, or invalid IDs are replaced. Cache-miss retries get separate IDs.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">X-KCoral-Node</span></code></p></td>
+<td><p>Identifies the node selected by the Router. Send it back as a cache-retry preference; a missing or unavailable preference falls back to another eligible node.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><a id="request-envelope"></a></p>
+<p><a id="request-fields"></a></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Part</p></th>
+<th class="head"><p>Content type</p></th>
+<th class="head"><p>Required</p></th>
+<th class="head"><p>Meaning</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">program</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">application/json</span></code></p></td>
+<td><p>yes</p></td>
+<td><p>The program object below</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">blob:&lt;sha256&gt;</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">application/octet-stream</span></code></p></td>
+<td><p>when not cached</p></td>
+<td><p>Raw tensor, byte, file or library content referenced by an upload</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>SHA-256 is the content hash used to identify binary data. <code class="docutils literal notranslate"><span class="pre">&lt;sha256&gt;</span></code> is its
+lowercase 64-character hexadecimal digest over the raw bytes.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Program field</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Required</p></th>
+<th class="head"><p>Meaning</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">instructions</span></code></p></td>
+<td><p>array</p></td>
+<td><p>yes</p></td>
+<td><p>Nonempty list of operations executed in order</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">options</span></code></p></td>
+<td><p>object</p></td>
+<td><p>no</p></td>
+<td><p>Execution timeout and captured output limits; see <a class="reference internal" href="#options">Options</a></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Each supplied binary part must be referenced by an upload. The server rejects
+duplicate or malformed part names, wrong content types and hashes that do not
+match the supplied bytes. JSON objects reject duplicate keys, unknown fields,
+and non-finite numbers such as NaN and Infinity.</p>
+<p id="options"><strong>Options</strong></p>
+<p>Both <code class="docutils literal notranslate"><span class="pre">options</span></code> fields are optional. Values above either maximum are clamped to it.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Field</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Meaning and limit</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">timeout_seconds</span></code></p></td>
+<td><p>number</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
+<td><p>Worker execution deadline; maximum <code class="docutils literal notranslate"><span class="pre">900</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">output_limit_bytes</span></code></p></td>
+<td><p>integer</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1048576</span></code></p></td>
+<td><p>Maximum bytes returned for each of stdout and stderr; maximum <code class="docutils literal notranslate"><span class="pre">16777216</span></code>; <code class="docutils literal notranslate"><span class="pre">0</span></code> disables capture</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>See <a class="reference internal" href="#response">Response</a> for HTTP statuses, result fields, and value encodings.</p>
+</section>
+</section>
+<section id="operations">
+<h2>Operations<a class="headerlink" href="#operations" title="Link to this heading">¶</a></h2>
+<p>Every instruction is a JSON object with an <code class="docutils literal notranslate"><span class="pre">op</span></code> field. The four values are
+<code class="docutils literal notranslate"><span class="pre">upload</span></code>, <code class="docutils literal notranslate"><span class="pre">get_function</span></code>, <code class="docutils literal notranslate"><span class="pre">run</span></code> and <code class="docutils literal notranslate"><span class="pre">return</span></code>.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Common field</p></th>
+<th class="head"><p>Meaning</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">op</span></code></p></td>
+<td><p>Required operation name; determines the accepted fields</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">id</span></code></p></td>
+<td><p>Required, nonempty, unique identifier when the operation produces a handle; absent for file uploads and <code class="docutils literal notranslate"><span class="pre">return</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{&quot;$ref&quot;:</span> <span class="pre">&quot;id&quot;}</span></code></p></td>
+<td><p>A reference value naming an earlier handle; it is not a top-level instruction field</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>A handle names a value inside this request. <code class="docutils literal notranslate"><span class="pre">upload</span></code> except file upload,
+<code class="docutils literal notranslate"><span class="pre">get_function</span></code> and <code class="docutils literal notranslate"><span class="pre">run</span></code> produce handles. References must have exactly the <code class="docutils literal notranslate"><span class="pre">$ref</span></code>
+key and cannot refer forward or cross request boundaries. Each operation below
+specifies where references are resolved. Return keys are unique in a separate
+namespace from instruction identifiers. Each field table is exhaustive:
+unlisted fields are rejected.</p>
+<section id="upload">
+<h3>upload<a class="headerlink" href="#upload" title="Link to this heading">¶</a></h3>
+<p>Upload source or binary data. A file upload materializes a file; other kinds
+produce a handle.</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"upload"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"module"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"module"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"def add_one(x): return x + 1"</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><a id="fields"></a></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Field</p></th>
+<th class="head"><p>Kinds</p></th>
+<th class="head"><p>Required for</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">op</span></code></p></td>
+<td><p>all</p></td>
+<td><p>all</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;upload&quot;</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">id</span></code></p></td>
+<td><p>module, tensor, bytes, library</p></td>
+<td><p>module, tensor, bytes, library</p></td>
+<td><p>Unique handle name; rejected for file</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">kind</span></code></p></td>
+<td><p>all</p></td>
+<td><p>all</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;module&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;tensor&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;bytes&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;file&quot;</span></code>, or <code class="docutils literal notranslate"><span class="pre">&quot;library&quot;</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">source</span></code></p></td>
+<td><p>module</p></td>
+<td><p>module</p></td>
+<td><p>UTF-8 Python or CUDA source defining a module</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">language</span></code></p></td>
+<td><p>module</p></td>
+<td><p>—</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;python&quot;</span></code> (default) or <code class="docutils literal notranslate"><span class="pre">&quot;cuda&quot;</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">blob</span></code></p></td>
+<td><p>tensor, bytes, file, library</p></td>
+<td><p>tensor, bytes, file, library</p></td>
+<td><p>SHA-256 of the raw bytes</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">path</span></code></p></td>
+<td><p>file</p></td>
+<td><p>file</p></td>
+<td><p>Relative destination in the request working directory</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">dtype</span></code></p></td>
+<td><p>tensor</p></td>
+<td><p>tensor</p></td>
+<td><p>Tensor data type</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">shape</span></code></p></td>
+<td><p>tensor</p></td>
+<td><p>tensor</p></td>
+<td><p>Tensor shape</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><a id="details"></a></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Kind</p></th>
+<th class="head"><p>Content and result</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><a id="module"></a><code class="docutils literal notranslate"><span class="pre">module</span></code></p></td>
+<td><p>Inline <code class="docutils literal notranslate"><span class="pre">source</span></code>. <code class="docutils literal notranslate"><span class="pre">language=&quot;python&quot;</span></code> executes it to form a namespace; <code class="docutils literal notranslate"><span class="pre">language=&quot;cuda&quot;</span></code> retains it for compilation. The handle binds the whole module.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a id="tensor"></a><code class="docutils literal notranslate"><span class="pre">tensor</span></code></p></td>
+<td><p>Raw contiguous row-major bytes, copied to the assigned GPU. The byte length must equal <code class="docutils literal notranslate"><span class="pre">product(shape)</span> <span class="pre">*</span> <span class="pre">dtype.itemsize</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><a id="bytes"></a><code class="docutils literal notranslate"><span class="pre">bytes</span></code></p></td>
+<td><p>The blob’s bytes unchanged in CPU memory. Pass them to uploaded Python to parse files or other binary formats.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">file</span></code></p></td>
+<td><p>Materialize the blob at <code class="docutils literal notranslate"><span class="pre">path</span></code> in the request workspace. Creates no handle, rejects <code class="docutils literal notranslate"><span class="pre">id</span></code>, and needs no GPU. See the file rules below.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">library</span></code></p></td>
+<td><p>An ELF shared object for the server’s platform, loaded with <code class="docutils literal notranslate"><span class="pre">tvm_ffi.load_module</span></code>. The handle binds the loaded module; see <a class="reference internal" href="#library">Library</a>.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><a id="cuda-c-modules"></a>
+<a id="cutedsl-modules"></a>
+<a id="triton-modules"></a></p>
+<p>For modules, <code class="docutils literal notranslate"><span class="pre">get_function</span></code> selects an object from the namespace or CUDA source.
+The object need not be directly callable: a compiler tool may consume it first.
+All Python-based kernel languages use the same module upload shape; uploaded
+harness code handles compilation. See the
+<a class="reference internal" href="../tutorials/benchmark-kernel.html#on-a-gpu-server"><span class="std std-ref">benchmark tutorial</span></a>.</p>
+<p>For each uncached binary upload, supply the bytes in a multipart part named
+<code class="docutils literal notranslate"><span class="pre">blob:&lt;sha256&gt;</span></code>. For example:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">[</span>
+<span class="w">  </span><span class="p">{</span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"upload"</span><span class="p">,</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"input"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"tensor"</span><span class="p">,</span><span class="w"> </span><span class="nt">"blob"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;sha256&gt;"</span><span class="p">,</span>
+<span class="w">   </span><span class="nt">"dtype"</span><span class="p">:</span><span class="w"> </span><span class="s2">"float16"</span><span class="p">,</span><span class="w"> </span><span class="nt">"shape"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">32</span><span class="p">,</span><span class="w"> </span><span class="mi">128</span><span class="p">]},</span>
+<span class="w">  </span><span class="p">{</span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"upload"</span><span class="p">,</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"file"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bytes"</span><span class="p">,</span><span class="w"> </span><span class="nt">"blob"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;sha256&gt;"</span><span class="p">},</span>
+<span class="w">  </span><span class="p">{</span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"upload"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"file"</span><span class="p">,</span><span class="w"> </span><span class="nt">"blob"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;sha256&gt;"</span><span class="p">,</span><span class="w"> </span><span class="nt">"path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"data/tensor.bin"</span><span class="p">}</span>
+<span class="p">]</span>
+</pre></div>
+</div>
+<p id="file"><strong>File upload rules</strong></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Rule</p></th>
+<th class="head"><p>Behavior</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Path</p></td>
+<td><p>Relative POSIX path naming a file. Rejects <code class="docutils literal notranslate"><span class="pre">..</span></code> components, backslashes, and NUL.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Normalization</p></td>
+<td><p>Removes <code class="docutils literal notranslate"><span class="pre">.</span></code> and repeated <code class="docutils literal notranslate"><span class="pre">/</span></code> components: <code class="docutils literal notranslate"><span class="pre">./data//tensor.bin</span></code> becomes <code class="docutils literal notranslate"><span class="pre">data/tensor.bin</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p>Conflicts</p></td>
+<td><p>Normalized paths must be unique and cannot conflict as a file and directory; a program cannot upload both <code class="docutils literal notranslate"><span class="pre">data</span></code> and <code class="docutils literal notranslate"><span class="pre">data/tensor.bin</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Filesystem access</p></td>
+<td><p>Creates a regular file with mode <code class="docutils literal notranslate"><span class="pre">0600</span></code> and missing parent directories with mode <code class="docutils literal notranslate"><span class="pre">0700</span></code>. Creates and opens every component without following symbolic links.</p></td>
+</tr>
+<tr class="row-even"><td><p>Workspace</p></td>
+<td><p>A fresh temporary working directory per request, owned by the parent process and removed after completion, failure, timeout, or worker crash.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Lifetime</p></td>
+<td><p>File uploads cannot be referenced or returned as handles. Blob cache entries remain available after materialized files are removed.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<section id="library">
+<h4>Library<a class="headerlink" href="#library" title="Link to this heading">¶</a></h4>
+<p>A library is an already-built shared object, whether its bytes came from the
+client’s toolchain or a preceding CPU-server request. The GPU server compiles
+nothing:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"upload"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"kernels"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"library"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"blob"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;sha256&gt;"</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">blob</span></code> names the bytes of an ELF shared object for the server’s platform. The
+server loads it with <code class="docutils literal notranslate"><span class="pre">tvm_ffi.load_module</span></code> and binds the resulting module.
+Later <code class="docutils literal notranslate"><span class="pre">get_function</span></code> instructions may bind any number of its exports. A library
+that cannot be loaded, or a requested function that is absent, fails with a
+<code class="docutils literal notranslate"><span class="pre">compile</span></code> error. Nothing else about the object is inspected, so any producer
+TVM FFI can load is accepted. Three are usual:</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Producer</p></th>
+<th class="head"><p>Export</p></th>
+<th class="head"><p>Server requirement</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>C++ / <code class="docutils literal notranslate"><span class="pre">tvm_ffi.cpp.build</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">TVM_FFI_DLL_EXPORT_TYPED_FUNC</span></code> emits <code class="docutils literal notranslate"><span class="pre">__tvm_ffi_&lt;name&gt;</span></code>; <code class="docutils literal notranslate"><span class="pre">tvm_ffi.cpp.build</span></code> applies it automatically. A code generator can emit the symbol directly.</p></td>
+<td><p>TVM FFI</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">tvm.Executable.export_library</span></code></p></td>
+<td><p>Embedded module blob</p></td>
+<td><p>TVM installed, including the loader registered by its CUDA runtime</p></td>
+</tr>
+<tr class="row-even"><td><p>CuTeDSL with <code class="docutils literal notranslate"><span class="pre">--enable-tvm-ffi</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">__tvm_ffi_&lt;name&gt;</span></code>, linked against <code class="docutils literal notranslate"><span class="pre">libcute_dsl_runtime.so</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">versions</span></code> must report <code class="docutils literal notranslate"><span class="pre">cutlass</span></code>. Building against a newer cutlass than the server’s fails to load, naming the missing symbol.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The function takes DLPack-compatible tensors, and its device code must be built
+for the architecture <code class="docutils literal notranslate"><span class="pre">GET</span> <span class="pre">/health</span></code> reports. Building for another one fails later,
+at launch, with <code class="docutils literal notranslate"><span class="pre">cudaErrorNoKernelImageForDevice</span></code>.</p>
+<p>The exported function has this shape — the body does not matter, only the interface.
+Exporting it from C++:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tvm/ffi/container/tensor.h&gt;</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">add_one</span><span class="p">(</span><span class="n">tvm</span><span class="o">::</span><span class="n">ffi</span><span class="o">::</span><span class="n">TensorView</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">tvm</span><span class="o">::</span><span class="n">ffi</span><span class="o">::</span><span class="n">TensorView</span><span class="w"> </span><span class="n">y</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* launch a kernel */</span><span class="w"> </span><span class="p">}</span>
+<span class="n">TVM_FFI_DLL_EXPORT_TYPED_FUNC</span><span class="p">(</span><span class="n">add_one</span><span class="p">,</span><span class="w"> </span><span class="n">add_one</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Exporting the same interface from TIRx, where the function’s own name becomes
+the exported function name and naming the target explicitly let a client build without a GPU
+of its own:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">tvm.script</span><span class="w"> </span><span class="kn">import</span> <span class="n">tirx</span> <span class="k">as</span> <span class="n">T</span>
+
+
+<span class="nd">@T</span><span class="o">.</span><span class="n">prim_func</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">add_one</span><span class="p">(</span><span class="n">A</span><span class="p">:</span> <span class="n">T</span><span class="o">.</span><span class="n">Buffer</span><span class="p">((</span><span class="mi">256</span><span class="p">,),</span> <span class="s2">"float32"</span><span class="p">),</span> <span class="n">B</span><span class="p">:</span> <span class="n">T</span><span class="o">.</span><span class="n">Buffer</span><span class="p">((</span><span class="mi">256</span><span class="p">,),</span> <span class="s2">"float32"</span><span class="p">)):</span> <span class="o">...</span>  <span class="c1"># kernel body</span>
+
+
+<span class="n">target</span> <span class="o">=</span> <span class="n">tvm</span><span class="o">.</span><span class="n">target</span><span class="o">.</span><span class="n">Target</span><span class="p">({</span><span class="s2">"kind"</span><span class="p">:</span> <span class="s2">"cuda"</span><span class="p">,</span> <span class="s2">"arch"</span><span class="p">:</span> <span class="s2">"sm_100a"</span><span class="p">})</span>
+<span class="k">with</span> <span class="n">target</span><span class="p">:</span>  <span class="c1"># the tirx pipeline reads the arch from Target.current()</span>
+    <span class="n">executable</span> <span class="o">=</span> <span class="n">tvm</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="n">tvm</span><span class="o">.</span><span class="n">IRModule</span><span class="p">({</span><span class="s2">"add_one"</span><span class="p">:</span> <span class="n">add_one</span><span class="p">}),</span> <span class="n">target</span><span class="o">=</span><span class="n">target</span><span class="p">,</span> <span class="n">tir_pipeline</span><span class="o">=</span><span class="s2">"tirx"</span><span class="p">)</span>
+<span class="n">executable</span><span class="o">.</span><span class="n">export_library</span><span class="p">(</span><span class="s2">"add_one.so"</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>CuTeDSL exports a relocatable object rather than a shared one, so it is the one
+route with a link step. <code class="docutils literal notranslate"><span class="pre">cute.compile</span></code> specializes on the tensors it is handed,
+so they must have the shape and dtype the kernel will be called with:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">compiled</span> <span class="o">=</span> <span class="n">cute</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="n">add_one</span><span class="p">,</span> <span class="n">src</span><span class="p">,</span> <span class="n">dst</span><span class="p">,</span> <span class="n">options</span><span class="o">=</span><span class="s2">"--enable-tvm-ffi"</span><span class="p">)</span>
+<span class="n">compiled</span><span class="o">.</span><span class="n">export_to_c</span><span class="p">(</span><span class="s2">"add_one.o"</span><span class="p">,</span> <span class="s2">"add_one"</span><span class="p">,</span> <span class="n">export_only_tvm_ffi_symbols</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">aot_config</span></code> reports the link flags. <code class="docutils literal notranslate"><span class="pre">--no-undefined</span></code> is worth passing because
+the alternative — linking the static runtime archive instead — succeeds while
+leaving symbols that only fail later, at load:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>g++<span class="w"> </span>-shared<span class="w"> </span>-o<span class="w"> </span>add_one.so<span class="w"> </span>add_one.o<span class="w"> </span>-Wl,--no-undefined<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="k">$(</span>tvm-ffi-config<span class="w"> </span>--ldflags<span class="k">)</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="k">$(</span>python<span class="w"> </span>-m<span class="w"> </span>cutlass.cute.export.aot_config<span class="w"> </span>--ldflags<span class="w"> </span>--libs<span class="w"> </span>--with-tvm-ffi<span class="k">)</span>
+</pre></div>
+</div>
+<p>Every route leaves a file on disk, and the upload carries its bytes: <code class="docutils literal notranslate"><span class="pre">blob</span></code> is
+their SHA-256 and the bytes themselves travel as the matching <code class="docutils literal notranslate"><span class="pre">blob:&lt;sha256&gt;</span></code>
+part, exactly as a tensor’s do.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">data</span> <span class="o">=</span> <span class="n">pathlib</span><span class="o">.</span><span class="n">Path</span><span class="p">(</span><span class="s2">"add_one.so"</span><span class="p">)</span><span class="o">.</span><span class="n">read_bytes</span><span class="p">()</span>
+<span class="n">upload</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">"op"</span><span class="p">:</span> <span class="s2">"upload"</span><span class="p">,</span>
+    <span class="s2">"id"</span><span class="p">:</span> <span class="s2">"kernels"</span><span class="p">,</span>
+    <span class="s2">"kind"</span><span class="p">:</span> <span class="s2">"library"</span><span class="p">,</span>
+    <span class="s2">"blob"</span><span class="p">:</span> <span class="n">hashlib</span><span class="o">.</span><span class="n">sha256</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">.</span><span class="n">hexdigest</span><span class="p">(),</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Select the exported function, then call it; no compile instruction appears.</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">[</span>
+<span class="w">  </span><span class="p">{</span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"get_function"</span><span class="p">,</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"kernel"</span><span class="p">,</span>
+<span class="w">   </span><span class="nt">"module"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"$ref"</span><span class="p">:</span><span class="w"> </span><span class="s2">"kernels"</span><span class="p">},</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"add_one"</span><span class="p">},</span>
+<span class="w">  </span><span class="p">{</span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"run"</span><span class="p">,</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"invoke"</span><span class="p">,</span><span class="w"> </span><span class="nt">"fn"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"$ref"</span><span class="p">:</span><span class="w"> </span><span class="s2">"kernel"</span><span class="p">},</span>
+<span class="w">   </span><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"$ref"</span><span class="p">:</span><span class="w"> </span><span class="s2">"x"</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="nt">"$ref"</span><span class="p">:</span><span class="w"> </span><span class="s2">"y"</span><span class="p">}]}</span>
+<span class="p">]</span>
+</pre></div>
+</div>
+<p><a id="get_function"></a></p>
+</section>
+</section>
+<section id="get-function">
+<h3>get_function<a class="headerlink" href="#get-function" title="Link to this heading">¶</a></h3>
+<p>Select a named object from an earlier module or library upload.</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"get_function"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"add_one"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"module"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"$ref"</span><span class="p">:</span><span class="w"> </span><span class="s2">"module"</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"add_one"</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><a id="id1"></a></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Field</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head text-right"><p>Required</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">op</span></code></p></td>
+<td><p>string</p></td>
+<td class="text-right"><p>yes</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;get_function&quot;</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">id</span></code></p></td>
+<td><p>string</p></td>
+<td class="text-right"><p>yes</p></td>
+<td><p>Handle for the callable</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">module</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{&quot;$ref&quot;:</span> <span class="pre">id}</span></code></p></td>
+<td class="text-right"><p>yes</p></td>
+<td><p>Earlier <code class="docutils literal notranslate"><span class="pre">module</span></code> or <code class="docutils literal notranslate"><span class="pre">library</span></code> upload</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">name</span></code></p></td>
+<td><p>string</p></td>
+<td class="text-right"><p>yes</p></td>
+<td><p>Non-empty function or object name</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">cpu_only</span></code></p></td>
+<td><p>boolean</p></td>
+<td class="text-right"><p>no</p></td>
+<td><p>Defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code>; <code class="docutils literal notranslate"><span class="pre">true</span></code> declares that the function does not access the GPU</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><a id="id2"></a></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Source</p></th>
+<th class="head"><p>Selection behavior</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Python module</p></td>
+<td><p>Looks up <code class="docutils literal notranslate"><span class="pre">name</span></code> in the executed namespace.</p></td>
+</tr>
+<tr class="row-odd"><td><p>CUDA module</p></td>
+<td><p>Returns an object with the uploaded text as <code class="docutils literal notranslate"><span class="pre">source</span></code> and the selected function name as <code class="docutils literal notranslate"><span class="pre">name</span></code>, for a compiler to consume. Uploading <code class="docutils literal notranslate"><span class="pre">&quot;void</span> <span class="pre">add()</span> <span class="pre">{}&quot;</span></code> and selecting <code class="docutils literal notranslate"><span class="pre">&quot;add&quot;</span></code> yields <code class="docutils literal notranslate"><span class="pre">source</span> <span class="pre">==</span> <span class="pre">&quot;void</span> <span class="pre">add()</span> <span class="pre">{}&quot;</span></code> and <code class="docutils literal notranslate"><span class="pre">name</span> <span class="pre">==</span> <span class="pre">&quot;add&quot;</span></code>. C++ <code class="docutils literal notranslate"><span class="pre">main</span></code> and non-identifiers are rejected.</p></td>
+</tr>
+<tr class="row-even"><td><p>TVM-FFI library</p></td>
+<td><p>Calls the loaded module’s <code class="docutils literal notranslate"><span class="pre">get_function</span></code>. The selected function keeps its defining module alive.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Given a library that exports <code class="docutils literal notranslate"><span class="pre">init</span></code> and <code class="docutils literal notranslate"><span class="pre">step</span></code>, the Python client writes:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"kernels"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"library"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">library_bytes</span><span class="p">)</span>
+<span class="n">init</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"init"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"init"</span><span class="p">)</span>
+<span class="n">step</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"step"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"step"</span><span class="p">)</span>
+<span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"initialize"</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="n">init</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">input_tensor</span><span class="p">])</span>
+<span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"invoke"</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="n">step</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">output_tensor</span><span class="p">])</span>
+</pre></div>
+</div>
+<p>Module and function handles are request-local capabilities and cannot be
+returned in a response.</p>
+<p>A function declared <code class="docutils literal notranslate"><span class="pre">cpu_only</span></code> touches no GPU. A <code class="docutils literal notranslate"><span class="pre">run</span></code> of that handle releases
+the worker’s GPU lease first, and a CUDA runtime or driver API call from it, as
+seen by CUPTI, fails the instruction with error kind <code class="docutils literal notranslate"><span class="pre">gpu_access</span></code>. The check is
+best effort: it sees a call only after it has begun, and none from a child
+process. The declaration applies to the handle as a <code class="docutils literal notranslate"><span class="pre">run</span></code> target only.</p>
+</section>
+<section id="run">
+<h3>run<a class="headerlink" href="#run" title="Link to this heading">¶</a></h3>
+<p>Call a function and bind the value it returns. Here <code class="docutils literal notranslate"><span class="pre">add_one</span></code> and <code class="docutils literal notranslate"><span class="pre">x</span></code> refer to
+earlier instructions.</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"run"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"y"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"fn"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"$ref"</span><span class="p">:</span><span class="w"> </span><span class="s2">"add_one"</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"$ref"</span><span class="p">:</span><span class="w"> </span><span class="s2">"x"</span><span class="p">}]</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><a id="id3"></a></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Field</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Required</p></th>
+<th class="head"><p>Meaning</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">op</span></code></p></td>
+<td><p>string</p></td>
+<td><p>yes</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">run</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">id</span></code></p></td>
+<td><p>string</p></td>
+<td><p>yes</p></td>
+<td><p>Unique handle for the result</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">fn</span></code></p></td>
+<td><p>reference</p></td>
+<td><p>yes</p></td>
+<td><p>An earlier callable handle, <code class="docutils literal notranslate"><span class="pre">{&quot;$ref&quot;:</span> <span class="pre">id}</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">args</span></code></p></td>
+<td><p>array</p></td>
+<td><p>no</p></td>
+<td><p>Positional arguments, default <code class="docutils literal notranslate"><span class="pre">[]</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><a id="id4"></a></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Value in <code class="docutils literal notranslate"><span class="pre">args</span></code></p></th>
+<th class="head"><p>Passed to the callable</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Top-level <code class="docutils literal notranslate"><span class="pre">{&quot;$ref&quot;:</span> <span class="pre">id}</span></code></p></td>
+<td><p>Value of the earlier handle</p></td>
+</tr>
+<tr class="row-odd"><td><p>Reference-shaped object nested in a list or object</p></td>
+<td><p>Literal JSON; not resolved</p></td>
+</tr>
+<tr class="row-even"><td><p>Other JSON value</p></td>
+<td><p>Literal value</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Selecting an object with <code class="docutils literal notranslate"><span class="pre">get_function</span></code> does not prove it is callable; using a
+non-callable object here fails at execution. <code class="docutils literal notranslate"><span class="pre">run</span></code> binds the computed value but
+does not include it in the response; add a <code class="docutils literal notranslate"><span class="pre">return</span></code> to expose it.</p>
+<p>Uploaded Python can perform tasks such as allocation, compilation, correctness
+checks and measurement. A callable returned by a <code class="docutils literal notranslate"><span class="pre">run</span></code> can be used by a later
+<code class="docutils literal notranslate"><span class="pre">run</span></code>.</p>
+</section>
+<section id="return">
+<h3>return<a class="headerlink" href="#return" title="Link to this heading">¶</a></h3>
+<p>Select an earlier value for the response.</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"return"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"output"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"$ref"</span><span class="p">:</span><span class="w"> </span><span class="s2">"y"</span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><a id="id5"></a></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Field</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head text-right"><p>Required</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">op</span></code></p></td>
+<td><p>string</p></td>
+<td class="text-right"><p>yes</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;return&quot;</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">key</span></code></p></td>
+<td><p>string</p></td>
+<td class="text-right"><p>yes</p></td>
+<td><p>Unique key in the response <code class="docutils literal notranslate"><span class="pre">results</span></code> object</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">value</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{&quot;$ref&quot;:</span> <span class="pre">id}</span></code></p></td>
+<td class="text-right"><p>For value returns</p></td>
+<td><p>Earlier handle to return; omit <code class="docutils literal notranslate"><span class="pre">kind</span></code> and <code class="docutils literal notranslate"><span class="pre">path</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">kind</span></code></p></td>
+<td><p>string</p></td>
+<td class="text-right"><p>For file/folder returns</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;file&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;folder&quot;</span></code>; omit <code class="docutils literal notranslate"><span class="pre">value</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">path</span></code></p></td>
+<td><p>string or <code class="docutils literal notranslate"><span class="pre">{&quot;$ref&quot;:</span> <span class="pre">id}</span></code></p></td>
+<td class="text-right"><p>For file/folder returns</p></td>
+<td><p>Workspace path, supplied literally or through an earlier handle</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><a id="id6"></a></p>
+<p><code class="docutils literal notranslate"><span class="pre">return</span></code> has no <code class="docutils literal notranslate"><span class="pre">id</span></code> and creates no handle. Instructions run in the order given
+and a <code class="docutils literal notranslate"><span class="pre">return</span></code> may appear anywhere after the instruction it references, so a
+program can interleave returns with the uploads and runs that follow them. A
+<code class="docutils literal notranslate"><span class="pre">return</span></code> that has already run contributes its entry to <code class="docutils literal notranslate"><span class="pre">results</span></code> even if a later
+instruction fails.</p>
+<p><a id="file-and-folder-selection"></a></p>
+<p><strong>File and folder returns</strong></p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"return"</span><span class="p">,</span><span class="w"> </span><span class="nt">"key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"report"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"file"</span><span class="p">,</span><span class="w"> </span><span class="nt">"path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"outputs/report.txt"</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>To return a folder whose path is held in an earlier register:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"return"</span><span class="p">,</span><span class="w"> </span><span class="nt">"key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"debug"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"folder"</span><span class="p">,</span><span class="w"> </span><span class="nt">"path"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"$ref"</span><span class="p">:</span><span class="w"> </span><span class="s2">"output_path"</span><span class="p">}}</span>
+</pre></div>
+</div>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Rule</p></th>
+<th class="head"><p>Behavior</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Fields</p></td>
+<td><p>Exactly <code class="docutils literal notranslate"><span class="pre">op</span></code>, <code class="docutils literal notranslate"><span class="pre">key</span></code>, <code class="docutils literal notranslate"><span class="pre">kind</span></code>, and <code class="docutils literal notranslate"><span class="pre">path</span></code>. <code class="docutils literal notranslate"><span class="pre">kind</span></code> is <code class="docutils literal notranslate"><span class="pre">file</span></code> or <code class="docutils literal notranslate"><span class="pre">folder</span></code>; <code class="docutils literal notranslate"><span class="pre">path</span></code> is a literal string or an earlier reference resolving to one. Return keys are unique across all variants.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Paths</p></td>
+<td><p>Follow <a class="reference internal" href="#file">file-upload rules</a>, relative to the original request workspace even if code changes cwd.</p></td>
+</tr>
+<tr class="row-even"><td><p>Snapshot</p></td>
+<td><p>Contents are captured at that instruction, without holding the GPU lease. Folders include hidden files and empty directories; original metadata is omitted.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Rejected content</p></td>
+<td><p>Symlinks, special files, repeated directories, and observable changes during reads</p></td>
+</tr>
+<tr class="row-even"><td><p>Failures</p></td>
+<td><p>Missing paths, wrong types, invalid runtime paths, read failures, and collection limits fail that return with <code class="docutils literal notranslate"><span class="pre">serialization</span></code>. Failed returns add no result or binary parts; earlier returns survive ordinary instruction failures.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Size limit</p></td>
+<td><p>Contents are buffered in the response and count against <code class="docutils literal notranslate"><span class="pre">max_response_bytes</span></code> (default 256 MiB). <code class="docutils literal notranslate"><span class="pre">output_limit_bytes</span></code> controls only stdout/stderr.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="caching">
+<h2>Caching<a class="headerlink" href="#caching" title="Link to this heading">¶</a></h2>
+<p><a id="blob-cache"></a>
+<a id="memory-cache"></a>
+<a id="file-cache"></a></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Memory cache</p></th>
+<th class="head"><p>File cache</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Upload kinds</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tensor</span></code>, <code class="docutils literal notranslate"><span class="pre">bytes</span></code>, <code class="docutils literal notranslate"><span class="pre">library</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">file</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>Storage</p></td>
+<td><p>Python server process</p></td>
+<td><p>Persistent disk cache</p></td>
+</tr>
+<tr class="row-even"><td><p>Key</p></td>
+<td><p>SHA-256 of raw content</p></td>
+<td><p>SHA-256 of raw content</p></td>
+</tr>
+<tr class="row-odd"><td><p>Default budget</p></td>
+<td><p>16 GiB</p></td>
+<td><p>16384 MiB (16 GiB)</p></td>
+</tr>
+<tr class="row-even"><td><p>Budget setting</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cache_capacity_bytes</span></code> / <code class="docutils literal notranslate"><span class="pre">--cache-capacity-bytes</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">disk_cache_capacity_mbytes</span></code> / <code class="docutils literal notranslate"><span class="pre">--disk-cache-capacity-mbytes</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>Retention</p></td>
+<td><p>Less recently used, unpinned entries may be evicted. Objects larger than one quarter of the budget are not retained by default.</p></td>
+<td><p>Entries may be evicted, unavailable, or too large to retain.</p></td>
+</tr>
+<tr class="row-even"><td><p>Active requests</p></td>
+<td><p>Referenced cached bytes are pinned while the request executes.</p></td>
+<td><p>Requests retain their resolved bytes; eviction does not invalidate an admitted request.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Server restart</p></td>
+<td><p>Cache is lost.</p></td>
+<td><p>Entries can survive.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Module source travels inline and does not use either cache. Cached bytes do not
+preserve a previous tensor’s mutations, a compiled module, or an execution;
+instructions still create request-local values.</p>
+<p>The file cache defaults to <code class="docutils literal notranslate"><span class="pre">$XDG_CACHE_HOME/kcoral/files</span></code> when <code class="docutils literal notranslate"><span class="pre">XDG_CACHE_HOME</span></code>
+is absolute, otherwise <code class="docutils literal notranslate"><span class="pre">~/.cache/kcoral/files</span></code>. Set <code class="docutils literal notranslate"><span class="pre">disk_cache_dir</span></code> or
+<code class="docutils literal notranslate"><span class="pre">--disk-cache-dir</span></code> to change it. An empty directory option (<code class="docutils literal notranslate"><span class="pre">None</span></code> in Python) or
+zero capacity disables file caching; it does not move files into the memory cache.
+Storage failure or content too large to cache does not prevent execution when
+the request supplies the bytes.</p>
+<p>Materialized files live in a separate workspace per request. It is removed on
+completion, failure, timeout, or worker crash; cached content may remain.</p>
+<p>To use a cached upload, send its hash but omit its binary part. If required
+bytes are absent, the server returns before executing any instruction:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CACHE_MISS"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"request_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"7f61b94e-034a-4e80-b67d-eca52bb952cc"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"missing_blobs"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"&lt;sha256&gt;"</span><span class="p">]</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Resend the same program with the listed parts. The Python client does this
+automatically, then makes one final attempt with every local blob if another
+cache miss occurs. Cache retention is an optimization rather than a guarantee.</p>
+<p>The same digest may exist in either or both cache categories. A request using
+that digest for both a file and a tensor, byte string or library can share the
+resolved bytes; newly supplied content is offered to each referenced category.
+A hit in one category does not generally guarantee a hit in the other.</p>
+</section>
+<section id="response">
+<h2>Response<a class="headerlink" href="#response" title="Link to this heading">¶</a></h2>
+<p><a id="response-fields"></a></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-right"><p>HTTP</p></th>
+<th class="head"><p>Body</p></th>
+<th class="head"><p>Meaning</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-right"><p>200</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">status:</span> <span class="pre">COMPLETED</span></code></p></td>
+<td><p>Program completed</p></td>
+</tr>
+<tr class="row-odd"><td class="text-right"><p>200</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">status:</span> <span class="pre">FAILED</span></code></p></td>
+<td><p>An instruction failed or terminated its worker; <code class="docutils literal notranslate"><span class="pre">results</span></code> holds the returns that ran</p></td>
+</tr>
+<tr class="row-even"><td class="text-right"><p>200</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">status:</span> <span class="pre">CACHE_MISS</span></code></p></td>
+<td><p>Referenced blobs are missing; program did not run</p></td>
+</tr>
+<tr class="row-odd"><td class="text-right"><p>400</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">status:</span> <span class="pre">ERROR</span></code></p></td>
+<td><p>Malformed request or program, including duplicate JSON keys and NaN/Infinity</p></td>
+</tr>
+<tr class="row-even"><td class="text-right"><p>413</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">status:</span> <span class="pre">ERROR</span></code></p></td>
+<td><p>Request body exceeds the server’s size limit</p></td>
+</tr>
+<tr class="row-odd"><td class="text-right"><p>503</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">status:</span> <span class="pre">ERROR</span></code></p></td>
+<td><p>No worker is available; includes <code class="docutils literal notranslate"><span class="pre">Retry-After</span></code></p></td>
+</tr>
+<tr class="row-even"><td class="text-right"><p>504</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">status:</span> <span class="pre">ERROR</span></code>, <code class="docutils literal notranslate"><span class="pre">error.kind:</span> <span class="pre">timeout</span></code></p></td>
+<td><p>Execution timed out</p></td>
+</tr>
+<tr class="row-odd"><td class="text-right"><p>500</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">status:</span> <span class="pre">ERROR</span></code>, <code class="docutils literal notranslate"><span class="pre">error.kind:</span> <span class="pre">engine</span></code></p></td>
+<td><p>Worker failure outside an instruction, or server failure</p></td>
+</tr>
+<tr class="row-even"><td class="text-right"><p>500</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">status:</span> <span class="pre">ERROR</span></code>, <code class="docutils literal notranslate"><span class="pre">error.kind:</span> <span class="pre">response_too_large</span></code></p></td>
+<td><p>Results exceed the server’s response-size limit</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><a id="fields-1"></a></p>
+<p><a id="id7"></a></p>
+<p>A 200 response carries the fields below. A non-200 carries the smaller error
+body described under <a class="reference internal" href="#errors">Errors</a> instead.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Field</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Present</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">status</span></code></p></td>
+<td><p>string</p></td>
+<td><p>always</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">COMPLETED</span></code>, <code class="docutils literal notranslate"><span class="pre">FAILED</span></code>, or <code class="docutils literal notranslate"><span class="pre">CACHE_MISS</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">request_id</span></code></p></td>
+<td><p>string</p></td>
+<td><p>always</p></td>
+<td><p>Also sent as <code class="docutils literal notranslate"><span class="pre">X-Request-ID</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">queue_ms</span></code></p></td>
+<td><p>number</p></td>
+<td><p>run</p></td>
+<td><p>Worker wait time</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">elapsed_ms</span></code></p></td>
+<td><p>number</p></td>
+<td><p>run</p></td>
+<td><p>Worker execution and serialization time</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">lease_wait_ms</span></code></p></td>
+<td><p>number</p></td>
+<td><p>run</p></td>
+<td><p>Waiting for the GPU another worker held</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">lease_held_ms</span></code></p></td>
+<td><p>number</p></td>
+<td><p>run</p></td>
+<td><p>Holding the GPU — the request’s GPU time</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">results</span></code></p></td>
+<td><p>object</p></td>
+<td><p>run</p></td>
+<td><p>Entries for every <code class="docutils literal notranslate"><span class="pre">return</span></code> that ran; may be empty</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">error</span></code></p></td>
+<td><p>object</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">FAILED</span></code></p></td>
+<td><p>See <a class="reference internal" href="#errors">Errors</a></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">missing_blobs</span></code></p></td>
+<td><p>array</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">CACHE_MISS</span></code></p></td>
+<td><p>Blob hashes the server does not hold</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">stdout</span></code></p></td>
+<td><p>string</p></td>
+<td><p>run</p></td>
+<td><p>Captured standard output</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">stderr</span></code></p></td>
+<td><p>string</p></td>
+<td><p>run</p></td>
+<td><p>Captured standard error</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">stdout_truncated</span></code></p></td>
+<td><p>boolean</p></td>
+<td><p>run</p></td>
+<td><p>Whether <code class="docutils literal notranslate"><span class="pre">stdout</span></code> hit <code class="docutils literal notranslate"><span class="pre">output_limit_bytes</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">stderr_truncated</span></code></p></td>
+<td><p>boolean</p></td>
+<td><p>run</p></td>
+<td><p>Whether <code class="docutils literal notranslate"><span class="pre">stderr</span></code> hit <code class="docutils literal notranslate"><span class="pre">output_limit_bytes</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>“run” marks fields present whenever the worker returned an outcome, so on both
+<code class="docutils literal notranslate"><span class="pre">COMPLETED</span></code> and <code class="docutils literal notranslate"><span class="pre">FAILED</span></code> but not on <code class="docutils literal notranslate"><span class="pre">CACHE_MISS</span></code>.</p>
+<p>For a successful program, HTTP status is <code class="docutils literal notranslate"><span class="pre">200</span></code>:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"COMPLETED"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"request_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"7f61b94e-034a-4e80-b67d-eca52bb952cc"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"queue_ms"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.4</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"elapsed_ms"</span><span class="p">:</span><span class="w"> </span><span class="mf">812.6</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"lease_wait_ms"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"lease_held_ms"</span><span class="p">:</span><span class="w"> </span><span class="mf">1.4</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"results"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"timing"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"object"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"latency_ms_median"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"number"</span><span class="p">,</span><span class="w"> </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0073</span><span class="p">}</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"stdout"</span><span class="p">:</span><span class="w"> </span><span class="s2">""</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"stderr"</span><span class="p">:</span><span class="w"> </span><span class="s2">""</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"stdout_truncated"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"stderr_truncated"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">results</span></code> contains only values selected by <code class="docutils literal notranslate"><span class="pre">return</span></code>. <code class="docutils literal notranslate"><span class="pre">request_id</span></code> is also sent
+in the <code class="docutils literal notranslate"><span class="pre">X-Request-ID</span></code> header.</p>
+<p>The four timings decompose a request: <code class="docutils literal notranslate"><span class="pre">queue_ms</span></code> waiting for a worker, then
+<code class="docutils literal notranslate"><span class="pre">elapsed_ms</span></code> of execution, of which <code class="docutils literal notranslate"><span class="pre">lease_wait_ms</span></code> was spent waiting for the GPU
+and <code class="docutils literal notranslate"><span class="pre">lease_held_ms</span></code> holding it. What is left,
+<code class="docutils literal notranslate"><span class="pre">elapsed_ms</span> <span class="pre">-</span> <span class="pre">lease_wait_ms</span> <span class="pre">-</span> <span class="pre">lease_held_ms</span></code>, is execution without a GPU lease.
+<code class="docutils literal notranslate"><span class="pre">lease_held_ms</span></code> measures how long the request reserves the GPU, including any
+host work performed while holding the lease. Kernel measurements are reported
+separately by the uploaded program.</p>
+<section id="value-encoding">
+<h3>Value encoding<a class="headerlink" href="#value-encoding" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Type</p></th>
+<th class="head"><p>Encoding</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>null</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{&quot;type&quot;:</span> <span class="pre">&quot;null&quot;}</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>boolean</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{&quot;type&quot;:</span> <span class="pre">&quot;boolean&quot;,</span> <span class="pre">&quot;value&quot;:</span> <span class="pre">true}</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>integer</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{&quot;type&quot;:</span> <span class="pre">&quot;integer&quot;,</span> <span class="pre">&quot;value&quot;:</span> <span class="pre">42}</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>number</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{&quot;type&quot;:</span> <span class="pre">&quot;number&quot;,</span> <span class="pre">&quot;value&quot;:</span> <span class="pre">3.14}</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{&quot;type&quot;:</span> <span class="pre">&quot;string&quot;,</span> <span class="pre">&quot;value&quot;:</span> <span class="pre">&quot;hello&quot;}</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>array</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{&quot;type&quot;:</span> <span class="pre">&quot;array&quot;,</span> <span class="pre">&quot;value&quot;:</span> <span class="pre">[&lt;value&gt;,</span> <span class="pre">...]}</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>object</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{&quot;type&quot;:</span> <span class="pre">&quot;object&quot;,</span> <span class="pre">&quot;value&quot;:</span> <span class="pre">{&quot;&lt;key&gt;&quot;:</span> <span class="pre">&lt;value&gt;,</span> <span class="pre">...}}</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>bytes</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{&quot;type&quot;:</span> <span class="pre">&quot;bytes&quot;,</span> <span class="pre">&quot;part&quot;:</span> <span class="pre">&quot;return:0&quot;,</span> <span class="pre">&quot;sha256&quot;:</span> <span class="pre">&quot;&lt;sha256&gt;&quot;}</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>file</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{&quot;type&quot;:</span> <span class="pre">&quot;file&quot;,</span> <span class="pre">&quot;size&quot;:</span> <span class="pre">3,</span> <span class="pre">&quot;part&quot;:</span> <span class="pre">&quot;return:0&quot;,</span> <span class="pre">&quot;sha256&quot;:</span> <span class="pre">&quot;&lt;sha256&gt;&quot;}</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>folder</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{&quot;type&quot;:</span> <span class="pre">&quot;folder&quot;,</span> <span class="pre">&quot;files&quot;:</span> <span class="pre">{&quot;nested/a&quot;:</span> <span class="pre">&lt;file</span> <span class="pre">value&gt;},</span> <span class="pre">&quot;directories&quot;:</span> <span class="pre">[&quot;empty&quot;,</span> <span class="pre">&quot;nested&quot;]}</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>tensor</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{&quot;type&quot;:</span> <span class="pre">&quot;tensor&quot;,</span> <span class="pre">&quot;dtype&quot;:</span> <span class="pre">&quot;float16&quot;,</span> <span class="pre">&quot;shape&quot;:</span> <span class="pre">[32,</span> <span class="pre">128],</span> <span class="pre">&quot;part&quot;:</span> <span class="pre">&quot;return:0&quot;,</span> <span class="pre">&quot;sha256&quot;:</span> <span class="pre">&quot;&lt;sha256&gt;&quot;}</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Arrays and objects recursively contain encoded values. Object keys are unique
+strings with no ordering semantics. Numbers must be finite. Python lists and
+tuples both encode as <code class="docutils literal notranslate"><span class="pre">array</span></code>.</p>
+<p>If no <code class="docutils literal notranslate"><span class="pre">bytes</span></code>, <code class="docutils literal notranslate"><span class="pre">tensor</span></code>, or <code class="docutils literal notranslate"><span class="pre">file</span></code> appears, the response is <code class="docutils literal notranslate"><span class="pre">application/json</span></code>. Otherwise
+it is <code class="docutils literal notranslate"><span class="pre">multipart/form-data</span></code>:</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Part</p></th>
+<th class="head"><p>Content type</p></th>
+<th class="head text-right"><p>Required</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">application/json</span></code></p></td>
+<td class="text-right"><p>yes</p></td>
+<td><p>Response metadata and value tree</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">return:&lt;index&gt;</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">application/octet-stream</span></code></p></td>
+<td class="text-right"><p>conditional</p></td>
+<td><p>Raw bytes for a bytes, tensor, or file node</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Binary parts use depth-first numbering. Clients use <code class="docutils literal notranslate"><span class="pre">part</span></code> to locate data and
+verify <code class="docutils literal notranslate"><span class="pre">sha256</span></code>. Tensor data is C-contiguous, row-major, and little-endian; its
+length must match <code class="docutils literal notranslate"><span class="pre">dtype</span></code> and <code class="docutils literal notranslate"><span class="pre">shape</span></code>. A file’s <code class="docutils literal notranslate"><span class="pre">size</span></code> is a non-negative integer
+(not a boolean) and must match its binary part length.</p>
+<p>Folder <code class="docutils literal notranslate"><span class="pre">files</span></code> maps sorted relative paths to file values; <code class="docutils literal notranslate"><span class="pre">directories</span></code> lists
+sorted directory paths, including every ancestor. The selected root is implicit.
+Paths must be canonical under file-upload rules, unique, and free of file/directory
+conflicts. An empty folder has empty <code class="docutils literal notranslate"><span class="pre">files</span></code> and <code class="docutils literal notranslate"><span class="pre">directories</span></code>. Each file uses
+its own binary part with the usual depth-first numbering and integrity checks.</p>
+</section>
+<section id="errors">
+<h3>Errors<a class="headerlink" href="#errors" title="Link to this heading">¶</a></h3>
+<p>An instruction failure stops the program. Every <code class="docutils literal notranslate"><span class="pre">return</span></code> that already ran keeps
+its entry in <code class="docutils literal notranslate"><span class="pre">results</span></code>, so a program can checkpoint partial work by returning it
+before the instructions that might fail:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"FAILED"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"request_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"7f61b94e-034a-4e80-b67d-eca52bb952cc"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"queue_ms"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.4</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"elapsed_ms"</span><span class="p">:</span><span class="w"> </span><span class="mf">12.7</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"lease_wait_ms"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"lease_held_ms"</span><span class="p">:</span><span class="w"> </span><span class="mf">10.0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"results"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"timing"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"object"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"latency_ms_median"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"number"</span><span class="p">,</span><span class="w"> </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0073</span><span class="p">}</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"correctness"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"outputs differ: max_abs_err=0.5 exceeds atol=0.001"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"instruction_index"</span><span class="p">:</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"instruction_op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"run"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"instruction_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"check"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"traceback"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Traceback (most recent call last):\n  ..."</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"stdout"</span><span class="p">:</span><span class="w"> </span><span class="s2">""</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"stderr"</span><span class="p">:</span><span class="w"> </span><span class="s2">""</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"stdout_truncated"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"stderr_truncated"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The failing instruction itself contributes nothing: a <code class="docutils literal notranslate"><span class="pre">return</span></code> that fails while
+encoding adds neither a <code class="docutils literal notranslate"><span class="pre">results</span></code> entry nor binary parts.</p>
+<p>A <code class="docutils literal notranslate"><span class="pre">FAILED</span></code> response’s <code class="docutils literal notranslate"><span class="pre">error</span></code> describes that instruction:</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Field</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">kind</span></code></p></td>
+<td><p>string</p></td>
+<td><p>See kinds below</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">message</span></code></p></td>
+<td><p>string</p></td>
+<td><p>Human-readable description</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">instruction_index</span></code></p></td>
+<td><p>integer</p></td>
+<td><p>Zero-based position in <code class="docutils literal notranslate"><span class="pre">instructions</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">instruction_op</span></code></p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;upload&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;get_function&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;run&quot;</span></code>, or <code class="docutils literal notranslate"><span class="pre">&quot;return&quot;</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">instruction_id</span></code></p></td>
+<td><p>string | null</p></td>
+<td><p>The instruction’s <code class="docutils literal notranslate"><span class="pre">id</span></code>; <code class="docutils literal notranslate"><span class="pre">null</span></code> for <code class="docutils literal notranslate"><span class="pre">return</span></code> and file upload</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">traceback</span></code></p></td>
+<td><p>string</p></td>
+<td><p>Server-side traceback, truncated to 8192 bytes</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Instruction error kinds are <code class="docutils literal notranslate"><span class="pre">parse</span></code>, <code class="docutils literal notranslate"><span class="pre">compile</span></code>, <code class="docutils literal notranslate"><span class="pre">runtime</span></code>, <code class="docutils literal notranslate"><span class="pre">gpu_access</span></code>,
+<code class="docutils literal notranslate"><span class="pre">correctness</span></code>, <code class="docutils literal notranslate"><span class="pre">serialization</span></code>, <code class="docutils literal notranslate"><span class="pre">unavailable</span></code>, and <code class="docutils literal notranslate"><span class="pre">engine</span></code>. A <code class="docutils literal notranslate"><span class="pre">gpu_access</span></code>
+error means a <code class="docutils literal notranslate"><span class="pre">cpu_only</span></code> function that entered the CUDA API; it adds
+<code class="docutils literal notranslate"><span class="pre">cuda_call</span></code>, <code class="docutils literal notranslate"><span class="pre">location</span></code>, and <code class="docutils literal notranslate"><span class="pre">interfered_request_id</span></code>, and its <code class="docutils literal notranslate"><span class="pre">traceback</span></code> is
+the stack at that call.</p>
+<p><code class="docutils literal notranslate"><span class="pre">ERROR</span></code> is not a program outcome, so its body is much smaller: <code class="docutils literal notranslate"><span class="pre">status</span></code>,
+<code class="docutils literal notranslate"><span class="pre">request_id</span></code>, and an <code class="docutils literal notranslate"><span class="pre">error</span></code> of <code class="docutils literal notranslate"><span class="pre">kind</span></code> and <code class="docutils literal notranslate"><span class="pre">message</span></code> only, with no <code class="docutils literal notranslate"><span class="pre">results</span></code>,
+timings, or captured output.</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ERROR"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"request_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"7f61b94e-034a-4e80-b67d-eca52bb952cc"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"busy"</span><span class="p">,</span><span class="w"> </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"server saturated"</span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Its <code class="docutils literal notranslate"><span class="pre">kind</span></code> is <code class="docutils literal notranslate"><span class="pre">parse</span></code>, <code class="docutils literal notranslate"><span class="pre">request_too_large</span></code>, <code class="docutils literal notranslate"><span class="pre">busy</span></code>, <code class="docutils literal notranslate"><span class="pre">timeout</span></code>, <code class="docutils literal notranslate"><span class="pre">engine</span></code>, or
+<code class="docutils literal notranslate"><span class="pre">response_too_large</span></code> — a separate set from the instruction kinds above.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Failure</p></th>
+<th class="head"><p>Outcome and recovery</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Native uploaded code terminates its worker</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">FAILED</span></code> for the active instruction after the server replaces the worker</p></td>
+</tr>
+<tr class="row-odd"><td><p>CUDA error poisons the worker’s context</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">FAILED</span></code> for the active instruction; only that worker process is replaced before it accepts another program</p></td>
+</tr>
+<tr class="row-even"><td><p>Non-sticky CUDA launch error found while draining the request</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">FAILED</span></code>; the server clears the error and keeps the healthy worker</p></td>
+</tr>
+<tr class="row-odd"><td><p>Timeout, worker failure outside an instruction, or server failure</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ERROR</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="example">
+<h2>Example<a class="headerlink" href="#example" title="Link to this heading">¶</a></h2>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"instructions"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"upload"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"harness"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"module"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"def main(x): return x + 1"</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"get_function"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"main"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"module"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"$ref"</span><span class="p">:</span><span class="w"> </span><span class="s2">"harness"</span>
+<span class="w">      </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"main"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"cpu_only"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"run"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"output"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"fn"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"$ref"</span><span class="p">:</span><span class="w"> </span><span class="s2">"main"</span>
+<span class="w">      </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="mi">41</span>
+<span class="w">      </span><span class="p">]</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"return"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"output"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"$ref"</span><span class="p">:</span><span class="w"> </span><span class="s2">"output"</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"options"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"timeout_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>This program uploads its own harness and returns <code class="docutils literal notranslate"><span class="pre">42</span></code>; it needs no binary parts.
+The same upload/get_function/run shape supports GPU harnesses and compiler tools.</p>
+<p><a id="python-client"></a></p>
+<p>The Python package constructs request parts, hashes and response values for you.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Task</p></th>
+<th class="head"><p>Python client reference</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Submit a first request</p></td>
+<td><p><a class="reference internal" href="../getting-started/quickstart.html"><span class="std std-doc">Quickstart</span></a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Construct programs and manage clients</p></td>
+<td><p><a class="reference internal" href="writing-a-program.html"><span class="std std-doc">Program guide</span></a>; <a class="reference internal" href="../python-api/index.html"><span class="std std-doc">API signatures and errors</span></a></p></td>
+</tr>
+<tr class="row-even"><td><p>Upload files and folders</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">upload_folder</span></code> expands into ordinary file-upload instructions with no new operation. File uploads return no register. See <a class="reference internal" href="writing-a-program.html#files-used-by-uploaded-scripts"><span class="std std-ref">files used by uploaded scripts</span></a>.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Receive files and folders</p></td>
+<td><p>Results decode to <code class="docutils literal notranslate"><span class="pre">ReturnedFile</span></code> and <code class="docutils literal notranslate"><span class="pre">ReturnedFolder</span></code>. See <a class="reference internal" href="writing-a-program.html#returning-files-and-folders"><span class="std std-ref">client usage</span></a>.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="writing-a-program.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">Write a client program</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="../getting-started/quickstart.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">Your First Program</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">KCoral Protocol</a><ul>
+<li><a class="reference internal" href="#endpoints">Endpoints</a><ul>
+<li><a class="reference internal" href="#get-health">GET /health</a></li>
+<li><a class="reference internal" href="#post-execute">POST /execute</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#operations">Operations</a><ul>
+<li><a class="reference internal" href="#upload">upload</a><ul>
+<li><a class="reference internal" href="#library">Library</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#get-function">get_function</a></li>
+<li><a class="reference internal" href="#run">run</a></li>
+<li><a class="reference internal" href="#return">return</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#caching">Caching</a></li>
+<li><a class="reference internal" href="#response">Response</a><ul>
+<li><a class="reference internal" href="#value-encoding">Value encoding</a></li>
+<li><a class="reference internal" href="#errors">Errors</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#example">Example</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=4e2156e9"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    </body>
+</html>

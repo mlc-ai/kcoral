@@ -1,0 +1,74 @@
+/* Keep wide protocol tables and signatures within the reading column. */
+.table-wrapper {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.content .highlight {
+  border-radius: 0.4rem;
+}
+
+.content .sig {
+  overflow-wrap: anywhere;
+}
+
+.code-example {
+  margin: 1rem 0;
+  border: 1px solid var(--color-sidebar-background-border);
+  border-radius: 0.4rem;
+}
+
+.code-example > details > summary {
+  padding: 0.65rem 0.85rem;
+  cursor: pointer;
+}
+
+.code-example > details:not([open]) > summary {
+  border-top: 1px solid var(--color-sidebar-background-border);
+}
+
+.code-example > details > summary:focus-visible {
+  outline: 2px solid var(--color-brand-primary);
+  outline-offset: 2px;
+}
+
+.code-example div[class*="highlight-"] {
+  margin: 0;
+}
+
+.code-example:has(> details[open]) > .code-example-preview,
+.code-example-collapse,
+.code-example > details[open] .code-example-expand {
+  display: none;
+}
+
+.code-example > details[open] .code-example-collapse {
+  display: inline;
+}
+
+.version-switcher {
+  margin: 0.5rem 1rem 1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-sidebar-background-border);
+  border-radius: 0.4rem;
+  font-size: 0.875rem;
+}
+
+.version-switcher summary {
+  cursor: pointer;
+}
+
+.version-switcher ul {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.version-switcher a {
+  display: block;
+  padding: 0.25rem 0;
+}
+
+.version-switcher a[aria-current] {
+  font-weight: bold;
+}
