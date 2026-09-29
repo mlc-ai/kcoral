@@ -56,16 +56,3 @@ Open <http://127.0.0.1:8008/docs/>. The builder uses the current checkout for
 contain the documentation and its dependencies; it gets a separate environment
 so the API reference matches that version. Add `--latest-only` to skip tag builds.
 Output goes to `_site/`; a failed build preserves the previous site.
-
-## Publishing
-
-The Documentation workflow checks pull requests by building only `latest`.
-Pushes to `main` and version tags build the full site, commit `_site/` to this
-repository's `gh-pages` branch, and request a GitHub Pages build. No separate
-documentation repository or deployment secret is needed.
-
-In the repository's **Settings → Pages**, select **Deploy from a branch**, with
-`gh-pages` and `/ (root)`, and set the custom domain to `kcoral.mlc.ai`.
-The workflow writes the `CNAME` file and `.nojekyll` so Pages serves the generated
-Sphinx site directly. It explicitly requests a build because commits pushed with
-`GITHUB_TOKEN` do not trigger Pages automatically.

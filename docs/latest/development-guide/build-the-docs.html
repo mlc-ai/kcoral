@@ -364,18 +364,6 @@ contain the documentation and its dependencies; it gets a separate environment
 so the API reference matches that version. Add <code class="docutils literal notranslate"><span class="pre">--latest-only</span></code> to skip tag builds.
 Output goes to <code class="docutils literal notranslate"><span class="pre">_site/</span></code>; a failed build preserves the previous site.</p>
 </section>
-<section id="publishing">
-<h2>Publishing<a class="headerlink" href="#publishing" title="Link to this heading">¶</a></h2>
-<p>The Documentation workflow checks pull requests by building only <code class="docutils literal notranslate"><span class="pre">latest</span></code>.
-Pushes to <code class="docutils literal notranslate"><span class="pre">main</span></code> and version tags build the full site, commit <code class="docutils literal notranslate"><span class="pre">_site/</span></code> to this
-repository’s <code class="docutils literal notranslate"><span class="pre">gh-pages</span></code> branch, and request a GitHub Pages build. No separate
-documentation repository or deployment secret is needed.</p>
-<p>In the repository’s <strong>Settings → Pages</strong>, select <strong>Deploy from a branch</strong>, with
-<code class="docutils literal notranslate"><span class="pre">gh-pages</span></code> and <code class="docutils literal notranslate"><span class="pre">/</span> <span class="pre">(root)</span></code>, and set the custom domain to <code class="docutils literal notranslate"><span class="pre">kcoral.mlc.ai</span></code>.
-The workflow writes the <code class="docutils literal notranslate"><span class="pre">CNAME</span></code> file and <code class="docutils literal notranslate"><span class="pre">.nojekyll</span></code> so Pages serves the generated
-Sphinx site directly. It explicitly requests a build because commits pushed with
-<code class="docutils literal notranslate"><span class="pre">GITHUB_TOKEN</span></code> do not trigger Pages automatically.</p>
-</section>
 </section>
 
         </article>
@@ -432,7 +420,6 @@ Sphinx site directly. It explicitly requests a build because commits pushed with
             <ul>
 <li><a class="reference internal" href="#">Build the Docs</a><ul>
 <li><a class="reference internal" href="#versioned-site">Versioned site</a></li>
-<li><a class="reference internal" href="#publishing">Publishing</a></li>
 </ul>
 </li>
 </ul>
@@ -444,7 +431,7 @@ Sphinx site directly. It explicitly requests a build because commits pushed with
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=4e2156e9"></script>
+</div><script src="../_static/documentation_options.js?v=8611c96d"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
