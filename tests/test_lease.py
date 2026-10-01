@@ -130,3 +130,40 @@ def test_a_returned_worker_goes_to_the_longest_waiting_request():
     for thread in threads:
         thread.join(timeout=5)
     assert served == ["first", "second"]
+
+
+def test_only_one_replacement_enters_lease_fifo_while_requests_progress():
+    leases = GPULeases([0])
+    leases.acquire(0, "busy")
+    order = []
+    threads = []
+
+    def initialize(name):
+        with leases.initialization(0):
+            leases.acquire(0, name)
+            order.append(name)
+            leases.release(0, name)
+
+    for i in range(3):
+        t = threading.Thread(target=initialize, args=(f"init{i}",), daemon=True)
+        t.start()
+        threads.append(t)
+        until(lambda i=i: len(leases._initializers[0]) == i + 1)
+    until(lambda: leases.depth(0) == 2)
+
+    def request():
+        leases.acquire(0, "request")
+        order.append("request")
+        leases.release(0, "request")
+
+    t = threading.Thread(target=request, daemon=True)
+    t.start()
+    threads.append(t)
+    until(lambda: leases.depth(0) == 3)
+    leases.release(0, "busy")
+    for t in threads:
+        t.join(timeout=3)
+        assert not t.is_alive()
+    assert order == ["init0", "request", "init1", "init2"]
+    assert leases.depth(0) == 0
+    assert not leases._initializers[0]

@@ -46,6 +46,7 @@ class Runtime(Protocol):
     def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None: ...
     def forbid_gpu(self) -> AbstractContextManager[None]: ...
     def synchronize(self) -> None: ...
+    def prepare_to_release_gpu(self) -> None: ...
     def take_last_error(self) -> str | None: ...
     def reset(self) -> None: ...
 
@@ -68,6 +69,8 @@ def execute(
 
     The caller owns creation and cleanup of ``workspace_dir``. Production
     workers use a parent-owned directory so it can be removed if the child dies.
+    GPU ownership is retained after final cleanup. The caller must release it
+    when reusing the worker, or after a retiring worker process has exited.
     """
     workspace_dir = os.path.abspath(workspace_dir)
     with _working_directory(workspace_dir):
@@ -193,21 +196,14 @@ def _execute_in_workspace(
                     "engine", f"{type(exc).__name__}: {exc}", current_index, current
                 )
     finally:
-        # A CUDA fault often surfaces twice: once at an instruction-level sync and
-        # again while draining. Keep the first error, tell the owner this process is
-        # done, and attribute a fault seen only here to the instruction that ran.
+        # Handle destruction and reset can touch CUDA, even after a CPU-only tail.
+        lease.acquire()
         try:
-            _drop_gpu(runtime, lease)
-        except Exception as exc:
-            if error is None:
-                error = _instruction_error(
-                    "runtime", f"{type(exc).__name__}: {exc}", current_index, current
-                )
-            if cleanup_failed is not None:
-                cleanup_failed(exc)
-        else:
+            # A CUDA fault often surfaces twice: once at an instruction-level sync and
+            # again while draining. Keep the first error, tell the owner this process is
+            # done, and attribute a fault seen only here to the instruction that ran.
             try:
-                last_error = runtime.take_last_error()
+                runtime.synchronize()
             except Exception as exc:
                 if error is None:
                     error = _instruction_error(
@@ -216,24 +212,44 @@ def _execute_in_workspace(
                 if cleanup_failed is not None:
                     cleanup_failed(exc)
             else:
-                # A launch-configuration error can sit in CUDA's last-error slot
-                # without failing synchronize. Consume it here so it belongs to this
-                # request; reading clears it, and the context is still healthy.
-                if last_error is not None and error is not None and error["kind"] == "gpu_access":
-                    # The violation is the earlier fault, and the parent reads its fields.
-                    error["message"] += f"; CUDA also reports {last_error}"
-                elif last_error is not None:
-                    error = _instruction_error("runtime", last_error, current_index, current)
-        env.clear()
-        try:
-            runtime.reset()
-        except Exception as exc:
-            if error is None:
-                error = _instruction_error(
-                    "runtime", f"{type(exc).__name__}: {exc}", current_index, current
-                )
-            if cleanup_failed is not None:
-                cleanup_failed(exc)
+                try:
+                    last_error = runtime.take_last_error()
+                except Exception as exc:
+                    if error is None:
+                        error = _instruction_error(
+                            "runtime", f"{type(exc).__name__}: {exc}", current_index, current
+                        )
+                    if cleanup_failed is not None:
+                        cleanup_failed(exc)
+                else:
+                    # A launch-configuration error can sit in CUDA's last-error slot
+                    # without failing synchronize. Consume it here so it belongs to this
+                    # request; reading clears it, and the context is still healthy.
+                    if last_error is not None and error is not None and error["kind"] == "gpu_access":
+                        # The violation is the earlier fault, and the parent reads its fields.
+                        error["message"] += f"; CUDA also reports {last_error}"
+                    elif last_error is not None:
+                        error = _instruction_error("runtime", last_error, current_index, current)
+            env.clear()
+            try:
+                runtime.reset()
+            except Exception as exc:
+                if error is None:
+                    error = _instruction_error(
+                        "runtime", f"{type(exc).__name__}: {exc}", current_index, current
+                    )
+                if cleanup_failed is not None:
+                    cleanup_failed(exc)
+        finally:
+            try:
+                runtime.synchronize()
+            except Exception as exc:
+                if error is None:
+                    error = _instruction_error(
+                        "runtime", f"{type(exc).__name__}: {exc}", current_index, current
+                    )
+                if cleanup_failed is not None:
+                    cleanup_failed(exc)
 
     # A failure stops the program but keeps the returns that already ran.
     return ProgramOutcome(
@@ -325,10 +341,9 @@ def _place(
 
 
 def _drop_gpu(runtime: Runtime, lease: Lease) -> None:
-    """Give the GPU up, draining it first. Guarded on ``held`` so a run of
-    CPU-only instructions pays for one drain rather than one each."""
+    """Drain work and release unused memory before handing off the GPU."""
     if lease.held:
-        runtime.synchronize()
+        runtime.prepare_to_release_gpu()
         lease.release()
 
 

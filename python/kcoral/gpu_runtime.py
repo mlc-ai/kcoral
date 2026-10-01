@@ -188,6 +188,15 @@ class GPURuntime:
         # instruction error while the parent replaces this worker process.
         torch.cuda.synchronize()
 
+    def prepare_to_release_gpu(self) -> None:
+        """Release unused allocator cache so peers need not wait for final cleanup."""
+        import torch
+
+        self.synchronize()
+        if torch.cuda.memory_reserved() > torch.cuda.memory_allocated():
+            torch.cuda.empty_cache()
+            self.synchronize()
+
     def take_last_error(self) -> str | None:
         """Consume CUDA's thread-local last error, if one is pending.
 
@@ -295,10 +304,7 @@ def _cuda_error_api() -> _CUDAErrorAPI:
 
 
 def _warm_up() -> None:
-    """Pay the once-per-worker costs here rather than inside the first request,
-    which would hold the GPU throughout: creating the CUDA context, and importing
-    tvm and the CuTe DSL runtime, all cost more than a request should. Best-effort,
-    since the optional deps may be absent."""
+    """Initialize CUDA under the GPU lease; optional libraries are best-effort."""
     try:
         import torch
 
@@ -361,6 +367,12 @@ def describe_target() -> dict[str, str]:
 
 
 def describe_versions() -> dict[str, str]:
+    """Return a copy of this worker's startup dependency metadata."""
+    return dict(_describe_versions())
+
+
+@cache
+def _describe_versions() -> dict[str, str]:
     """Versions a client may want to match; optional dependencies are absent."""
     import torch
 
@@ -427,9 +439,7 @@ def _materialize_library(data: bytes) -> LoadedLibrary:
 
 
 def _register_library_loaders() -> None:
-    """Unpacking an ``export_library`` blob needs the loader the TVM CUDA runtime
-    registers. Both this and the CuTe DSL preload cost an import, so they happen on
-    the first library upload rather than at startup."""
+    """Load TVM and CuTe host libraries once, normally during worker preparation."""
     global _LOADERS_READY
     if _LOADERS_READY:
         return
@@ -468,10 +478,16 @@ class _GPURuntimeFactory:
     """Two-phase, picklable factory used by spawned GPU workers."""
 
     def prepare(self) -> Callable[[], GPURuntime]:
-        """Import mandatory dependencies without creating a CUDA context."""
+        """Load host dependencies without a CUDA context, outside the GPU lease."""
         _require_torch_and_ffi()
         import torch
 
+        # CuTe may query the driver version, but must not create a context.
+        _register_library_loaders()
+        describe_versions()
+        # Keep imported objects out of GC scans during CUDA startup.
+        gc.collect()
+        gc.freeze()
         if torch.cuda.is_initialized():  # guard future changes to preparation
             raise RuntimeError("GPU runtime preparation unexpectedly initialized CUDA")
         return GPURuntime

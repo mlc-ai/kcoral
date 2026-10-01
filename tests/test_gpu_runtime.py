@@ -1175,3 +1175,36 @@ def test_benchmark_budgets_survive_the_l2_flush():
     # not the tens an inflated estimate produced.
     assert result["latency_ms_median"] < 0.1
     assert result["warmup"] > 100 and result["repeat"] > 500
+
+
+def test_gpu_handoff_frees_unused_cache_and_preserves_live_tensor():
+    import torch
+
+    from kcoral.engine import _drop_gpu
+    from kcoral.gpu_runtime import GPURuntime
+
+    runtime = GPURuntime()
+    torch.cuda.empty_cache()
+    live = torch.full((4096,), 7, dtype=torch.int32, device="cuda")
+    temporary = torch.empty(256 * 1024**2, dtype=torch.uint8, device="cuda")
+    del temporary
+    pointer = live.data_ptr()
+    cached_before = torch.cuda.memory_reserved()
+
+    class Lease:
+        held = True
+
+        def release(self):
+            assert torch.cuda.memory_reserved() <= cached_before - 128 * 1024**2
+            self.held = False
+
+    lease = Lease()
+    try:
+        _drop_gpu(runtime, lease)
+        assert not lease.held
+        lease.held = True
+        assert live.data_ptr() == pointer
+        assert torch.all(live == 7).item()
+    finally:
+        del live
+        runtime.reset()

@@ -526,10 +526,17 @@ class _LeaseRecorder:
         self._lock = threading.Lock()
         self.log: list[str] = []
 
+    def initialization(self, gpu_id):
+        return self._inner.initialization(gpu_id)
+
     def acquire(self, gpu_id, holder):
+        # Reacquiring ownership does not start a new lease interval.
+        with self._inner._lock:
+            already_owned = self._inner._holder[gpu_id] is holder
         waited = self._inner.acquire(gpu_id, holder)
-        with self._lock:
-            self.log.append("grant")
+        if not already_owned:
+            with self._lock:
+                self.log.append("grant")
         return waited
 
     def release(self, gpu_id, holder):
@@ -591,7 +598,8 @@ def test_lease_invariants_hold_while_workers_die_under_load():
         held = 0
         for event in recorder.log:
             held += 1 if event == "grant" else -1
-            assert held <= 1, "two workers held one GPU at once"
+            assert 0 <= held <= 1, "unbalanced or overlapping GPU ownership"
+        assert held == 0, "a worker failed to release GPU ownership"
         assert recorder.depth(0) == 0, "a killed worker stranded the GPU"
     finally:
         pool.shutdown()
@@ -610,3 +618,76 @@ def test_worker_refuses_a_process_that_came_up_on_another_gpu():
     worker.device_uuid = "3333-4444"
     with pytest.raises(WorkerCrashed, match="not the requested"):
         worker._require_expected_device()
+
+
+def test_parent_waits_for_retiring_process_exit_before_releasing_gpu(tmp_path):
+    from collections import deque
+
+    reason = "request_limit"
+
+    class Connection:
+        messages = deque([
+            {'__lease__': 'acquire'},
+            {'__outcome__': 'outcome', '__retire_reason__': reason},
+        ])
+
+        def send(self, message):
+            pass
+
+        def poll(self, timeout):
+            return bool(self.messages)
+
+        def recv(self):
+            return self.messages.popleft()
+
+    class Leases:
+        held = False
+
+        def acquire(self, gpu_id, holder):
+            self.held = True
+            return 0.0
+
+        def release(self, gpu_id, holder):
+            self.held = False
+
+    leases = Leases()
+    observed = []
+    worker = object.__new__(Worker)
+    worker.gpu_id = 0
+    worker._conn = Connection()
+    worker._kill = lambda: observed.append(leases.held)
+    result = worker._run_in_workspace(None, 10, leases, str(tmp_path))
+    assert result.retire_reason == reason
+    assert observed == [True]
+    assert not leases.held
+
+
+def test_cpu_timeout_waits_for_gpu_before_destroying_live_context():
+    from types import SimpleNamespace
+
+    leases = GPULeases([0])
+    peer = object()
+    leases.acquire(0, peer)
+    worker = object.__new__(Worker)
+    worker.gpu_id = 0
+    worker._proc = SimpleNamespace(is_alive=lambda: True)
+    worker._closing = threading.Event()
+    observed = []
+    worker._kill = lambda: observed.append(leases._holder[0] is worker)
+    worker._start_process = lambda: None
+    worker._initialize_process = lambda: None
+    thread = threading.Thread(
+        target=worker._abandon_and_respawn, args=(leases, 'timeout'), daemon=True
+    )
+    thread.start()
+    try:
+        deadline = time.monotonic() + 3
+        while leases.depth(0) < 2 and not observed:
+            assert time.monotonic() < deadline
+            time.sleep(.005)
+        assert not observed, 'Context destruction must wait for the peer GPU stage'
+    finally:
+        leases.release(0, peer)
+        thread.join(timeout=3)
+    assert not thread.is_alive()
+    assert observed == [True]

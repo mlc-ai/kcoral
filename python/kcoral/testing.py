@@ -122,6 +122,9 @@ class FakeRuntime:
     def synchronize(self) -> None:
         pass
 
+    def prepare_to_release_gpu(self) -> None:
+        self.synchronize()
+
     def take_last_error(self) -> str | None:
         error = self._last_error
         self._last_error = None

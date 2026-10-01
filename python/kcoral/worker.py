@@ -161,7 +161,9 @@ def worker_main(
             # A fresh process gives every request the same context and allocator
             # state, even where native code left no detectable sticky error.
             retire_reason = "request_limit"
-        # Send the outcome before exiting; the pool schedules replacement.
+        # Retiring workers retain ownership until the parent waits for context teardown.
+        if retire_reason is None:
+            lease.release()
         response = {"__outcome__": outcome, "__retire_reason__": retire_reason}
         if sandbox_cleanup_error is not None:
             response["__sandbox_cleanup_error__"] = sandbox_cleanup_error
@@ -389,14 +391,13 @@ class Worker:
                 self._abandon_and_respawn(leases, "sandbox_cleanup")
                 raise WorkerCrashed(f"cannot prepare sandbox workspace: {exc}") from exc
             result = self._run_in_workspace(program, timeout, leases, sandboxing.WORKSPACE)
-            if result.retire_reason is not None:
-                # Stop surviving tasks before the parent touches their files.
-                self._kill()
-            else:
+            if result.retire_reason is None:
                 try:
                     sandbox.prepare()
                 except OSError:
-                    self._kill()
+                    wait_ms, held_ms = self._kill_with_gpu_lease(leases)
+                    result.lease_wait_ms += wait_ms
+                    result.lease_held_ms += held_ms
                     result.retire_reason = "sandbox_cleanup"
             return result
         with tempfile.TemporaryDirectory(prefix="kcoral-program-") as workspace_dir:
@@ -440,9 +441,12 @@ class Worker:
                 if isinstance(message, dict) and "__outcome__" in message:
                     if cleanup_error := message.get("__sandbox_cleanup_error__"):
                         self._log_failure("sandbox_cleanup", RuntimeError(cleanup_error))
+                    if message["__retire_reason__"] is not None:
+                        # Wait for CUDA context teardown before releasing ownership.
+                        self._kill()
                     if held_since is not None:
                         lease_held_ms += (time.monotonic() - held_since) * 1000
-                    leases.release(self.gpu_id, self)  # no-op if the engine already did
+                    leases.release(self.gpu_id, self)  # no-op if the child already released it
                     outcome = message["__outcome__"]
                     return WorkerResult(
                         outcome, lease_wait_ms, lease_held_ms, message["__retire_reason__"]
@@ -517,22 +521,38 @@ class Worker:
             pid=self.pid,
             reason=reason,
         )
-        self._kill()
+        self._kill_with_gpu_lease(leases)
         leases.abandon(self.gpu_id, self)
         if getattr(self, "_closing", None) is not None and self._closing.is_set():
             return
         try:
             self._start_process()
-            leases.acquire(self.gpu_id, self)
-            try:
-                self._initialize_process()
-            finally:
-                leases.release(self.gpu_id, self)
+            with leases.initialization(self.gpu_id):
+                if getattr(self, "_closing", None) is not None and self._closing.is_set():
+                    return
+                leases.acquire(self.gpu_id, self)
+                try:
+                    self._initialize_process()
+                finally:
+                    leases.release(self.gpu_id, self)
         except Exception as exc:
             if getattr(self, "_closing", None) is not None and self._closing.is_set():
                 return
             self._log_failure("respawn", exc)
             raise
+
+    def _kill_with_gpu_lease(self, leases: GPULeases | NoopLeases) -> tuple[float, float]:
+        """Hold the GPU lease through context teardown, even after CPU-stage timeouts."""
+        process = getattr(self, "_proc", None)
+        if self.gpu_id is None or process is None or not process.is_alive():
+            self._kill()
+            return 0.0, 0.0
+        wait_ms = leases.acquire(self.gpu_id, self)
+        started = time.monotonic()
+        self._kill()
+        held_ms = (time.monotonic() - started) * 1000
+        leases.release(self.gpu_id, self)
+        return wait_ms, held_ms
 
     def _description(self) -> str:
         return "CPU worker" if self.gpu_id is None else f"worker on GPU {self.gpu_id}"

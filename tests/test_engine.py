@@ -373,7 +373,14 @@ def test_file_upload_copies_nested_file_without_taking_the_gpu(tmp_path):
     digest = compute_blob_hash(raw)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    lease = RecordingLease()
+
+    class CleanupLease(RecordingLease):
+        def acquire(self):
+            # File staging has already finished when final cleanup takes the GPU.
+            assert (workspace / "nested/tensor").read_bytes() == raw
+            super().acquire()
+
+    lease = CleanupLease()
 
     outcome = execute(
         Program(
@@ -386,7 +393,7 @@ def test_file_upload_copies_nested_file_without_taking_the_gpu(tmp_path):
 
     assert outcome.status == "COMPLETED"
     assert (workspace / "nested/tensor").read_bytes() == raw
-    assert lease.acquires == 0
+    assert lease.acquires == 1 and lease.releases == 0  # retain final cleanup ownership
 
 
 def test_uploaded_module_reads_file_relative_to_request_workspace():
@@ -442,9 +449,15 @@ def test_file_upload_does_not_follow_workspace_symlink(tmp_path):
 def test_python_module_upload_takes_the_gpu():
     lease = RecordingLease()
     program = Program([Upload("k", "module", source="def main(x): return x")])
-    outcome = execute_for_test(program, FakeRuntime(), lease)
+
+    class PlacementRuntime(FakeRuntime):
+        def load_module(self, source):
+            assert lease.held
+            return super().load_module(source)
+
+    outcome = execute_for_test(program, PlacementRuntime(), lease)
     assert outcome.status == "COMPLETED"
-    assert lease.acquires == 1
+    assert lease.acquires == 1 and lease.releases == 0
 
 
 def test_a_cpu_only_function_hands_the_gpu_over_for_its_call():
@@ -464,7 +477,7 @@ def test_a_cpu_only_function_hands_the_gpu_over_for_its_call():
     outcome = execute_for_test(program, FakeRuntime(), lease)
     assert outcome.status == "COMPLETED"
     assert outcome.results["off"] == outcome.results["on"] == {"type": "integer", "value": 2}
-    assert lease.acquires == 2 and lease.releases == 2  # once for the call, once at the end
+    assert lease.acquires == 2 and lease.releases == 1  # final ownership stays with caller
 
 
 # Stands in for uploaded code that reaches the CUDA API despite its declaration.
@@ -553,4 +566,35 @@ def load(artifact):
     outcome = execute_for_test(program, runtime, lease)
     assert outcome.status == "COMPLETED", outcome.error
     assert outcome.results["result"] == {"type": "integer", "value": 42}
-    assert lease.acquires == lease.releases == 2
+    assert lease.acquires == 2 and lease.releases == 1
+
+
+def test_handle_destructors_run_before_gpu_lease_is_released():
+    lease = RecordingLease()
+    observed = []
+
+    class Module:
+        def finish(self):
+            return None
+
+        def __del__(self):
+            observed.append(("destroy", lease.held))
+
+    class Runtime(FakeRuntime):
+        def load_module(self, source, language="python"):
+            return Module()
+
+        def reset(self):
+            observed.append(("reset", lease.held))
+
+    program = Program(
+        [
+            Upload("module", "module", source="unused"),
+            GetFunction("fn", Ref("module"), "finish", cpu_only=True),
+            Run("done", Ref("fn"), []),
+        ]
+    )
+    result = execute_for_test(program, Runtime(), lease)
+    assert result.status == "COMPLETED"
+    assert observed == [("destroy", True), ("reset", True)]
+    assert lease.held

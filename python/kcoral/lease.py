@@ -15,6 +15,8 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:  # a type-only import: worker.py imports this module at runtime
@@ -98,6 +100,10 @@ class NoopLeases:
     def abandon(self, gpu_id: None, holder: Worker) -> None:
         pass
 
+    @contextmanager
+    def initialization(self, gpu_id: None) -> Iterator[None]:
+        yield
+
     def depth(self, gpu_id: None) -> int:
         return 0
 
@@ -114,6 +120,7 @@ class GPULeases:
 
     def __init__(self, gpu_ids: list[int]) -> None:
         self._lock = threading.Lock()
+        self._initializers: dict[int, deque[Ticket]] = {gpu: deque() for gpu in gpu_ids}
         self._holder: dict[int, Worker | None] = {gpu: None for gpu in gpu_ids}
         self._waiters: dict[int, deque[tuple[Worker, Ticket]]] = {gpu: deque() for gpu in gpu_ids}
         # Who held the GPU when: (from, to, request id), on the monotonic clock.
@@ -122,15 +129,40 @@ class GPULeases:
             gpu: deque(maxlen=256) for gpu in gpu_ids
         }
 
+    @contextmanager
+    def initialization(self, gpu_id: int) -> Iterator[None]:
+        """Admit initializers FIFO, one per GPU, so requests can interleave.
+
+        Host preparation runs before this gate; GPU work still needs a lease.
+        """
+        ticket = Ticket()
+        with self._lock:
+            pending = self._initializers[gpu_id]
+            pending.append(ticket)
+            if len(pending) == 1:
+                ticket.event.set()
+        ticket.event.wait()
+        try:
+            yield
+        finally:
+            with self._lock:
+                pending = self._initializers[gpu_id]
+                assert pending.popleft() is ticket
+                if pending:
+                    pending[0].event.set()
+
     def acquire(self, gpu_id: int, holder: Worker) -> float:
         """Block until ``holder`` owns the GPU; returns the wait in milliseconds.
 
         Unbounded on purpose: the caller leaves this out of the request's
         execution timeout, so a worker is never killed for a neighbour's
         slowness. FIFO bounds it instead, to one wait per worker ahead.
+        Acquiring an already-owned lease is a no-op, as with LeaseClient.
         """
         started = time.monotonic()
         with self._lock:
+            if self._holder[gpu_id] is holder:
+                return 0.0
             if self._holder[gpu_id] is None and not self._waiters[gpu_id]:
                 self._holder[gpu_id] = holder
                 self._held_since_ns[gpu_id] = time.monotonic_ns()

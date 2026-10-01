@@ -519,6 +519,7 @@ def main():
 @pytest.mark.parametrize("status", ["COMPLETED", "FAILED"])
 def test_parent_workspace_cleanup_preserves_program_outcome(monkeypatch, status):
     worker = Worker.__new__(Worker)
+    worker.gpu_id = None  # this fixture exercises the CPU/NoopLeases path
     worker._sandbox_mode = "bubblewrap"
     calls = []
 
