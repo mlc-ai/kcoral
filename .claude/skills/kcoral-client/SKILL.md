@@ -131,8 +131,7 @@ Each field is required for the listed kinds:
 | `shape` | tensor | Tensor shape |
 
 A module upload binds its full source namespace. Use `get_function` to select a
-named Python object. CUDA source is uploaded as a file and compiled by passing
-its path and export names to uploaded Python. Uploaded Python is ordinary code
+named Python object. Uploaded Python is ordinary code
 executed on the worker (torch included), so a plain function works as a
 reference baseline.
 
