@@ -133,8 +133,7 @@ unlisted fields are rejected.
 
 ### upload
 
-Upload source or binary data. Every upload produces a handle; a file upload
-binds the absolute path of the materialized file.
+Upload source or binary data and produce a handle.
 
 ```json
 {
@@ -147,16 +146,18 @@ binds the absolute path of the materialized file.
 
 <a id="fields"></a>
 
-| Field | Kinds | Required for | Notes |
-|---|---|---|---|
-| `op` | all | all | `"upload"` |
-| `id` | all | all | Unique handle name |
-| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, or `"library"` |
-| `source` | module | module | Python source executed to define a module |
-| `blob` | tensor, bytes, file, library | tensor, bytes, file, library | SHA-256 of the raw bytes |
-| `path` | file | file | Relative destination in the request working directory |
-| `dtype` | tensor | tensor | Tensor data type |
-| `shape` | tensor | tensor | Tensor shape |
+Each field is required for the listed kinds.
+
+| Field | Kinds | Notes |
+|---|---|---|
+| `op` | all | `"upload"` |
+| `id` | all | Unique handle name |
+| `kind` | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, or `"library"` |
+| `source` | module | Python source executed to define a module |
+| `blob` | tensor, bytes, file, library | SHA-256 of the raw bytes |
+| `path` | file | Relative destination in the request working directory |
+| `dtype` | tensor | Tensor data type |
+| `shape` | tensor | Tensor shape |
 
 <a id="details"></a>
 
@@ -165,8 +166,8 @@ binds the absolute path of the materialized file.
 | <a id="module"></a>`module` | Inline Python `source`, executed to form a namespace. The handle binds the whole module. |
 | <a id="tensor"></a>`tensor` | Raw contiguous row-major bytes, copied to the assigned GPU. The byte length must equal `product(shape) * dtype.itemsize`. |
 | <a id="bytes"></a>`bytes` | The blob's bytes unchanged in CPU memory. Pass them to uploaded Python to parse files or other binary formats. |
-| `file` | Materialize the blob at `path` in the request workspace. Binds its absolute server-side path as a string and needs no GPU. See the file rules below. |
-| `library` | A precompiled TVM FFI module packaged as a shared library for the server's platform, loaded with `tvm_ffi.load_module`. The handle binds the loaded module; see [Library](#library). |
+| `file` | Materialize the blob at `path` in the request workspace and bind its normalized relative path as a string. Needs no GPU. See the file rules below. |
+| `library` | A precompiled TVM FFI shared library for the server's platform, loaded with `tvm_ffi.load_module`. The handle binds the loaded module; see [Library](#library). |
 
 <a id="cuda-c-modules"></a>
 <a id="cutedsl-modules"></a>
@@ -202,13 +203,13 @@ For each uncached binary upload, supply the bytes in a multipart part named
 | Conflicts | Normalized paths must be unique and cannot conflict as a file and directory; a program cannot upload both `data` and `data/tensor.bin`. |
 | Filesystem access | Creates a regular file with mode `0600` and missing parent directories with mode `0700`. Creates and opens every component without following symbolic links. |
 | Workspace | A fresh temporary working directory per request, owned by the parent process and removed after completion, failure, timeout, or worker crash. |
-| Lifetime | The handle contains an absolute path string valid within this request. Reads see the current file contents, including edits. `return` returns the path string; a file return captures the contents. Blob cache entries remain available after materialized files are removed. |
+| Lifetime | Blob cache entries remain available after materialized files are removed. |
 
 #### Library
 
-A `library` upload loads a precompiled TVM FFI module packaged as a shared
-library. Its bytes may come from the client's toolchain or a preceding CPU-server
-request. This upload loads the module without compiling it:
+A library is an already-built TVM FFI module, whether its bytes came from the
+client's toolchain or a preceding CPU-server request. Uploading it requires no
+compilation:
 
 ```json
 {
@@ -219,18 +220,16 @@ request. This upload loads the module without compiling it:
 }
 ```
 
-`blob` names the shared-library bytes for the server's platform. The server
-loads them with `tvm_ffi.load_module` and binds the resulting module. Functions
-selected by `get_function` must be exposed through TVM FFI; ordinary C/C++
-exports alone are not callable through this protocol. A library
+`blob` names the bytes of an ELF shared object for the server's platform. The
+server loads it with `tvm_ffi.load_module` and binds the resulting module.
+Later `get_function` instructions may bind any number of its TVM FFI exports. A library
 that cannot be loaded, or a requested function that is absent, fails with a
-`compile` error. The upload does not validate exports eagerly: an ordinary shared
-library may load but fail when `get_function` selects an unsupported export.
-Any producer providing compatible TVM FFI modules can be used. Three are usual:
+`compile` error. Nothing else about the object is inspected, so any producer
+TVM FFI can load is accepted. Three are usual:
 
 | Producer | Export | Server requirement |
 | --- | --- | --- |
-| C++ / `tvm_ffi.cpp.build` | `TVM_FFI_DLL_EXPORT_TYPED_FUNC` emits `__tvm_ffi_<name>`; `tvm_ffi.cpp.build_inline(functions=...)` adds it automatically; `build` requires explicit exports. A code generator can emit the symbol directly. | TVM FFI |
+| C++ / `tvm_ffi.cpp.build` | `TVM_FFI_DLL_EXPORT_TYPED_FUNC` emits `__tvm_ffi_<name>`; `tvm_ffi.cpp.build_inline(functions=...)` adds it automatically. A code generator can emit the symbol directly. | TVM FFI |
 | `tvm.Executable.export_library` | Embedded module blob | TVM installed, including the loader registered by its CUDA runtime |
 | CuTeDSL with `--enable-tvm-ffi` | `__tvm_ffi_<name>`, linked against `libcute_dsl_runtime.so` | `versions` must report `cutlass`. Building against a newer cutlass than the server's fails to load, naming the missing symbol. |
 
@@ -447,7 +446,7 @@ To return a folder whose path is held in an earlier register:
 | Rule | Behavior |
 | --- | --- |
 | Fields | Exactly `op`, `key`, `kind`, and `path`. `kind` is `file` or `folder`; `path` is a literal string or an earlier reference resolving to one. Return keys are unique across all variants. |
-| Paths | Literal paths follow [file-upload rules](#file) and are relative to the original request workspace. A reference may also resolve to an absolute path inside that workspace. Neither form follows changes to the current working directory; traversal and symlinks remain rejected. |
+| Paths | Follow [file-upload rules](#file), relative to the original request workspace even if code changes cwd. |
 | Snapshot | Contents are captured at that instruction, without holding the GPU lease. Folders include hidden files and empty directories; original metadata is omitted. |
 | Rejected content | Symlinks, special files, repeated directories, and observable changes during reads |
 | Failures | Missing paths, wrong types, invalid runtime paths, read failures, and collection limits fail that return with `serialization`. Failed returns add no result or binary parts; earlier returns survive ordinary instruction failures. |
@@ -755,5 +754,5 @@ The Python package constructs request parts, hashes and response values for you.
 | --- | --- |
 | Submit a first request | [Quickstart](../getting-started/quickstart.md) |
 | Construct programs and manage clients | [Program guide](writing-a-program.md); [API signatures and errors](../python-api/index.rst) |
-| Upload files and folders | `upload_folder` expands into ordinary file-upload instructions with no new operation. File uploads bind absolute path strings. See [files used by uploaded scripts](writing-a-program.md#files-used-by-uploaded-scripts). |
+| Upload files and folders | `upload_folder` expands into ordinary file-upload instructions with no new operation. See [files used by uploaded scripts](writing-a-program.md#files-used-by-uploaded-scripts). |
 | Receive files and folders | Results decode to `ReturnedFile` and `ReturnedFolder`. See [client usage](writing-a-program.md#returning-files-and-folders). |

@@ -40,7 +40,7 @@ class Upload:
 
 @dataclass
 class FileUpload:
-    """A regular file whose handle binds its absolute request-workspace path."""
+    """A regular file whose handle binds its relative request-workspace path."""
 
     id: str
     blob: str

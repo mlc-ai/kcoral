@@ -118,20 +118,17 @@ class Program:
         """Snapshot bytes-like data as a file in the request workspace.
 
         The destination must be a relative POSIX path without ``..`` components
-        and cannot conflict with another file upload. The register binds an
-        absolute path string on the server, valid only within this request.
+        and cannot conflict with another file upload.
 
         :param blob: Bytes-like content, copied when this method is called.
         :param path: Destination relative to the request's working directory.
         :param id: Optional custom instruction identifier; generated when omitted.
-        :returns: A register containing the server-side absolute file path.
+        :returns: A register containing the normalized relative path string.
         :raises TypeError: If the content is not bytes-like.
         :raises ValueError: If the destination is invalid or conflicts with a file.
 
         Add this instruction before any code that reads the destination.
         Files are removed when execution ends; cached content may persist.
-        Later reads see any changes made to the file. Use :meth:`return_file`
-        to download its contents; :meth:`return_` returns only the path string.
         """
         normalized_path = normalize_file_path(path)
         try:
@@ -335,11 +332,11 @@ class Program:
         return Register(id)
 
     def return_file(self, *, key: str, path: str | Register) -> None:
-        """Capture a workspace file; a register may contain its absolute path."""
+        """Select a regular file at this instruction, relative to the request workspace."""
         self._return_path(key=key, path=path, kind="file")
 
     def return_folder(self, *, key: str, path: str | Register) -> None:
-        """Capture a workspace folder; a register may contain its absolute path."""
+        """Select a complete folder, including hidden files and empty directories."""
         self._return_path(key=key, path=path, kind="folder")
 
     def _return_path(self, *, key: str, path: str | Register, kind: str) -> None:

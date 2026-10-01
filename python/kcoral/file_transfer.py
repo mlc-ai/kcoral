@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import stat
-from pathlib import PurePosixPath
 
 from .artifacts import _DIRECTORY_FLAGS, ReturnedFile, ReturnedFolder, _open_directory
 from .schemas import normalize_file_path
@@ -34,14 +33,7 @@ def _read_file(parent_fd: int, name: str, max_bytes: int) -> ReturnedFile:
 def collect(
     workspace: str, path: str, kind: str, *, max_bytes: int
 ) -> ReturnedFile | ReturnedFolder:
-    """Capture a workspace path; caller commits results only after success."""
-    if isinstance(path, str) and path.startswith("/"):
-        # Do not resolve symlinks or collapse '..': collection must still reject
-        # them. Component-wise containment also rejects sibling prefix matches.
-        try:
-            path = PurePosixPath(path).relative_to(workspace).as_posix()
-        except ValueError:
-            raise ValueError("absolute return path must be inside the request workspace") from None
+    """Capture a selection; caller commits results only after success."""
     parent, _, name = normalize_file_path(path).rpartition("/")
     with _open_directory(workspace, parent) as parent_fd:
         if kind == "file":

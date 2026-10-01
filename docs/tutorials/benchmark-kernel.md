@@ -62,10 +62,10 @@ under the GPU lease, alongside any later kernel execution.
 
 ### On a CPU server
 
-A CPU server executes uploaded Python compilation code and returns TVM FFI module bytes
+A CPU server executes uploaded Python compilation code and returns library bytes
 for a subsequent request to a GPU server. Supply the target architecture from
-`Client.target()` on the GPU server. Upload CUDA source with `upload_file` and pass the returned path register
-and the exported function names to your compilation function.
+`Client.target()` on the GPU server. Upload CUDA source with `upload_file` and pass
+its path and export names to your compilation function.
 
 [Remote Compilation](remote-compilation.md) walks through building CUDA C
 on a CPU server, then uploading the resulting library to a GPU server for execution
@@ -73,7 +73,7 @@ and measurement.
 
 ### On the client
 
-Build a TVM FFI module as a shared library locally and upload it with `kind="library"`. Build for the
+Build a TVM FFI library locally and upload it with `kind="library"`. Build for the
 architecture reported by the server's `Client.target()`. The
 [library protocol](../client-guide/protocol.md#library) describes export and linking requirements,
 and the example below demonstrates the build and submission.
@@ -167,7 +167,7 @@ KCORAL_URL=http://localhost:8000 python examples/remote_compile_client.py
 
 ### Build and upload a library
 
-This client builds a CUDA C TVM FFI module locally for the server's target architecture,
+This client builds a CUDA C library locally for the server's target architecture,
 then uploads, checks and measures it. The client machine needs the CUDA toolkit,
 a host C++ compiler and TVM FFI from the
 [compiler environment](../getting-started/installation.md#server-system-requirements).

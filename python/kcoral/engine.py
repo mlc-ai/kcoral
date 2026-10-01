@@ -118,7 +118,7 @@ def _execute_in_workspace(
                             instruction.path,
                             program.blob_bytes[instruction.blob],
                         )
-                        env[instruction.id] = os.path.join(workspace_dir, instruction.path)
+                        env[instruction.id] = instruction.path
                     elif isinstance(instruction, Upload):
                         if instruction.kind == "module":
                             assert instruction.source is not None

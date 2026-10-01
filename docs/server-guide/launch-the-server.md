@@ -24,7 +24,7 @@ kcoral server --device gpu --gpus 0 --workers-per-gpu 8 --host 0.0.0.0 --port 80
 See [configuration](#configuration) for every option and its default.
 
 Check readiness with `GET /health`, which also reports the `target` an uploaded
-TVM FFI module must be built for and the `versions` the worker runs. When compiling on
+library must be built for and the `versions` the worker runs. When compiling on
 a CPU server, read the target from the GPU server. Submit programs with
 `POST /execute` using `multipart/form-data`.
 
@@ -45,7 +45,7 @@ that throughput numbers should record the setting.
 Start with one GPU instance for remote compilation and measurement. Use separate
 CPU and GPU instances when compilation capacity should scale independently;
 the [Remote Compilation tutorial](../tutorials/remote-compilation.md)
-explains how to pass a compiled TVM FFI module between them.
+explains how to pass a compiled library between them.
 The CPU compilation service does not provide general GPU execution.
 
 `0.0.0.0` listens on every network interface. The default `127.0.0.1` listens
