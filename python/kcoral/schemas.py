@@ -32,7 +32,6 @@ class Upload:
     id: str
     kind: Literal["module", "tensor", "bytes", "library"]
     source: str | None = None
-    language: Literal["python", "cuda"] = "python"
     blob: str | None = None
     dtype: str | None = None
     shape: list[int] | None = None
@@ -41,8 +40,9 @@ class Upload:
 
 @dataclass
 class FileUpload:
-    """A blob materialized as a regular file in the request workspace."""
+    """A regular file whose handle binds its absolute request-workspace path."""
 
+    id: str
     blob: str
     path: str
     kind: Literal["file"] = "file"
@@ -198,9 +198,6 @@ def parse_program(body: Any) -> Program:
         if op == "return":
             instruction = _parse_return(item, index, handles, return_keys)
             return_keys.add(instruction.key)
-        elif op == "upload" and item.get("kind") == "file":
-            instruction = _parse_file_upload(item, index)
-            file_paths.append(instruction.path)
         elif op in ("upload", "get_function", "run"):
             instruction_id = item.get("id")
             if not isinstance(instruction_id, str) or not instruction_id:
@@ -209,6 +206,8 @@ def parse_program(body: Any) -> Program:
                 raise ValidationError(f"duplicate instruction id: {instruction_id!r}")
             if op == "upload":
                 instruction = _parse_upload(item, index)
+                if isinstance(instruction, FileUpload):
+                    file_paths.append(instruction.path)
             elif op == "get_function":
                 instruction = _parse_get_function(item, index, handles)
             else:
@@ -308,24 +307,21 @@ def _parse_options(value: Any) -> dict[str, Any]:
     return options
 
 
-def _parse_upload(item: dict[str, Any], index: int) -> Upload:
+def _parse_upload(item: dict[str, Any], index: int) -> Upload | FileUpload:
     kind = item.get("kind")
+    if kind == "file":
+        return _parse_file_upload(item, index)
     if kind == "module":
         _check_fields(
             item,
-            {"op", "id", "kind", "source", "language"},
+            {"op", "id", "kind", "source"},
             {"op", "id", "kind", "source"},
             f"instruction {index}",
         )
         source = item["source"]
         if not isinstance(source, str):
             raise ValidationError(f"module upload {item['id']!r}: 'source' must be a string")
-        language = item.get("language", "python")
-        if language not in ("python", "cuda"):
-            raise ValidationError(
-                f"module upload {item['id']!r}: unsupported language {language!r}"
-            )
-        return Upload(id=item["id"], kind="module", source=source, language=language)
+        return Upload(id=item["id"], kind="module", source=source)
     if kind == "tensor":
         _check_fields(
             item,
@@ -382,14 +378,14 @@ def _parse_upload(item: dict[str, Any], index: int) -> Upload:
 def _parse_file_upload(item: dict[str, Any], index: int) -> FileUpload:
     _check_fields(
         item,
-        {"op", "kind", "blob", "path"},
-        {"op", "kind", "blob", "path"},
+        {"op", "id", "kind", "blob", "path"},
+        {"op", "id", "kind", "blob", "path"},
         f"instruction {index}",
     )
     blob = item["blob"]
     if not is_blob_hash(blob):
         raise ValidationError("file upload: 'blob' must be a lowercase SHA-256 digest")
-    return FileUpload(blob=blob, path=normalize_file_path(item["path"]))
+    return FileUpload(id=item["id"], blob=blob, path=normalize_file_path(item["path"]))
 
 
 def _parse_get_function(item: dict[str, Any], index: int, handles: set[str]) -> GetFunction:

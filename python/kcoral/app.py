@@ -597,7 +597,7 @@ def _program_shape(program: Program) -> dict[str, object]:
         ops[instruction.op] += 1
         if isinstance(instruction, (Upload, FileUpload)):
             kind = instruction.kind
-            uploads[f"{kind}:{instruction.language}" if kind == "module" else kind] += 1
+            uploads[kind] += 1
     return {
         "instructions": len(program.instructions),
         "ops": dict(ops),

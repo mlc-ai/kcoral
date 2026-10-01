@@ -98,7 +98,7 @@ def test_request_trace_runs_arrival_to_worker_to_outcome(tmp_path):
 def test_accepted_record_describes_the_workload(tmp_path):
     program = {
         "instructions": [
-            {"op": "upload", "id": "m", "kind": "module", "language": "python", "source": "x = 1"},
+            {"op": "upload", "id": "m", "kind": "module", "source": "x = 1"},
             *harness_instructions("value", "structural"),
             {"op": "return", "key": "value", "value": {"$ref": "value"}},
         ],
@@ -109,7 +109,7 @@ def test_accepted_record_describes_the_workload(tmp_path):
     accepted = _one(_read_events(tmp_path), "request_accepted")
     assert accepted["instructions"] == 5
     assert accepted["ops"] == {"upload": 2, "get_function": 1, "run": 1, "return": 1}
-    assert accepted["uploads"] == {"module:python": 2}
+    assert accepted["uploads"] == {"module": 2}
     assert "builtins" not in accepted
     assert accepted["timeout_seconds"] == 12.0
     assert accepted["request_bytes"] > 0

@@ -376,7 +376,9 @@ def test_file_upload_copies_nested_file_without_taking_the_gpu(tmp_path):
     lease = RecordingLease()
 
     outcome = execute(
-        Program([FileUpload(blob=digest, path="nested/tensor")], blob_bytes={digest: raw}),
+        Program(
+            [FileUpload(id="file", blob=digest, path="nested/tensor")], blob_bytes={digest: raw}
+        ),
         FakeRuntime(),
         lease,
         workspace_dir=str(workspace),
@@ -394,7 +396,7 @@ def test_uploaded_module_reads_file_relative_to_request_workspace():
     outcome = execute_for_test(
         Program(
             [
-                FileUpload(blob=digest, path="input/data.bin"),
+                FileUpload(id="file", blob=digest, path="input/data.bin"),
                 Upload("module", "module", source=source),
                 GetFunction("fn", ref("module"), "main"),
                 Run("value", ref("fn"), []),
@@ -422,7 +424,7 @@ def test_file_upload_does_not_follow_workspace_symlink(tmp_path):
         Program(
             [
                 Upload("module", "module", source=source),
-                FileUpload(blob=digest, path="escape/tensor"),
+                FileUpload(id="file", blob=digest, path="escape/tensor"),
             ],
             blob_bytes={digest: raw},
         ),
@@ -433,34 +435,16 @@ def test_file_upload_does_not_follow_workspace_symlink(tmp_path):
     assert outcome.status == "FAILED"
     assert outcome.error["kind"] == "runtime"
     assert outcome.error["instruction_index"] == 1
-    assert outcome.error["instruction_id"] is None
+    assert outcome.error["instruction_id"] == "file"
     assert not (outside / "tensor").exists()
 
 
-class CudaAwareRuntime(FakeRuntime):
-    """The fake runtime has no compiler; the real one binds CUDA source text."""
-
-    def load_module(self, source, language="python"):
-        if language == "cuda":
-            return object()
-        return super().load_module(source, language)
-
-
-@pytest.mark.parametrize(
-    "language,source,acquires",
-    [
-        # A CUDA upload runs nothing, so it never waits for a GPU.
-        ("cuda", "void go() {}", 0),
-        # A Python upload execs the client's source, which could touch one.
-        ("python", "def main(x):\n    return x\n", 1),
-    ],
-)
-def test_which_module_uploads_take_the_gpu(language, source, acquires):
+def test_python_module_upload_takes_the_gpu():
     lease = RecordingLease()
-    program = Program([Upload("k", "module", source=source, language=language)])
-    outcome = execute_for_test(program, CudaAwareRuntime(), lease)
+    program = Program([Upload("k", "module", source="def main(x): return x")])
+    outcome = execute_for_test(program, FakeRuntime(), lease)
     assert outcome.status == "COMPLETED"
-    assert lease.acquires == acquires
+    assert lease.acquires == 1
 
 
 def test_a_cpu_only_function_hands_the_gpu_over_for_its_call():

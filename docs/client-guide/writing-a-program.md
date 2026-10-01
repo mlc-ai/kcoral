@@ -24,7 +24,7 @@ with Client("http://localhost:8000", connect_timeout_seconds=10) as client:
 ```
 
 `health()` reports endpoint status, load, and compilation metadata.
-`target()` reads the GPU architecture an uploaded compiled library must match; ask the GPU
+`target()` reads the GPU architecture an uploaded TVM FFI module must match; ask the GPU
 server for it, not a CPU compilation server. Optional `headers` are sent with
 every request. If you do not use `with`, call `client.close()` explicitly.
 
@@ -72,8 +72,8 @@ name; it is not the value itself.
 
 | Method | Purpose | Returns |
 | --- | --- | --- |
-| `upload(kind=..., ...)` | Upload module source, a tensor, bytes or a compiled library | `Register` |
-| `upload_file(blob=..., path=...)` | Snapshot bytes as a file in the request workspace | `None` |
+| `upload(kind=..., ...)` | Upload module source, a tensor, bytes or a compiled TVM FFI module | `Register` |
+| `upload_file(blob=..., path=...)` | Snapshot bytes as a file in the request workspace | `Register` containing its absolute path |
 | `upload_folder(folder, path=...)` | Snapshot a local directory as file uploads | `None` |
 | `get_function(module=..., name=..., cpu_only=False)` | Select a function or object from an earlier module or library | `Register` |
 | `run(fn=..., args=None)` | Call a selected or computed callable | `Register` |
@@ -108,7 +108,7 @@ program.return_(key="output", value=y)
 `upload` accepts `module`, `tensor`, `bytes` and `library`. Its file counterpart
 is `upload_file`; `upload(kind="file")` is not a supported Python call. A module
 binds a namespace; `get_function` explicitly selects an object from it. A
-precompiled library follows the same selection step.
+precompiled TVM FFI module uploaded as `library` follows the same selection step.
 
 ### Pass values and references
 
@@ -231,7 +231,10 @@ result = program.run(fn=reader)
 ```
 
 The module can use `open("inputs/tensor.bin", "rb")` unchanged. File uploads
-return no register. Put them before any instruction that reads the files,
+return a register containing the absolute server-side path; pass it to `run`
+when the reader takes a path argument, or to `return_file` to download the file.
+`return_` returns only the path string, which is valid within this request.
+Put file uploads before any instruction that reads the files,
 including a module upload whose top-level code opens them.
 
 To snapshot a local directory at the current program position:
@@ -268,7 +271,8 @@ result["report"].save("report.txt")
 result["debug"].save("debug")
 ```
 
-`path` accepts a relative POSIX path or an earlier `Register` containing one.
+`path` accepts a relative POSIX path or an earlier `Register` containing a
+relative path or an absolute path inside the request workspace.
 Each return captures contents at that instruction; later writes do not change
 it. Ordinary `return_` of a path string returns only the string. Earlier returns
 remain available if a later instruction fails; a failed collection adds nothing.

@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Any
 
 from . import process_state, sandbox
-from .cuda_source import CUDAModule
 from .errors import ExecutionError, GPUAccessViolation
 from .python_module import LoadedPythonModule, materialize_module
 
@@ -72,10 +71,7 @@ class GPURuntime:
         self._process_state = process_state.snapshot()
         self._request_libraries: list[LoadedLibrary] = []
 
-    def load_module(self, source: str, language: str = "python") -> Any:
-        if language == "cuda":
-            # Nothing runs here: get_function selects source for an uploaded compiler.
-            return CUDAModule(source=source)
+    def load_module(self, source: str) -> Any:
         return materialize_module(source, self._seeded_fnames)
 
     def load_library(self, data: bytes) -> LoadedLibrary:
@@ -87,8 +83,6 @@ class GPURuntime:
 
     def get_function(self, module: Any, name: str) -> Any:
         if isinstance(module, LoadedPythonModule):
-            return module.get_function(name)
-        if isinstance(module, CUDAModule):
             return module.get_function(name)
         if not isinstance(module, LoadedLibrary):
             raise ExecutionError(
@@ -400,7 +394,7 @@ def describe_device_uuid() -> str | None:
 
 
 def _materialize_library(data: bytes) -> LoadedLibrary:
-    """Load a prebuilt shared object as a module.
+    """Load shared-library bytes through TVM FFI.
 
     Loading needs a path, so the bytes go to a file unlinked once dlopen maps it.
     Function binding is separate so one upload can expose multiple entry points.

@@ -47,7 +47,6 @@ def test_parse_complete_program():
         }
     )
     assert isinstance(program.instructions[0], Upload)
-    assert program.instructions[0].language == "python"  # the default when unset
     assert isinstance(program.instructions[1], GetFunction)
     assert program.instructions[1].cpu_only is True  # False when unset
     assert isinstance(program.instructions[3], Run)
@@ -61,28 +60,22 @@ def test_parse_complete_program():
     assert program.blob_uploads()[0].blob == TENSOR_HASH
 
 
-def test_parse_cuda_module_upload():
-    program = parse_program(
-        {
-            "instructions": [
-                {
-                    "op": "upload",
-                    "id": "kernel",
-                    "kind": "module",
-                    "language": "cuda",
-                    "source": "void add(tvm::ffi::TensorView x) {}",
-                },
-                {
-                    "op": "get_function",
-                    "id": "add",
-                    "module": {"$ref": "kernel"},
-                    "name": "add",
-                },
-            ]
-        }
-    )
-    assert program.instructions[0].language == "cuda"
-    assert program.instructions[1] == GetFunction("add", Ref("kernel"), "add")
+@pytest.mark.parametrize("language", ["python", "cuda", "rust"])
+def test_module_upload_rejects_language(language):
+    with pytest.raises(ValidationError, match="unknown field"):
+        parse_program(
+            {
+                "instructions": [
+                    {
+                        "op": "upload",
+                        "id": "module",
+                        "kind": "module",
+                        "source": "",
+                        "language": language,
+                    }
+                ]
+            }
+        )
 
 
 def test_parse_library_upload():
@@ -147,12 +140,13 @@ def test_parse_bytes_upload():
     assert program.blob_uploads() == [upload]
 
 
-def test_parse_file_upload_normalizes_relative_path_without_creating_a_handle():
+def test_parse_file_upload_normalizes_path_and_creates_a_handle():
     program = parse_program(
         {
             "instructions": [
                 {
                     "op": "upload",
+                    "id": "file",
                     "kind": "file",
                     "blob": TENSOR_HASH,
                     "path": "./weights//tensor.bin",
@@ -161,8 +155,63 @@ def test_parse_file_upload_normalizes_relative_path_without_creating_a_handle():
         }
     )
     upload = program.instructions[0]
-    assert upload == FileUpload(blob=TENSOR_HASH, path="weights/tensor.bin")
+    assert upload == FileUpload(id="file", blob=TENSOR_HASH, path="weights/tensor.bin")
     assert program.blob_uploads() == [upload]
+    program = parse_program(
+        {
+            "instructions": [
+                {
+                    "op": "upload",
+                    "id": "file",
+                    "kind": "file",
+                    "blob": TENSOR_HASH,
+                    "path": "input",
+                },
+                {"op": "return", "key": "path", "value": {"$ref": "file"}},
+            ]
+        }
+    )
+    assert program.instructions[1] == Return("path", Ref("file"))
+
+
+@pytest.mark.parametrize("id", [None, "", 0, False])
+def test_file_upload_requires_a_nonempty_id(id):
+    with pytest.raises(ValidationError, match="non-empty string 'id'"):
+        parse_program(
+            {
+                "instructions": [
+                    {
+                        "op": "upload",
+                        "id": id,
+                        "kind": "file",
+                        "blob": TENSOR_HASH,
+                        "path": "input",
+                    },
+                ]
+            }
+        )
+
+
+@pytest.mark.parametrize("first_kind", ["file", "bytes"])
+def test_file_ids_share_the_handle_namespace(first_kind):
+    first = {"op": "upload", "id": "data", "kind": first_kind, "blob": TENSOR_HASH}
+    if first_kind == "file":
+        first["path"] = "first"
+    with pytest.raises(ValidationError, match="duplicate instruction id"):
+        parse_program(
+            {
+                "instructions": [
+                    first,
+                    {
+                        "op": "upload",
+                        "id": "data",
+                        "kind": "file",
+                        "blob": TENSOR_HASH,
+                        "path": "second",
+                    },
+                ]
+            }
+        )
 
 
 @pytest.mark.parametrize(
@@ -172,7 +221,17 @@ def test_parse_file_upload_normalizes_relative_path_without_creating_a_handle():
 def test_file_upload_rejects_unsafe_paths(path):
     with pytest.raises(ValidationError, match="filesystem 'path'"):
         parse_program(
-            {"instructions": [{"op": "upload", "kind": "file", "blob": TENSOR_HASH, "path": path}]}
+            {
+                "instructions": [
+                    {
+                        "op": "upload",
+                        "id": "file",
+                        "kind": "file",
+                        "blob": TENSOR_HASH,
+                        "path": path,
+                    }
+                ]
+            }
         )
 
 
@@ -187,7 +246,8 @@ def test_file_upload_rejects_unsafe_paths(path):
 )
 def test_file_upload_rejects_duplicate_and_file_directory_conflicts(paths, match):
     instructions = [
-        {"op": "upload", "kind": "file", "blob": TENSOR_HASH, "path": path} for path in paths
+        {"op": "upload", "id": f"file_{i}", "kind": "file", "blob": TENSOR_HASH, "path": path}
+        for i, path in enumerate(paths)
     ]
     with pytest.raises(ValidationError, match=match):
         parse_program({"instructions": instructions})
@@ -229,7 +289,7 @@ def test_file_upload_rejects_duplicate_and_file_directory_conflicts(paths, match
         ),
         (
             {"op": "upload", "id": "x", "kind": "module", "source": "", "language": "rust"},
-            "unsupported language",
+            "unknown field",
         ),
         (
             {
@@ -248,15 +308,14 @@ def test_file_upload_rejects_duplicate_and_file_directory_conflicts(paths, match
         (
             {
                 "op": "upload",
-                "id": "file-has-no-handle",
                 "kind": "file",
                 "blob": TENSOR_HASH,
                 "path": "tensor",
             },
-            "unknown field",
+            "non-empty string 'id'",
         ),
         (
-            {"op": "upload", "kind": "file", "blob": "sha256:old", "path": "tensor"},
+            {"op": "upload", "id": "file", "kind": "file", "blob": "sha256:old", "path": "tensor"},
             "lowercase SHA-256",
         ),
     ],

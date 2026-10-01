@@ -114,31 +114,40 @@ class Program:
         """
         return list(self._instructions)
 
-    def upload_file(self, *, blob: Any, path: str) -> None:
+    def upload_file(self, *, blob: Any, path: str, id: str | None = None) -> Register:
         """Snapshot bytes-like data as a file in the request workspace.
 
         The destination must be a relative POSIX path without ``..`` components
-        and cannot conflict with another file upload. Returns no register.
+        and cannot conflict with another file upload. The register binds an
+        absolute path string on the server, valid only within this request.
 
         :param blob: Bytes-like content, copied when this method is called.
         :param path: Destination relative to the request's working directory.
+        :param id: Optional custom instruction identifier; generated when omitted.
+        :returns: A register containing the server-side absolute file path.
         :raises TypeError: If the content is not bytes-like.
         :raises ValueError: If the destination is invalid or conflicts with a file.
 
         Add this instruction before any code that reads the destination.
         Files are removed when execution ends; cached content may persist.
+        Later reads see any changes made to the file. Use :meth:`return_file`
+        to download its contents; :meth:`return_` returns only the path string.
         """
         normalized_path = normalize_file_path(path)
         try:
             raw = blob if isinstance(blob, bytes) else bytes(memoryview(blob))
         except TypeError as exc:
             raise TypeError("file upload requires a bytes-like 'blob'") from exc
-        validate_and_add_file_path(normalized_path, self._file_paths)
+        paths = self._file_paths.copy()
+        validate_and_add_file_path(normalized_path, paths)
         blob_hash = compute_blob_hash(raw)
+        id = self._add_id(id, op="upload")
+        self._file_paths = paths
         self._blobs.setdefault(blob_hash, raw)
         self._instructions.append(
-            {"op": "upload", "kind": "file", "blob": blob_hash, "path": normalized_path}
+            {"op": "upload", "id": id, "kind": "file", "blob": blob_hash, "path": normalized_path}
         )
+        return Register(id)
 
     def upload_folder(self, folder: str | os.PathLike[str], *, path: str) -> None:
         """Snapshot a directory as ordinary file uploads at this program position.
@@ -165,7 +174,9 @@ class Program:
         # One batch validation avoids a quadratic scan for folders with many
         # files and commits no state until traversal and validation both succeed.
         validate_and_add_file_paths([item["path"] for item in instructions], self._file_paths)
-        self._instructions.extend(sorted(instructions, key=lambda item: item["path"]))
+        for instruction in sorted(instructions, key=lambda item: item["path"]):
+            instruction["id"] = self._add_id(None, op="upload")
+            self._instructions.append(instruction)
         for digest, data in blobs.items():
             self._blobs.setdefault(digest, data)
 
@@ -175,7 +186,6 @@ class Program:
         id: str | None = None,
         kind: str,
         source: str | None = None,
-        language: str = "python",
         value: Any = None,
         dtype: str | None = None,
         shape: list[int] | None = None,
@@ -183,8 +193,7 @@ class Program:
         """Upload source or binary content and return its request-local register.
 
         :param kind: One of ``module``, ``tensor``, ``bytes`` or ``library``.
-        :param source: Source text for a module upload.
-        :param language: Module language, ``python`` or ``cuda``.
+        :param source: Python source text for a module upload.
         :param value: Tensor input or bytes-like data for a binary upload.
             Tensors accept NumPy arrays, PyTorch tensors, objects implementing
             the DLPack tensor exchange protocol, or raw bytes.
@@ -195,7 +204,8 @@ class Program:
         :raises TypeError: If the input does not match the upload kind.
         :raises ValueError: If the kind, identifier or tensor metadata is invalid.
 
-        A library is a compiled shared object; a module contains source.
+        A library is a precompiled TVM FFI module packaged as a shared library;
+        a module executes Python source.
         Use :meth:`upload_file` or :meth:`upload_folder` for filesystem uploads.
         ``kind="file"`` is a wire-protocol option, not accepted by this method.
         """
@@ -204,16 +214,10 @@ class Program:
                 raise TypeError("module upload requires string 'source'")
             if value is not None or dtype is not None or shape is not None:
                 raise TypeError("module upload does not accept tensor fields")
-            if language not in ("python", "cuda"):
-                raise ValueError("module upload 'language' must be 'python' or 'cuda'")
             instruction = {"op": "upload", "kind": "module", "source": source}
-            if language != "python":
-                instruction["language"] = language
         elif kind == "tensor":
             if source is not None:
                 raise TypeError("tensor upload does not accept 'source'")
-            if language != "python":
-                raise TypeError("tensor upload does not accept 'language'")
             tensor_dtype, tensor_shape, raw = _tensor_fields(value, dtype=dtype, shape=shape)
             blob_hash = compute_blob_hash(raw)
             self._blobs.setdefault(blob_hash, raw)
@@ -229,8 +233,6 @@ class Program:
                 raise TypeError("bytes upload does not accept 'source'")
             if dtype is not None or shape is not None:
                 raise TypeError("bytes upload does not accept tensor fields")
-            if language != "python":
-                raise TypeError("bytes upload does not accept 'language'")
             try:
                 raw = value if isinstance(value, bytes) else bytes(memoryview(value))
             except TypeError as exc:
@@ -333,11 +335,11 @@ class Program:
         return Register(id)
 
     def return_file(self, *, key: str, path: str | Register) -> None:
-        """Select a regular file at this instruction, relative to the request workspace."""
+        """Capture a workspace file; a register may contain its absolute path."""
         self._return_path(key=key, path=path, kind="file")
 
     def return_folder(self, *, key: str, path: str | Register) -> None:
-        """Select a complete folder, including hidden files and empty directories."""
+        """Capture a workspace folder; a register may contain its absolute path."""
         self._return_path(key=key, path=path, kind="folder")
 
     def _return_path(self, *, key: str, path: str | Register, kind: str) -> None:

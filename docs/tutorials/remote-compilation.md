@@ -10,7 +10,8 @@ steps need GPU access.
 A more cost-effective approach is to compile on inexpensive CPU-only machines,
 download the compiled result, and upload it to a GPU server for execution.
 KCoral supports this workflow through file upload and download: one request
-returns a compiled shared library, and the next uploads it for remote execution.
+returns a compiled TVM FFI module as shared-library bytes, and the next uploads
+it for remote execution.
 
 The two requests can use different servers. A single GPU server with the
 compilation tools installed can also serve both roles.
@@ -20,7 +21,7 @@ has its own `Program` and its own handles:
 
 | Request | Destination | Inputs | Returned values |
 | --- | --- | --- | --- |
-| 1. Compile | Compilation server | Kernel source and the execution GPU's target architecture | Shared-library bytes |
+| 1. Compile | Compilation server | Kernel source and the execution GPU's target architecture | TVM FFI shared-library bytes |
 | 2. Execute | Execution server | Those library bytes and the workload | Correctness and timing reports |
 
 Both programs use `POST /execute`. The complete client below compiles a CUDA C
@@ -112,16 +113,17 @@ helpers uploaded by each program:
 :end-before: def compile_program
 ```
 
-The compilation program uploads that Python and the CUDA source, selects
-`compile_cuda_binary` with `get_function(..., cpu_only=True)`, selects the CUDA
-source name `add_one`, compiles for `arch`, and explicitly returns the library:
+The compilation program uploads that Python and the CUDA source file, selects
+`compile_cuda_binary` with `get_function(..., cpu_only=True)`, and passes the
+file's absolute path with `functions=["add_one"]` and `arch` in the compilation
+configuration. It explicitly returns the compiled module bytes:
 
 ```{literalinclude} ../../examples/cpu_compile_gpu_execute.py
 :language: python
 :pyobject: compile_program
 ```
 
-The uploaded `compile_cuda_binary` function builds a shared library without loading it or
+The uploaded `compile_cuda_binary` function builds a TVM FFI shared library without loading it or
 launching the kernel. `return_(key="library", ...)` selects the bytes for the
 response. After `cpu_client.execute()` succeeds,
 `compiled.results["library"]` is a Python `bytes` object containing the shared

@@ -57,12 +57,12 @@ that scope explicit; otherwise ask it to produce the program for review.
 The skill guides the agent through this sequence:
 
 1. Inspect [`Client.health()`](../client-guide/protocol.md#get-health) and, when
-   compiling a library, the GPU server's `Client.target()` so it uses an available
+   compiling a TVM FFI module, the GPU server's `Client.target()` so it uses an available
    toolchain and the right architecture.
 2. Upload the module and use `get_function()` to select the kernel or launcher.
 3. Allocate device inputs in uploaded Python, or upload data whose exact values
    matter. Use `upload_file()` or `upload_folder()` for scripts that read files.
-4. Compile with an uploaded harness, or upload a prebuilt library.
+4. Compile with an uploaded harness, or upload a prebuilt TVM FFI module as `library`.
 5. Run the kernel and compare it against a reference with your harness’s assertions.
 6. Run your measurement harness only after the comparison succeeds.
 7. Add `return_()` instructions for the correctness and timing reports, then

@@ -161,37 +161,39 @@ def _cuda_toolchain_available() -> bool:
     reason="needs the server extra and a CUDA toolchain (nvcc, ninja, c++)",
 )
 def test_cpu_cuda_compilation_end_to_end():
+    source_bytes = (
+        b"void add_one(tvm::ffi::TensorView x) {}\nvoid add_two(tvm::ffi::TensorView x) {}\n"
+    )
+    source_digest = compute_blob_hash(source_bytes)
     arch = os.environ.get("KCORAL_CPU_COMPILE_ARCH", "sm_90a")
     program = {
         "instructions": [
             {
                 "op": "upload",
-                "id": "source_module",
-                "kind": "module",
-                "language": "cuda",
-                "source": "void add_one(tvm::ffi::TensorView x) {}",
-            },
-            {
-                "op": "get_function",
                 "id": "source",
-                "module": {"$ref": "source_module"},
-                "name": "add_one",
+                "kind": "file",
+                "blob": source_digest,
+                "path": "kernel.cu",
             },
             *harness_instructions(
-                "library", "compile_cuda_binary", [{"$ref": "source"}, {"arch": arch}]
+                "library",
+                "compile_cuda_binary",
+                [{"$ref": "source"}, {"functions": ["add_one", "add_two"], "arch": arch}],
             ),
             {"op": "return", "key": "library", "value": {"$ref": "library"}},
         ]
     }
     config = ServerConfig(sandbox="none", device="cpu", num_workers=1, max_requests_per_worker=0)
     with TestClient(create_app(config)) as client:
-        response = post_program(client, program)
+        response = post_program(client, program, {source_digest: source_bytes})
 
     result, binary_parts = response_parts(response)
     assert result["status"] == "COMPLETED", result.get("error")
     assert result["lease_wait_ms"] == 0
     assert result["lease_held_ms"] == 0
     assert binary_parts["return:0"].startswith(b"\x7fELF")
+    assert b"__tvm_ffi_add_one" in binary_parts["return:0"]
+    assert b"__tvm_ffi_add_two" in binary_parts["return:0"]
 
 
 def test_request_id_and_timing_are_returned():
@@ -266,7 +268,9 @@ def test_file_cache_persists_across_server_restart_without_memory_cache(tmp_path
     data = b"file contents"
     key = compute_blob_hash(data)
     program = {
-        "instructions": [{"op": "upload", "kind": "file", "blob": key, "path": "data/input"}]
+        "instructions": [
+            {"op": "upload", "id": "file", "kind": "file", "blob": key, "path": "data/input"}
+        ]
     }
     config = ServerConfig(
         sandbox="none", workers_per_gpu=1, max_requests_per_worker=0, disk_cache_dir=tmp_path
@@ -295,7 +299,11 @@ def test_uncached_file_upload_still_executes(tmp_path, disabled):
     )
     data = b"uncached file"
     key = compute_blob_hash(data)
-    program = {"instructions": [{"op": "upload", "kind": "file", "blob": key, "path": "input"}]}
+    program = {
+        "instructions": [
+            {"op": "upload", "id": "file", "kind": "file", "blob": key, "path": "input"}
+        ]
+    }
     with make_client(config) as client:
         assert post_program(client, program, {key: data}).json()["status"] == "COMPLETED"
         assert client.app.state.cache.get(key) is None
@@ -313,7 +321,11 @@ def test_disk_cache_capacity_mbytes_uses_binary_megabytes(tmp_path, size):
     )
     data = b"x" * size
     key = compute_blob_hash(data)
-    program = {"instructions": [{"op": "upload", "kind": "file", "blob": key, "path": "input"}]}
+    program = {
+        "instructions": [
+            {"op": "upload", "id": "file", "kind": "file", "blob": key, "path": "input"}
+        ]
+    }
     with make_client(config) as client:
         assert post_program(client, program, {key: data}).json()["status"] == "COMPLETED"
         warm = post_program(client, program).json()
@@ -328,11 +340,9 @@ def test_blobs_are_cached_only_in_backends_requested_by_their_upload_kinds(tmp_p
     key = compute_blob_hash(data)
     instructions = []
     for kind in kinds:
-        item = {"op": "upload", "kind": kind, "blob": key}
+        item = {"op": "upload", "id": kind, "kind": kind, "blob": key}
         if kind == "file":
             item["path"] = "input"
-        else:
-            item["id"] = kind
         if kind == "tensor":
             item.update(dtype="float32", shape=[1])
         instructions.append(item)
@@ -899,6 +909,8 @@ def main(shape):
     reason="real-kernel end-to-end test requires KCORAL_GPU_TEST=1",
 )
 def test_cuda_c_kernel_end_to_end():
+    source_bytes = (CUDA_KERNEL).encode("utf-8")
+    source_digest = compute_blob_hash(source_bytes)
     import numpy as np
 
     raw = np.arange(256, dtype=np.float32).tobytes()
@@ -907,16 +919,10 @@ def test_cuda_c_kernel_end_to_end():
         "instructions": [
             {
                 "op": "upload",
-                "id": "kernel_module",
-                "kind": "module",
-                "language": "cuda",
-                "source": CUDA_KERNEL,
-            },
-            {
-                "op": "get_function",
                 "id": "kernel",
-                "module": {"$ref": "kernel_module"},
-                "name": "scale",
+                "kind": "file",
+                "blob": source_digest,
+                "path": "kernel.cu",
             },
             {
                 "op": "upload",
@@ -934,7 +940,9 @@ def main(shape):
 """,
                 [[256]],
             ),
-            *harness_instructions("compiled", "compile_cuda", [{"$ref": "kernel"}]),
+            *harness_instructions(
+                "compiled", "compile_cuda", [{"$ref": "kernel"}, {"functions": ["scale"]}]
+            ),
             {
                 "op": "run",
                 "id": "invoke",
@@ -947,7 +955,7 @@ def main(shape):
     }
     app = gpu_app()
     with TestClient(app) as client:
-        response = post_program(client, program, {digest: raw})
+        response = post_program(client, program, {digest: raw, source_digest: source_bytes})
     result, binary = response_parts(response)
     assert result["status"] == "COMPLETED", result.get("error")
     returned = np.frombuffer(binary["return:0"], dtype=np.float32)
@@ -959,20 +967,16 @@ def main(shape):
     reason="real-kernel end-to-end test requires KCORAL_GPU_TEST=1",
 )
 def test_illegal_access_replaces_only_worker_and_next_gpu_request_recovers():
+    source_bytes = (ILLEGAL_ACCESS_KERNEL).encode("utf-8")
+    source_digest = compute_blob_hash(source_bytes)
     poison_program = {
         "instructions": [
             {
                 "op": "upload",
-                "id": "kernel_module",
-                "kind": "module",
-                "language": "cuda",
-                "source": ILLEGAL_ACCESS_KERNEL,
-            },
-            {
-                "op": "get_function",
                 "id": "kernel",
-                "module": {"$ref": "kernel_module"},
-                "name": "illegal_access",
+                "kind": "file",
+                "blob": source_digest,
+                "path": "kernel.cu",
             },
             {"op": "upload", "id": "sync_module", "kind": "module", "source": CUDA_SYNC},
             {
@@ -981,7 +985,9 @@ def test_illegal_access_replaces_only_worker_and_next_gpu_request_recovers():
                 "module": {"$ref": "sync_module"},
                 "name": "main",
             },
-            *harness_instructions("compiled", "compile_cuda", [{"$ref": "kernel"}]),
+            *harness_instructions(
+                "compiled", "compile_cuda", [{"$ref": "kernel"}, {"functions": ["illegal_access"]}]
+            ),
             {"op": "run", "id": "invoke", "fn": {"$ref": "compiled"}},
             {"op": "run", "id": "sync", "fn": {"$ref": "sync_fn"}},
         ],
@@ -1004,7 +1010,7 @@ def main(shape):
     app = gpu_app()
     with TestClient(app) as client:
         original_pid = app.state.pool._workers[0]._proc.pid
-        failed = post_program(client, poison_program)
+        failed = post_program(client, poison_program, {source_digest: source_bytes})
         # Read after the recovery request: the replacement is built once the poisoned
         # worker's answer is out, so only that request proves it landed.
         recovered = post_program(client, healthy_program)
@@ -1100,22 +1106,20 @@ def main(shape):
     reason="real-kernel end-to-end test requires KCORAL_GPU_TEST=1",
 )
 def test_cuda_last_error_fails_current_request_without_replacing_worker():
+    source_bytes = (STALE_LAST_ERROR_KERNEL).encode("utf-8")
+    source_digest = compute_blob_hash(source_bytes)
     stale_error_program = {
         "instructions": [
             {
                 "op": "upload",
-                "id": "kernel_module",
-                "kind": "module",
-                "language": "cuda",
-                "source": STALE_LAST_ERROR_KERNEL,
-            },
-            {
-                "op": "get_function",
                 "id": "kernel",
-                "module": {"$ref": "kernel_module"},
-                "name": "stale_launch",
+                "kind": "file",
+                "blob": source_digest,
+                "path": "kernel.cu",
             },
-            *harness_instructions("compiled", "compile_cuda", [{"$ref": "kernel"}]),
+            *harness_instructions(
+                "compiled", "compile_cuda", [{"$ref": "kernel"}, {"functions": ["stale_launch"]}]
+            ),
             {"op": "run", "id": "invoke", "fn": {"$ref": "compiled"}},
         ],
         "options": {"timeout_seconds": 300},
@@ -1137,7 +1141,7 @@ def main(shape):
     app = gpu_app()
     with TestClient(app) as client:
         original_pid = app.state.pool._workers[0]._proc.pid
-        failed = post_program(client, stale_error_program)
+        failed = post_program(client, stale_error_program, {source_digest: source_bytes})
         worker_pid_after_failure = app.state.pool._workers[0]._proc.pid
         recovered = post_program(client, healthy_program)
 
@@ -1160,6 +1164,8 @@ def main(shape):
 )
 def test_uploaded_host_compilation_does_not_hold_the_gpu():
     """Explicit-architecture CUDA building is host-only; loading is a separate step."""
+    source_bytes = (CUDA_KERNEL + f"\n// uncached build {time.time_ns()}\n").encode("utf-8")
+    source_digest = compute_blob_hash(source_bytes)
     app = gpu_app()
     with TestClient(app) as client:
         arch = client.get("/health").json()["target"]["arch"]
@@ -1167,25 +1173,21 @@ def test_uploaded_host_compilation_does_not_hold_the_gpu():
             "instructions": [
                 {
                     "op": "upload",
-                    "id": "source",
-                    "kind": "module",
-                    "language": "cuda",
-                    "source": CUDA_KERNEL + f"\n// uncached build {time.time_ns()}\n",
-                },
-                {
-                    "op": "get_function",
                     "id": "kernel",
-                    "module": {"$ref": "source"},
-                    "name": "scale",
+                    "kind": "file",
+                    "blob": source_digest,
+                    "path": "kernel.cu",
                 },
                 *harness_instructions(
-                    "compiled", "compile_cuda_binary", [{"$ref": "kernel"}, {"arch": arch}]
+                    "compiled",
+                    "compile_cuda_binary",
+                    [{"$ref": "kernel"}, {"functions": ["scale"], "arch": arch}],
                 ),
                 {"op": "return", "key": "library", "value": {"$ref": "compiled"}},
             ],
             "options": {"timeout_seconds": 120},
         }
-        response = post_program(client, program)
+        response = post_program(client, program, {source_digest: source_bytes})
     result, parts = response_parts(response)
     assert result["status"] == "COMPLETED", result.get("error")
     assert parts["return:0"].startswith(b"\x7fELF")

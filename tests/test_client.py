@@ -144,7 +144,7 @@ def test_bytes_cache_retry_and_result(server_url):
 def test_file_cache_retry_is_read_from_a_request_local_workspace(server_url):
     value = b"safetensors contents\x00\xff"
     program = Program()
-    assert program.upload_file(blob=value, path="./assets//tensor") is None
+    assert program.upload_file(blob=value, path="./assets//tensor") == Register("upload_0")
     inspect_module = program.upload(
         id="inspect_module",
         kind="module",
@@ -483,12 +483,11 @@ def test_program_builder_validates_ids_and_tensor_metadata():
     "upload_kwargs",
     [
         {"kind": "module", "source": ""},
-        {"kind": "module", "source": "", "language": "cuda"},
         {"kind": "tensor", "value": b"\x00" * 4, "dtype": "float32", "shape": [1]},
         {"kind": "bytes", "value": b"data"},
         {"kind": "library", "value": b"library"},
     ],
-    ids=["python", "cuda", "tensor", "bytes", "library"],
+    ids=["python", "tensor", "bytes", "library"],
 )
 def test_upload_generates_ids_for_each_kind(id_kwargs, upload_kwargs):
     program = Program()
@@ -514,7 +513,7 @@ def test_generated_ids_skip_explicit_ids_and_ignore_instructions_without_ids():
     assert Program().upload(kind="bytes", value=b"fresh").id == "upload_0"
 
 
-@pytest.mark.parametrize("op", ["upload", "get_function", "run"])
+@pytest.mark.parametrize("op", ["upload", "upload_file", "get_function", "run"])
 @pytest.mark.parametrize("id_kwargs", [{"id": "module"}, {}], ids=["explicit", "generated"])
 def test_explicit_ids_cannot_duplicate_existing_ids(op, id_kwargs):
     program = Program()
@@ -522,6 +521,7 @@ def test_explicit_ids_cannot_duplicate_existing_ids(op, id_kwargs):
     fn = program.get_function(id="fn", module=module, name="main")
     kwargs = {
         "upload": {"kind": "module", "source": ""},
+        "upload_file": {"blob": b"data", "path": "input"},
         "get_function": {"module": module, "name": "main"},
         "run": {"fn": fn},
     }[op]
@@ -531,7 +531,7 @@ def test_explicit_ids_cannot_duplicate_existing_ids(op, id_kwargs):
     assert program.instructions == before
 
 
-@pytest.mark.parametrize("op", ["upload", "get_function", "run"])
+@pytest.mark.parametrize("op", ["upload", "upload_file", "get_function", "run"])
 @pytest.mark.parametrize("invalid_id", ["", 0, False])
 def test_explicit_ids_must_be_nonempty_strings(op, invalid_id):
     program = Program()
@@ -539,6 +539,7 @@ def test_explicit_ids_must_be_nonempty_strings(op, invalid_id):
     fn = program.get_function(module=module, name="main")
     kwargs = {
         "upload": {"kind": "module", "source": ""},
+        "upload_file": {"blob": b"data", "path": "input"},
         "get_function": {"module": module, "name": "main"},
         "run": {"fn": fn},
     }[op]
@@ -561,33 +562,10 @@ def test_failed_builder_validation_does_not_consume_generated_ids():
     assert program.run(fn=fn).id == "run_2"
 
 
-def test_cuda_module_builder_emits_language_and_get_function():
-    program = Program()
-    module = program.upload(id="kernel", kind="module", source="void add() {}", language="cuda")
-    program.get_function(id="add", module=module, name="add")
-    assert program.instructions[0]["language"] == "cuda"
-    assert "entry" not in program.instructions[0]
-    assert program.instructions[1] == {
-        "op": "get_function",
-        "id": "add",
-        "module": {"$ref": "kernel"},
-        "name": "add",
-    }
-
-    # python is the default and stays off the wire
-    program.upload(id="py", kind="module", source="def main():\n    pass\n")
-    assert "language" not in program.instructions[2]
-
-
-@pytest.mark.parametrize(
-    "kwargs,match",
-    [
-        ({"kind": "module", "source": "x", "language": "rust"}, "'python' or 'cuda'"),
-    ],
-)
-def test_cuda_module_builder_validation(kwargs, match):
-    with pytest.raises(ValueError, match=match):
-        Program().upload(id="kernel", **kwargs)
+@pytest.mark.parametrize("language", ["python", "cuda", "rust"])
+def test_module_builder_rejects_language(language):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'language'"):
+        Program().upload(kind="module", source="", language=language)
 
 
 def test_library_builder_hashes_bytes_and_gets_functions():
@@ -665,13 +643,14 @@ def test_bytes_builder_hashes_bytes_without_tensor_metadata():
         Program().upload(id="file", kind="bytes", value="text")
 
 
-def test_file_builder_snapshots_blob_without_creating_a_register():
+def test_file_builder_snapshots_blob_and_returns_a_path_register():
     value = bytearray(b"file contents")
     program = Program()
-    assert program.upload_file(blob=value, path="./data//tensor") is None
+    assert program.upload_file(blob=value, path="./data//tensor") == Register("upload_0")
     assert program.instructions == [
         {
             "op": "upload",
+            "id": "upload_0",
             "kind": "file",
             "blob": compute_blob_hash(bytes(value)),
             "path": "data/tensor",
@@ -679,16 +658,42 @@ def test_file_builder_snapshots_blob_without_creating_a_register():
     ]
     value[:] = b"changed"
     assert program._blobs == {compute_blob_hash(b"file contents"): b"file contents"}
-    assert program._ids == set()
+    assert program._ids == {"upload_0"}
 
     with pytest.raises(ValueError, match="must be relative"):
         Program().upload_file(blob=b"x", path="/tmp/tensor")
     with pytest.raises(ValueError, match=r"'\.\.' component"):
         Program().upload_file(blob=b"x", path="data/../tensor")
-    with pytest.raises(TypeError, match="unexpected keyword argument 'id'"):
-        Program().upload_file(id="file", blob=b"x", path="tensor")
+    assert Program().upload_file(id="file", blob=b"x", path="tensor") == Register("file")
     with pytest.raises(TypeError, match="bytes-like"):
         Program().upload_file(blob="text", path="tensor")
+
+
+def test_failed_file_upload_leaves_ids_paths_and_blobs_unchanged():
+    program = Program()
+    program.upload_file(id="taken", blob=b"first", path="first")
+    before = (
+        program.instructions,
+        program._blobs.copy(),
+        program._file_paths.copy(),
+        program._ids.copy(),
+        program._next_id,
+    )
+    for kwargs in (
+        {"id": "taken", "path": "second"},
+        {"id": "", "path": "second"},
+        {"path": "first"},
+    ):
+        with pytest.raises(ValueError):
+            program.upload_file(blob=b"second", **kwargs)
+        assert (
+            program.instructions,
+            program._blobs,
+            program._file_paths,
+            program._ids,
+            program._next_id,
+        ) == before
+    assert program.upload_file(blob=b"second", path="second") == Register("upload_0")
 
 
 def test_numpy_tensor_builder_uses_raw_byte_hash():

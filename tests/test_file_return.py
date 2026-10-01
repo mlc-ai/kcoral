@@ -64,6 +64,87 @@ def write(data):
     }
 
 
+def test_file_registers_bind_absolute_paths_and_survive_chdir(tmp_path):
+    program = Program()
+    first = program.upload_file(blob=b"original\x00\xff", path="./inputs//first")
+    module = program.upload(
+        kind="module",
+        source="""
+import os
+from pathlib import Path
+
+def change_directory():
+    os.chdir("inputs")
+
+def edit(first, second):
+    assert os.path.isabs(first) and os.path.isabs(second)
+    assert Path(first).read_bytes() == Path(second).read_bytes()
+    Path(first).write_bytes(b"edited")
+    return str(Path(first).parent)
+""",
+    )
+    change = program.get_function(module=module, name="change_directory", cpu_only=True)
+    edit = program.get_function(module=module, name="edit", cpu_only=True)
+    program.run(fn=change)
+    # Upload destinations and bound paths still use the original workspace.
+    second = program.upload_file(blob=b"original\x00\xff", path="inputs/second")
+    directory = program.run(fn=edit, args=[first, second])
+    program.return_(key="path", value=first)
+    program.return_file(key="first", path=first)
+    program.return_file(key="second", path=second)
+    program.return_folder(key="folder", path=directory)
+    outcome = run(program, tmp_path)
+    assert outcome.status == "COMPLETED", outcome.error
+    assert values(outcome) == {
+        "path": str(tmp_path / "inputs/first"),
+        "first": ReturnedFile(b"edited"),
+        "second": ReturnedFile(b"original\x00\xff"),
+        "folder": ReturnedFolder(
+            {
+                "first": ReturnedFile(b"edited"),
+                "second": ReturnedFile(b"original\x00\xff"),
+            }
+        ),
+    }
+    assert program._blobs == {compute_blob_hash(b"original\x00\xff"): b"original\x00\xff"}
+
+
+@pytest.mark.parametrize("kind", ["file", "folder"])
+@pytest.mark.parametrize("invalid", ["outside", "prefix", "parent", "link", "link_parent"])
+def test_absolute_return_paths_cannot_escape_or_follow_symlinks(tmp_path, kind, invalid):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "target"
+    target.mkdir()
+    (target / "data").write_bytes(b"data")
+    (workspace / "link").symlink_to(target, target_is_directory=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "data").write_bytes(b"outside")
+    sibling = tmp_path / "workspace-other"
+    sibling.mkdir()
+    (sibling / "data").write_bytes(b"sibling")
+    path = {
+        "outside": str(outside),
+        "prefix": str(sibling),
+        "parent": str(workspace) + "/../outside",
+        "link": str(workspace / "link"),
+        # Normalizing '..' before checking would bypass the symlink rejection.
+        "link_parent": str(workspace) + "/link/../target",
+    }[invalid]
+    if kind == "file":
+        path += "/data"
+    program = Program()
+    module = program.upload(kind="module", source=f"def path(): return {path!r}")
+    fn = program.get_function(module=module, name="path")
+    result = program.run(fn=fn)
+    getattr(program, f"return_{kind}")(key="bad", path=result)
+    outcome = run(program, workspace)
+    assert outcome.status == "FAILED"
+    assert outcome.error["kind"] == "serialization"
+    assert outcome.results == {} and outcome.binary_parts == {}
+
+
 @pytest.mark.parametrize("kind", ["symlink", "fifo"])
 def test_folder_return_rejects_unsafe_entries(tmp_path, kind):
     folder = tmp_path / "out"

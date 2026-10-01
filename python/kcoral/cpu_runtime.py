@@ -8,7 +8,6 @@ from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
 from . import process_state
-from .cuda_source import CUDAModule
 from .errors import ExecutionError
 from .python_module import LoadedPythonModule, materialize_module
 
@@ -16,7 +15,7 @@ from .python_module import LoadedPythonModule, materialize_module
 class CPURuntime:
     """Runtime exposed by ``--device cpu`` workers.
 
-    CPU workers accept CUDA source and can return a compiled shared object.
+    CPU workers accept source files and can return a compiled shared object.
     Uploaded Python supplies the compilation harness. GPU tensors and uploaded
     libraries remain unavailable; constructing this runtime imports no GPU library.
     """
@@ -25,9 +24,7 @@ class CPURuntime:
         self._seeded_fnames: list[str] = []
         self._process_state = process_state.snapshot()
 
-    def load_module(self, source: str, language: str = "python") -> Any:
-        if language == "cuda":
-            return CUDAModule(source=source)
+    def load_module(self, source: str) -> Any:
         return materialize_module(source, self._seeded_fnames)
 
     def load_library(self, data: bytes) -> Any:
@@ -36,11 +33,7 @@ class CPURuntime:
     def get_function(self, module: Any, name: str) -> Any:
         if isinstance(module, LoadedPythonModule):
             return module.get_function(name)
-        if isinstance(module, CUDAModule):
-            return module.get_function(name)
-        raise ExecutionError(
-            "unavailable", "get_function expects an uploaded Python or CUDA source module"
-        )
+        raise ExecutionError("unavailable", "get_function expects an uploaded Python module")
 
     def target(self) -> dict[str, str]:
         """CPU workers compile for the architecture supplied by the client."""

@@ -26,13 +26,24 @@ def test_folder_expands_to_fixed_file_uploads_and_deduplicates(tmp_path):
     ]
     assert items[0]["id"] == "before" and items[-1]["id"] == "after"
     assert [item["path"] for item in items[1:-1]] == ["assets/.hidden", "assets/a", "assets/sub/b"]
-    assert all(set(item) == {"op", "kind", "blob", "path"} for item in items[1:-1])
+    assert all(set(item) == {"op", "id", "kind", "blob", "path"} for item in items[1:-1])
     assert all(item["op"] == "upload" and item["kind"] == "file" for item in items[1:-1])
+    assert [item["id"] for item in items[1:-1]] == ["upload_0", "upload_1", "upload_2"]
     assert program._blobs == {compute_blob_hash(b"shared"): b"shared", compute_blob_hash(b""): b""}
     parse_program({"instructions": program.instructions})
     (tmp_path / "a").write_bytes(b"changed")
     assert program.instructions == original
     assert program._blobs[compute_blob_hash(b"shared")] == b"shared"
+
+
+def test_folder_generated_ids_skip_existing_handles_and_are_referenceable(tmp_path):
+    (tmp_path / "a").write_bytes(b"a")
+    program = Program()
+    program.upload(kind="bytes", id="upload_0", value=b"reserved")
+    program.upload_folder(tmp_path, path="inputs")
+    assert program.instructions[1]["id"] == "upload_1"
+    program.return_(key="path", value={"$ref": "upload_1"})
+    parse_program({"instructions": program.instructions})
 
 
 def test_empty_folder_is_a_noop(tmp_path):

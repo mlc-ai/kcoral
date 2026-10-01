@@ -64,8 +64,7 @@ class FakeRuntime:
         self._poisoned = False
         self._last_error: str | None = None
 
-    def load_module(self, source: str, language: str = "python") -> Any:
-        assert language == "python", "the fake runtime has no compiler"
+    def load_module(self, source: str) -> Any:
         namespace: dict[str, Any] = {"_test_runtime": self}
         try:
             exec(compile(source, "<uploaded>", "exec"), namespace)

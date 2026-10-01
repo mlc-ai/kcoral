@@ -12,7 +12,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from kcoral.cuda_source import CUDAModule
 from kcoral.errors import ExecutionError
 
 from ._common import short
@@ -20,24 +19,24 @@ from ._common import short
 
 def compile_cuda(src: Any, cfg: Any = None) -> Any:
     """Build a CUDA C upload into its exported function, caching the build on
-    disk. cfg: ``extra_cuda_cflags``."""
+    disk. cfg: ``functions`` and optional ``extra_cuda_cflags``."""
     options = _validate_compile_request(src, cfg, "compile_cuda")
     cuda_cflags = _string_list(options, "extra_cuda_cflags")
-    library_path = _build_cuda(src, cuda_cflags)
+    library_path = _build_cuda(src, options["functions"], cuda_cflags)
     # This function includes CUDA module loading, so callers must hold the lease.
-    return _load_compiled_function(library_path, src.name)
+    return _load_compiled_function(library_path, options["functions"][0])
 
 
 def compile_cuda_binary(src: Any, cfg: Any = None) -> bytes:
     """Build a CUDA C upload for an explicit GPU architecture and return its
-    shared-object bytes. cfg: ``arch`` and optional ``extra_cuda_cflags``."""
+    shared-object bytes. cfg: ``functions``, ``arch`` and optional ``extra_cuda_cflags``."""
     options = _validate_compile_request(src, cfg, "compile_cuda_binary")
     arch = options.get("arch")
     if not isinstance(arch, str):
         raise ExecutionError("compile", "compile_cuda_binary option 'arch' must be a string")
     arch_list = _tvm_ffi_arch(arch)
     cuda_cflags = _string_list(options, "extra_cuda_cflags")
-    library_path = _build_cuda(src, cuda_cflags, arch_list=arch_list)
+    library_path = _build_cuda(src, options["functions"], cuda_cflags, arch_list=arch_list)
     try:
         return Path(library_path).read_bytes()
     except OSError as exc:
@@ -48,18 +47,20 @@ def compile_cuda_binary(src: Any, cfg: Any = None) -> bytes:
 
 
 def _validate_compile_request(src: Any, cfg: Any, harness: str) -> dict:
-    if not isinstance(src, CUDAModule) or src.name is None:
-        raise ExecutionError(
-            "compile",
-            f"{harness} expects a function selected from a module upload whose language is 'cuda'",
-        )
+    if not isinstance(src, str):
+        raise ExecutionError("compile", f"{harness} expects a source file path")
     options = cfg if cfg is not None else {}
     if not isinstance(options, dict):
         raise ExecutionError("compile", f"{harness} options must be a dict")
+    functions = _string_list(options, "functions")
+    if not functions:
+        raise ExecutionError("compile", f"{harness} requires exported function names")
     return options
 
 
-def _build_cuda(src: CUDAModule, cuda_cflags: list[str], arch_list: str | None = None) -> str:
+def _build_cuda(
+    source_path: str, functions: list[str], cuda_cflags: list[str], arch_list: str | None = None
+) -> str:
     _require_cuda_toolchain()
     import tvm_ffi.cpp
 
@@ -67,13 +68,17 @@ def _build_cuda(src: CUDAModule, cuda_cflags: list[str], arch_list: str | None =
     # overrides the setting with the target supplied by the client.
     if arch_list is None and "TVM_FFI_CUDA_ARCH_LIST" not in os.environ:
         os.environ["TVM_FFI_CUDA_ARCH_LIST"] = _cuda_arch_list()
-    source_manages_exports = _declares_tvm_ffi_macro(src.source)
+    try:
+        source = Path(source_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ExecutionError("compile", f"cannot read CUDA source: {short(exc)}") from exc
+    source_manages_exports = _declares_tvm_ffi_macro(source)
     try:
         with _cuda_arch_override(arch_list):
             return tvm_ffi.cpp.build_inline(
-                name=f"upload_{src.name}",
-                cuda_sources=src.source,
-                functions=None if source_manages_exports else src.name,
+                name="upload_" + "_".join(functions),
+                cuda_sources=source,
+                functions=None if source_manages_exports else functions,
                 extra_cuda_cflags=cuda_cflags or None,
                 backend="cuda",
             )

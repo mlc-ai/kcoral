@@ -8,7 +8,7 @@ import pytest
 from support.programs import harness_call, python_call
 
 from kcoral.keys import compute_blob_hash
-from kcoral.schemas import GetFunction, Program, Ref, Return, Run, Upload
+from kcoral.schemas import FileUpload, GetFunction, Program, Ref, Return, Run, Upload
 from kcoral.testing import UNSHARED_GPU, execute_for_test
 
 pytestmark = pytest.mark.skipif(
@@ -387,10 +387,11 @@ def main(shape):
 
 
 def test_cuda_c_compile_correctness_and_benchmark():
+    raw = CUDA_KERNEL.encode("utf-8")
+    digest = compute_blob_hash(raw)
     program = Program(
         [
-            Upload("kernel_module", "module", source=CUDA_KERNEL, language="cuda"),
-            GetFunction("kernel", ref("kernel_module"), "add_one"),
+            FileUpload(id="kernel", blob=digest, path="kernel.cu"),
             Upload("reference_module", "module", source=REF),
             GetFunction("reference", ref("reference_module"), "main"),
             *python_call(
@@ -410,7 +411,7 @@ def main(shape):
 """,
                 [[256]],
             ),
-            *harness_call("compiled", "compile_cuda", [ref("kernel")]),
+            *harness_call("compiled", "compile_cuda", [ref("kernel"), {"functions": ["add_one"]}]),
             Run("invoke", ref("compiled"), [ref("input"), ref("output")]),
             Run("expected", ref("reference"), [ref("input")]),
             *harness_call("check", "check_close", [ref("output"), ref("expected")]),
@@ -421,7 +422,8 @@ def main(shape):
             ),
             Return("check", ref("check")),
             Return("timing", ref("timing")),
-        ]
+        ],
+        blob_bytes={digest: raw},
     )
     outcome = execute_for_test(program, runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
@@ -433,13 +435,17 @@ def main(shape):
 
 def test_cuda_c_nvcc_error_is_compile_failure_and_names_the_mistake():
     bad = CUDA_KERNEL.replace("x.data_ptr()", "undeclared_symbol")
+    raw = bad.encode("utf-8")
+    digest = compute_blob_hash(raw)
     outcome = execute_for_test(
         Program(
             [
-                Upload("kernel_module", "module", source=bad, language="cuda"),
-                GetFunction("kernel", ref("kernel_module"), "add_one"),
-                *harness_call("compiled", "compile_cuda", [ref("kernel")]),
-            ]
+                FileUpload(id="kernel", blob=digest, path="kernel.cu"),
+                *harness_call(
+                    "compiled", "compile_cuda", [ref("kernel"), {"functions": ["add_one"]}]
+                ),
+            ],
+            blob_bytes={digest: raw},
         ),
         runtime(),
         UNSHARED_GPU,
@@ -456,11 +462,12 @@ def test_cuda_c_runs_on_the_arch_specific_target():
 
     if torch.cuda.get_device_capability()[0] != 10:
         pytest.skip("tcgen05 needs a Blackwell device")
+    raw = TMEM_KERNEL.encode("utf-8")
+    digest = compute_blob_hash(raw)
     outcome = execute_for_test(
         Program(
             [
-                Upload("kernel_module", "module", source=TMEM_KERNEL, language="cuda"),
-                GetFunction("kernel", ref("kernel_module"), "tmem_roundtrip"),
+                FileUpload(id="kernel", blob=digest, path="kernel.cu"),
                 *python_call(
                     "out",
                     """import torch
@@ -469,10 +476,13 @@ def main(shape):
 """,
                     [[32]],
                 ),
-                *harness_call("compiled", "compile_cuda", [ref("kernel")]),
+                *harness_call(
+                    "compiled", "compile_cuda", [ref("kernel"), {"functions": ["tmem_roundtrip"]}]
+                ),
                 Run("invoke", ref("compiled"), [ref("out")]),
                 Return("out", ref("out")),
-            ]
+            ],
+            blob_bytes={digest: raw},
         ),
         runtime(),
         UNSHARED_GPU,

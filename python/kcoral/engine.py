@@ -39,7 +39,7 @@ MAX_TRACEBACK_BYTES = 8192
 
 
 class Runtime(Protocol):
-    def load_module(self, source: str, language: str = "python") -> Any: ...
+    def load_module(self, source: str) -> Any: ...
     def load_library(self, data: bytes) -> Any: ...
     def get_function(self, module: Any, name: str) -> Any: ...
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any: ...
@@ -118,13 +118,11 @@ def _execute_in_workspace(
                             instruction.path,
                             program.blob_bytes[instruction.blob],
                         )
+                        env[instruction.id] = os.path.join(workspace_dir, instruction.path)
                     elif isinstance(instruction, Upload):
                         if instruction.kind == "module":
                             assert instruction.source is not None
-                            env[instruction.id] = runtime.load_module(
-                                instruction.source,
-                                language=instruction.language,
-                            )
+                            env[instruction.id] = runtime.load_module(instruction.source)
                         elif instruction.kind == "bytes":
                             assert instruction.blob is not None
                             env[instruction.id] = program.blob_bytes[instruction.blob]
@@ -323,11 +321,6 @@ def _place(
         return
     if isinstance(instruction, Upload) and instruction.kind == "bytes":
         return
-    if isinstance(instruction, Upload) and instruction.kind == "module":
-        # Binding CUDA source runs nothing, and is far too brief to be worth
-        # dropping the lease over; exec'ing Python could touch the GPU.
-        if instruction.language == "cuda":
-            return
     lease.acquire()
 
 
