@@ -630,6 +630,7 @@ server = [
     { name = "kcoral", extra = ["server"], marker = "sys_platform == 'linux'" },
 ]
 test = [
+    { name = "kcoral", extra = ["server"], marker = "sys_platform == 'linux'" },
     { name = "pytest", marker = "sys_platform == 'linux'" },
 ]
 
@@ -654,7 +655,10 @@ provides-extras = ["server"]
 [package.metadata.requires-dev]
 gpu = [{ name = "kcoral", extras = ["server"] }]
 server = [{ name = "kcoral", extras = ["server"] }]
-test = [{ name = "pytest", specifier = ">=8" }]
+test = [
+    { name = "kcoral", extras = ["server"] },
+    { name = "pytest", specifier = ">=8" },
+]
 
 [[package]]
 name = "markupsafe"
