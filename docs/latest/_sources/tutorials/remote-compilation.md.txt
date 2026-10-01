@@ -112,9 +112,9 @@ helpers uploaded by each program:
 :end-before: def compile_program
 ```
 
-The compilation program uploads that Python and the CUDA source, selects
-`compile_cuda_binary` with `get_function(..., cpu_only=True)`, selects the CUDA
-source name `add_one`, compiles for `arch`, and explicitly returns the library:
+The compilation program uploads that Python and the CUDA source file, selects
+`compile_cuda_binary` with `get_function(..., cpu_only=True)`, passes the file path
+and configuration (`functions=["add_one"]`, `arch`), and returns the library:
 
 ```{literalinclude} ../../examples/cpu_compile_gpu_execute.py
 :language: python

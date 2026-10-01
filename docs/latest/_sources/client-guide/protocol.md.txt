@@ -121,11 +121,11 @@ Every instruction is a JSON object with an `op` field. The four values are
 | Common field | Meaning |
 | --- | --- |
 | `op` | Required operation name; determines the accepted fields |
-| `id` | Required, nonempty, unique identifier when the operation produces a handle; absent for file uploads and `return` |
+| `id` | Required, nonempty, unique identifier when the operation produces a handle; absent for `return` |
 | `{"$ref": "id"}` | A reference value naming an earlier handle; it is not a top-level instruction field |
 
-A handle names a value inside this request. `upload` except file upload,
-`get_function` and `run` produce handles. References must have exactly the `$ref`
+A handle names a value inside this request. `upload`, `get_function` and `run`
+produce handles. References must have exactly the `$ref`
 key and cannot refer forward or cross request boundaries. Each operation below
 specifies where references are resolved. Return keys are unique in a separate
 namespace from instruction identifiers. Each field table is exhaustive:
@@ -133,8 +133,7 @@ unlisted fields are rejected.
 
 ### upload
 
-Upload source or binary data. A file upload materializes a file; other kinds
-produce a handle.
+Upload source or binary data and produce a handle.
 
 ```json
 {
@@ -147,34 +146,36 @@ produce a handle.
 
 <a id="fields"></a>
 
-| Field | Kinds | Required for | Notes |
-|---|---|---|---|
-| `op` | all | all | `"upload"` |
-| `id` | module, tensor, bytes, library | module, tensor, bytes, library | Unique handle name; rejected for file |
-| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, or `"library"` |
-| `source` | module | module | UTF-8 Python or CUDA source defining a module |
-| `language` | module | — | `"python"` (default) or `"cuda"` |
-| `blob` | tensor, bytes, file, library | tensor, bytes, file, library | SHA-256 of the raw bytes |
-| `path` | file | file | Relative destination in the request working directory |
-| `dtype` | tensor | tensor | Tensor data type |
-| `shape` | tensor | tensor | Tensor shape |
+Each field is required for the listed kinds.
+
+| Field | Kinds | Notes |
+|---|---|---|
+| `op` | all | `"upload"` |
+| `id` | all | Unique handle name |
+| `kind` | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, or `"library"` |
+| `source` | module | Python source executed to define a module |
+| `blob` | tensor, bytes, file, library | SHA-256 of the raw bytes |
+| `path` | file | Relative destination in the request working directory |
+| `dtype` | tensor | Tensor data type |
+| `shape` | tensor | Tensor shape |
 
 <a id="details"></a>
 
 | Kind | Content and result |
 | --- | --- |
-| <a id="module"></a>`module` | Inline `source`. `language="python"` executes it to form a namespace; `language="cuda"` retains it for compilation. The handle binds the whole module. |
+| <a id="module"></a>`module` | Inline Python `source`, executed to form a namespace. The handle binds the whole module. |
 | <a id="tensor"></a>`tensor` | Raw contiguous row-major bytes, copied to the assigned GPU. The byte length must equal `product(shape) * dtype.itemsize`. |
 | <a id="bytes"></a>`bytes` | The blob's bytes unchanged in CPU memory. Pass them to uploaded Python to parse files or other binary formats. |
-| `file` | Materialize the blob at `path` in the request workspace. Creates no handle, rejects `id`, and needs no GPU. See the file rules below. |
-| `library` | An ELF shared object for the server's platform, loaded with `tvm_ffi.load_module`. The handle binds the loaded module; see [Library](#library). |
+| `file` | Materialize the blob at `path` in the request workspace and bind its normalized relative path as a string. Needs no GPU. See the file rules below. |
+| `library` | A precompiled TVM FFI shared library for the server's platform, loaded with `tvm_ffi.load_module`. The handle binds the loaded module; see [Library](#library). |
 
 <a id="cuda-c-modules"></a>
 <a id="cutedsl-modules"></a>
 <a id="triton-modules"></a>
 
-For modules, `get_function` selects an object from the namespace or CUDA source.
+For modules, `get_function` selects an object from the executed Python namespace.
 The object need not be directly callable: a compiler tool may consume it first.
+Upload CUDA source as a `file` and pass its path and export names to your compiler.
 All Python-based kernel languages use the same module upload shape; uploaded
 harness code handles compilation. See the
 [benchmark tutorial](../tutorials/benchmark-kernel.md#on-a-gpu-server).
@@ -186,8 +187,8 @@ For each uncached binary upload, supply the bytes in a multipart part named
 [
   {"op": "upload", "id": "input", "kind": "tensor", "blob": "<sha256>",
    "dtype": "float16", "shape": [32, 128]},
-  {"op": "upload", "id": "file", "kind": "bytes", "blob": "<sha256>"},
-  {"op": "upload", "kind": "file", "blob": "<sha256>", "path": "data/tensor.bin"}
+  {"op": "upload", "id": "raw_bytes", "kind": "bytes", "blob": "<sha256>"},
+  {"op": "upload", "id": "file_path", "kind": "file", "blob": "<sha256>", "path": "data/tensor.bin"}
 ]
 ```
 
@@ -202,13 +203,13 @@ For each uncached binary upload, supply the bytes in a multipart part named
 | Conflicts | Normalized paths must be unique and cannot conflict as a file and directory; a program cannot upload both `data` and `data/tensor.bin`. |
 | Filesystem access | Creates a regular file with mode `0600` and missing parent directories with mode `0700`. Creates and opens every component without following symbolic links. |
 | Workspace | A fresh temporary working directory per request, owned by the parent process and removed after completion, failure, timeout, or worker crash. |
-| Lifetime | File uploads cannot be referenced or returned as handles. Blob cache entries remain available after materialized files are removed. |
+| Lifetime | Blob cache entries remain available after materialized files are removed. |
 
 #### Library
 
-A library is an already-built shared object, whether its bytes came from the
-client's toolchain or a preceding CPU-server request. The GPU server compiles
-nothing:
+A library is an already-built TVM FFI module, whether its bytes came from the
+client's toolchain or a preceding CPU-server request. Uploading it requires no
+compilation:
 
 ```json
 {
@@ -221,14 +222,14 @@ nothing:
 
 `blob` names the bytes of an ELF shared object for the server's platform. The
 server loads it with `tvm_ffi.load_module` and binds the resulting module.
-Later `get_function` instructions may bind any number of its exports. A library
+Later `get_function` instructions may bind any number of its TVM FFI exports. A library
 that cannot be loaded, or a requested function that is absent, fails with a
 `compile` error. Nothing else about the object is inspected, so any producer
 TVM FFI can load is accepted. Three are usual:
 
 | Producer | Export | Server requirement |
 | --- | --- | --- |
-| C++ / `tvm_ffi.cpp.build` | `TVM_FFI_DLL_EXPORT_TYPED_FUNC` emits `__tvm_ffi_<name>`; `tvm_ffi.cpp.build` applies it automatically. A code generator can emit the symbol directly. | TVM FFI |
+| C++ / `tvm_ffi.cpp.build` | `TVM_FFI_DLL_EXPORT_TYPED_FUNC` emits `__tvm_ffi_<name>`; `tvm_ffi.cpp.build_inline(functions=...)` adds it automatically. A code generator can emit the symbol directly. | TVM FFI |
 | `tvm.Executable.export_library` | Embedded module blob | TVM installed, including the loader registered by its CUDA runtime |
 | CuTeDSL with `--enable-tvm-ffi` | `__tvm_ffi_<name>`, linked against `libcute_dsl_runtime.so` | `versions` must report `cutlass`. Building against a newer cutlass than the server's fails to load, naming the missing symbol. |
 
@@ -338,7 +339,6 @@ Select a named object from an earlier module or library upload.
 | Source | Selection behavior |
 | --- | --- |
 | Python module | Looks up `name` in the executed namespace. |
-| CUDA module | Returns an object with the uploaded text as `source` and the selected function name as `name`, for a compiler to consume. Uploading `"void add() {}"` and selecting `"add"` yields `source == "void add() {}"` and `name == "add"`. C++ `main` and non-identifiers are rejected. |
 | TVM-FFI library | Calls the loaded module's `get_function`. The selected function keeps its defining module alive. |
 
 Given a library that exports `init` and `step`, the Python client writes:
@@ -668,7 +668,7 @@ A `FAILED` response's `error` describes that instruction:
 | `message` | string | Human-readable description |
 | `instruction_index` | integer | Zero-based position in `instructions` |
 | `instruction_op` | string | `"upload"`, `"get_function"`, `"run"`, or `"return"` |
-| `instruction_id` | string \| null | The instruction's `id`; `null` for `return` and file upload |
+| `instruction_id` | string \| null | The instruction's `id`; `null` only for `return` |
 | `traceback` | string | Server-side traceback, truncated to 8192 bytes |
 
 Instruction error kinds are `parse`, `compile`, `runtime`, `gpu_access`,
@@ -754,5 +754,5 @@ The Python package constructs request parts, hashes and response values for you.
 | --- | --- |
 | Submit a first request | [Quickstart](../getting-started/quickstart.md) |
 | Construct programs and manage clients | [Program guide](writing-a-program.md); [API signatures and errors](../python-api/index.rst) |
-| Upload files and folders | `upload_folder` expands into ordinary file-upload instructions with no new operation. File uploads return no register. See [files used by uploaded scripts](writing-a-program.md#files-used-by-uploaded-scripts). |
+| Upload files and folders | `upload_folder` expands into ordinary file-upload instructions with no new operation. See [files used by uploaded scripts](writing-a-program.md#files-used-by-uploaded-scripts). |
 | Receive files and folders | Results decode to `ReturnedFile` and `ReturnedFolder`. See [client usage](writing-a-program.md#returning-files-and-folders). |

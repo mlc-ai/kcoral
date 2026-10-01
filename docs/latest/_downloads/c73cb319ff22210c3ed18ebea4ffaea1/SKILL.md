@@ -70,11 +70,11 @@ an earlier callable; a callable returned by a `run` can be used by a later call.
 API surface:
 
 ```python
-Program.upload(kind="module", source=..., language="python") -> Register
+Program.upload(kind="module", source=...) -> Register
 Program.upload(kind="tensor", value=..., dtype=None, shape=None) -> Register
 Program.upload(kind="bytes", value=...) -> Register
 Program.upload(kind="library", value=...) -> Register
-Program.upload_file(blob=..., path=...) -> None
+Program.upload_file(blob=..., path=...) -> Register
 Program.upload_folder(folder, *, path=...) -> None
 Program.get_function(module=..., name=..., cpu_only=False) -> Register
 Program.run(fn=..., args=[]) -> Register
@@ -118,21 +118,20 @@ limits. See [client usage](../../../docs/client-guide/writing-a-program.md#retur
 
 ### `upload`
 
-A field is accepted exactly for the kinds it lists:
+Each field is required for the listed kinds:
 
-| Field | Kinds | Required for | Notes |
-|---|---|---|---|
-| `id` | module, tensor, bytes, library | module, tensor, bytes, library | Unique handle name; rejected for file |
-| `kind` | all | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, or `"library"` |
-| `source` | module | module | UTF-8 Python or CUDA source defining a module |
-| `language` | module | — | `"python"` (default) or `"cuda"` |
-| `blob` | tensor, bytes, file, library | tensor, bytes, file, library | SHA-256 of the raw bytes |
-| `path` | file | file | Relative path in the request working directory |
-| `dtype` | tensor | tensor | Tensor data type |
-| `shape` | tensor | tensor | Tensor shape |
+| Field | Kinds | Notes |
+|---|---|---|
+| `id` | all | Unique handle name |
+| `kind` | all | `"module"`, `"tensor"`, `"bytes"`, `"file"`, or `"library"` |
+| `source` | module | Python source executed to define a module |
+| `blob` | tensor, bytes, file, library | SHA-256 of the raw bytes |
+| `path` | file | Relative path in the request working directory |
+| `dtype` | tensor | Tensor data type |
+| `shape` | tensor | Tensor shape |
 
 A module upload binds its full source namespace. Use `get_function` to select a
-named Python object or CUDA source function. Uploaded Python is ordinary code
+named Python object. Uploaded Python is ordinary code
 executed on the worker (torch included), so a plain function works as a
 reference baseline.
 
@@ -140,11 +139,11 @@ A `bytes` upload binds the blob's bytes unchanged. They stay in CPU memory and
 can be passed to uploaded Python code, which suits files and other binary
 formats the server should parse.
 
-A `library` upload is a prebuilt ELF shared object loaded with
+A `library` upload is a prebuilt TVM FFI shared library loaded with
 `tvm_ffi.load_module`; use `get_function` to bind one of its exported functions.
 
-A `file` upload returns no register. Use `upload_file(blob=..., path=...)` in the
-Python client, where `blob` is bytes-like;
+A `file` upload binds its normalized relative path as a string. Use
+`upload_file(blob=..., path=...)` in the Python client, where `blob` is bytes-like;
 the wire field holds its SHA-256. The server copies it into the request's private
 working directory with mode `0600` and removes that directory after execution.
 Its content can remain in the disk cache across requests and server restarts.

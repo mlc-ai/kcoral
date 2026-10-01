@@ -448,15 +448,15 @@ under the GPU lease, alongside any later kernel execution.</p>
 <h3>On a CPU server<a class="headerlink" href="#on-a-cpu-server" title="Link to this heading">¶</a></h3>
 <p>A CPU server executes uploaded Python compilation code and returns library bytes
 for a subsequent request to a GPU server. Supply the target architecture from
-<code class="docutils literal notranslate"><span class="pre">Client.target()</span></code> on the GPU server. CPU workers also accept CUDA source uploads;
-selecting a name returns the source text and name for your compiler to consume.</p>
+<code class="docutils literal notranslate"><span class="pre">Client.target()</span></code> on the GPU server. Upload CUDA source with <code class="docutils literal notranslate"><span class="pre">upload_file</span></code> and pass
+its path and export names to your compilation function.</p>
 <p><a class="reference internal" href="remote-compilation.html"><span class="std std-doc">Remote Compilation</span></a> walks through building CUDA C
 on a CPU server, then uploading the resulting library to a GPU server for execution
 and measurement.</p>
 </section>
 <section id="on-the-client">
 <h3>On the client<a class="headerlink" href="#on-the-client" title="Link to this heading">¶</a></h3>
-<p>Build a library locally and upload it with <code class="docutils literal notranslate"><span class="pre">kind=&quot;library&quot;</span></code>. Build for the
+<p>Build a TVM FFI library locally and upload it with <code class="docutils literal notranslate"><span class="pre">kind=&quot;library&quot;</span></code>. Build for the
 architecture reported by the server’s <code class="docutils literal notranslate"><span class="pre">Client.target()</span></code>. The
 <a class="reference internal" href="../client-guide/protocol.html#library"><span class="std std-ref">library protocol</span></a> describes export and linking requirements,
 and the example below demonstrates the build and submission.</p>
@@ -664,7 +664,7 @@ Set <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</spa
 <span class="s2">    return {"ok": True}</span>
 
 
-<span class="s2">def compile_cuda_binary(source, cfg):</span>
+<span class="s2">def compile_cuda_binary(source_path, cfg):</span>
 <span class="s2">    import os</span>
 <span class="s2">    from pathlib import Path</span>
 
@@ -678,9 +678,9 @@ Set <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</spa
 <span class="s2">    os.environ[key] = f"{int(digits[:-1])}.</span><span class="si">{digits[-1]}{suffix}</span><span class="s2">"</span>
 <span class="s2">    try:</span>
 <span class="s2">        path = tvm_ffi.cpp.build_inline(</span>
-<span class="s2">            name=f"example_</span><span class="si">{source.name}</span><span class="s2">",</span>
-<span class="s2">            cuda_sources=source.source,</span>
-<span class="s2">            functions=source.name,</span>
+<span class="s2">            name=cfg["name"],</span>
+<span class="s2">            cuda_sources=Path(source_path).read_text(encoding="utf-8"),</span>
+<span class="s2">            functions=cfg["functions"],</span>
 <span class="s2">            backend="cuda",</span>
 <span class="s2">            extra_cuda_cflags=cfg.get("extra_cuda_cflags"),</span>
 <span class="s2">        )</span>
@@ -692,7 +692,7 @@ Set <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</spa
 <span class="s2">            os.environ[key] = previous</span>
 
 
-<span class="s2">def compile_cuda(source):</span>
+<span class="s2">def compile_cuda(source_path, cfg):</span>
 <span class="s2">    import tempfile</span>
 <span class="s2">    from pathlib import Path</span>
 
@@ -701,12 +701,12 @@ Set <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</spa
 
 <span class="s2">    major, minor = torch.cuda.get_device_capability()</span>
 <span class="s2">    arch = f"sm_</span><span class="si">{major}{minor}</span><span class="s2">" + ("a" if major &gt;= 9 else "")</span>
-<span class="s2">    data = compile_cuda_binary(source, {"arch": arch})</span>
+<span class="s2">    data = compile_cuda_binary(source_path, {**cfg, "arch": arch})</span>
 <span class="s2">    with tempfile.TemporaryDirectory() as directory:</span>
 <span class="s2">        path = Path(directory) / "kernel.so"</span>
 <span class="s2">        path.write_bytes(data)</span>
 <span class="s2">        module = tvm_ffi.load_module(str(path))</span>
-<span class="s2">    function = module.get_function(source.name)</span>
+<span class="s2">    function = module.get_function(cfg["functions"][0])</span>
 
 <span class="s2">    # Keep the defining module alive with its callable.</span>
 <span class="s2">    def invoke(*args):</span>
@@ -801,16 +801,19 @@ Set <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</spa
     <span class="n">assert_close</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"assert_close"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"assert_close"</span><span class="p">)</span>
     <span class="n">benchmark</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"benchmark"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"benchmark"</span><span class="p">)</span>
     <span class="n">compile_cuda</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"compile_cuda"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"compile_cuda"</span><span class="p">)</span>
-    <span class="c1"># `language` makes this a CUDA C source module; selecting a function from it</span>
-    <span class="c1"># creates the source descriptor consumed by compile_cuda in OPERATIONS.</span>
-    <span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"kernel_module"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">CUDA_KERNEL</span><span class="p">,</span> <span class="n">language</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">)</span>
-    <span class="n">kernel</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"kernel"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"add_one"</span><span class="p">)</span>
+    <span class="n">source_path</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload_file</span><span class="p">(</span>
+        <span class="nb">id</span><span class="o">=</span><span class="s2">"source"</span><span class="p">,</span> <span class="n">blob</span><span class="o">=</span><span class="n">CUDA_KERNEL</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">),</span> <span class="n">path</span><span class="o">=</span><span class="s2">"src/add_one.cu"</span>
+    <span class="p">)</span>
     <span class="n">src</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"src"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"tensor"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
     <span class="n">dst</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"dst"</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="n">empty</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[{</span><span class="s2">"shape"</span><span class="p">:</span> <span class="p">[</span><span class="n">N</span><span class="p">],</span> <span class="s2">"dtype"</span><span class="p">:</span> <span class="s2">"float32"</span><span class="p">}])</span>
 
     <span class="c1"># Built for the worker GPU's arch, and cached on disk by source and flags, so</span>
     <span class="c1"># recompiling the same source is much cheaper.</span>
-    <span class="n">compiled</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"compiled"</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="n">compile_cuda</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">kernel</span><span class="p">])</span>
+    <span class="n">compiled</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+        <span class="nb">id</span><span class="o">=</span><span class="s2">"compiled"</span><span class="p">,</span>
+        <span class="n">fn</span><span class="o">=</span><span class="n">compile_cuda</span><span class="p">,</span>
+        <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">source_path</span><span class="p">,</span> <span class="p">{</span><span class="s2">"name"</span><span class="p">:</span> <span class="s2">"example_add_one"</span><span class="p">,</span> <span class="s2">"functions"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"add_one"</span><span class="p">]}],</span>
+    <span class="p">)</span>
     <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"invoke"</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="n">compiled</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">src</span><span class="p">,</span> <span class="n">dst</span><span class="p">])</span>
     <span class="n">check_against_cpu_reference</span><span class="p">(</span><span class="n">program</span><span class="p">,</span> <span class="n">dst</span><span class="p">,</span> <span class="n">assert_close</span><span class="p">)</span>
     <span class="n">timing</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
@@ -1155,7 +1158,7 @@ a host C++ compiler and TVM FFI from the
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=d713a863"></script>
+</div><script src="../_static/documentation_options.js?v=e35d3959"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

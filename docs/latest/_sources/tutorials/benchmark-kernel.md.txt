@@ -64,8 +64,8 @@ under the GPU lease, alongside any later kernel execution.
 
 A CPU server executes uploaded Python compilation code and returns library bytes
 for a subsequent request to a GPU server. Supply the target architecture from
-`Client.target()` on the GPU server. CPU workers also accept CUDA source uploads;
-selecting a name returns the source text and name for your compiler to consume.
+`Client.target()` on the GPU server. Upload CUDA source with `upload_file` and pass
+its path and export names to your compilation function.
 
 [Remote Compilation](remote-compilation.md) walks through building CUDA C
 on a CPU server, then uploading the resulting library to a GPU server for execution
@@ -73,7 +73,7 @@ and measurement.
 
 ### On the client
 
-Build a library locally and upload it with `kind="library"`. Build for the
+Build a TVM FFI library locally and upload it with `kind="library"`. Build for the
 architecture reported by the server's `Client.target()`. The
 [library protocol](../client-guide/protocol.md#library) describes export and linking requirements,
 and the example below demonstrates the build and submission.

@@ -472,7 +472,7 @@ helpers uploaded by each program:</p>
 <span class="s2">    return {"ok": True}</span>
 
 
-<span class="s2">def compile_cuda_binary(source, cfg):</span>
+<span class="s2">def compile_cuda_binary(source_path, cfg):</span>
 <span class="s2">    import os</span>
 <span class="s2">    from pathlib import Path</span>
 
@@ -486,9 +486,9 @@ helpers uploaded by each program:</p>
 <span class="s2">    os.environ[key] = f"{int(digits[:-1])}.</span><span class="si">{digits[-1]}{suffix}</span><span class="s2">"</span>
 <span class="s2">    try:</span>
 <span class="s2">        path = tvm_ffi.cpp.build_inline(</span>
-<span class="s2">            name=f"example_</span><span class="si">{source.name}</span><span class="s2">",</span>
-<span class="s2">            cuda_sources=source.source,</span>
-<span class="s2">            functions=source.name,</span>
+<span class="s2">            name=cfg["name"],</span>
+<span class="s2">            cuda_sources=Path(source_path).read_text(encoding="utf-8"),</span>
+<span class="s2">            functions=cfg["functions"],</span>
 <span class="s2">            backend="cuda",</span>
 <span class="s2">            extra_cuda_cflags=cfg.get("extra_cuda_cflags"),</span>
 <span class="s2">        )</span>
@@ -503,26 +503,30 @@ helpers uploaded by each program:</p>
 
 </pre></div>
 </div>
-<p>The compilation program uploads that Python and the CUDA source, selects
-<code class="docutils literal notranslate"><span class="pre">compile_cuda_binary</span></code> with <code class="docutils literal notranslate"><span class="pre">get_function(...,</span> <span class="pre">cpu_only=True)</span></code>, selects the CUDA
-source name <code class="docutils literal notranslate"><span class="pre">add_one</span></code>, compiles for <code class="docutils literal notranslate"><span class="pre">arch</span></code>, and explicitly returns the library:</p>
+<p>The compilation program uploads that Python and the CUDA source file, selects
+<code class="docutils literal notranslate"><span class="pre">compile_cuda_binary</span></code> with <code class="docutils literal notranslate"><span class="pre">get_function(...,</span> <span class="pre">cpu_only=True)</span></code>, passes the file path
+and configuration (<code class="docutils literal notranslate"><span class="pre">functions=[&quot;add_one&quot;]</span></code>, <code class="docutils literal notranslate"><span class="pre">arch</span></code>), and returns the library:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">compile_program</span><span class="p">(</span><span class="n">arch</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Program</span><span class="p">:</span>
     <span class="n">program</span> <span class="o">=</span> <span class="n">Program</span><span class="p">()</span>
     <span class="n">operations</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"operations"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">OPERATIONS</span><span class="p">)</span>
     <span class="n">compile_cuda_binary</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span>
         <span class="nb">id</span><span class="o">=</span><span class="s2">"compile_cuda_binary"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"compile_cuda_binary"</span><span class="p">,</span> <span class="n">cpu_only</span><span class="o">=</span><span class="kc">True</span>
     <span class="p">)</span>
-    <span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span>
-        <span class="nb">id</span><span class="o">=</span><span class="s2">"source"</span><span class="p">,</span>
-        <span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span>
-        <span class="n">language</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">,</span>
-        <span class="n">source</span><span class="o">=</span><span class="n">CUDA_SOURCE</span><span class="p">,</span>
+    <span class="n">source_path</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload_file</span><span class="p">(</span>
+        <span class="nb">id</span><span class="o">=</span><span class="s2">"source"</span><span class="p">,</span> <span class="n">blob</span><span class="o">=</span><span class="n">CUDA_SOURCE</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">),</span> <span class="n">path</span><span class="o">=</span><span class="s2">"src/add_one.cu"</span>
     <span class="p">)</span>
-    <span class="n">source</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"add_one_source"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"add_one"</span><span class="p">)</span>
     <span class="n">library</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
         <span class="nb">id</span><span class="o">=</span><span class="s2">"library"</span><span class="p">,</span>
         <span class="n">fn</span><span class="o">=</span><span class="n">compile_cuda_binary</span><span class="p">,</span>
-        <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">source</span><span class="p">,</span> <span class="p">{</span><span class="s2">"arch"</span><span class="p">:</span> <span class="n">arch</span><span class="p">,</span> <span class="s2">"extra_cuda_cflags"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"-O3"</span><span class="p">]}],</span>
+        <span class="n">args</span><span class="o">=</span><span class="p">[</span>
+            <span class="n">source_path</span><span class="p">,</span>
+            <span class="p">{</span>
+                <span class="s2">"name"</span><span class="p">:</span> <span class="s2">"example_add_one"</span><span class="p">,</span>
+                <span class="s2">"functions"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"add_one"</span><span class="p">],</span>
+                <span class="s2">"arch"</span><span class="p">:</span> <span class="n">arch</span><span class="p">,</span>
+                <span class="s2">"extra_cuda_cflags"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"-O3"</span><span class="p">],</span>
+            <span class="p">},</span>
+        <span class="p">],</span>
     <span class="p">)</span>
     <span class="n">program</span><span class="o">.</span><span class="n">return_</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="s2">"library"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">library</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">program</span>
@@ -714,7 +718,7 @@ explains how to handle them.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=d713a863"></script>
+</div><script src="../_static/documentation_options.js?v=e35d3959"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

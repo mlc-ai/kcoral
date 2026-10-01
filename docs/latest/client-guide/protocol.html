@@ -531,7 +531,7 @@ and non-finite numbers such as NaN and Infinity.</p>
 <td><p>Required operation name; determines the accepted fields</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">id</span></code></p></td>
-<td><p>Required, nonempty, unique identifier when the operation produces a handle; absent for file uploads and <code class="docutils literal notranslate"><span class="pre">return</span></code></p></td>
+<td><p>Required, nonempty, unique identifier when the operation produces a handle; absent for <code class="docutils literal notranslate"><span class="pre">return</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{&quot;$ref&quot;:</span> <span class="pre">&quot;id&quot;}</span></code></p></td>
 <td><p>A reference value naming an earlier handle; it is not a top-level instruction field</p></td>
@@ -539,16 +539,15 @@ and non-finite numbers such as NaN and Infinity.</p>
 </tbody>
 </table>
 </div>
-<p>A handle names a value inside this request. <code class="docutils literal notranslate"><span class="pre">upload</span></code> except file upload,
-<code class="docutils literal notranslate"><span class="pre">get_function</span></code> and <code class="docutils literal notranslate"><span class="pre">run</span></code> produce handles. References must have exactly the <code class="docutils literal notranslate"><span class="pre">$ref</span></code>
+<p>A handle names a value inside this request. <code class="docutils literal notranslate"><span class="pre">upload</span></code>, <code class="docutils literal notranslate"><span class="pre">get_function</span></code> and <code class="docutils literal notranslate"><span class="pre">run</span></code>
+produce handles. References must have exactly the <code class="docutils literal notranslate"><span class="pre">$ref</span></code>
 key and cannot refer forward or cross request boundaries. Each operation below
 specifies where references are resolved. Return keys are unique in a separate
 namespace from instruction identifiers. Each field table is exhaustive:
 unlisted fields are rejected.</p>
 <section id="upload">
 <h3>upload<a class="headerlink" href="#upload" title="Link to this heading">¶</a></h3>
-<p>Upload source or binary data. A file upload materializes a file; other kinds
-produce a handle.</p>
+<p>Upload source or binary data and produce a handle.</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
 <span class="w">  </span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"upload"</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"module"</span><span class="p">,</span>
@@ -558,58 +557,45 @@ produce a handle.</p>
 </pre></div>
 </div>
 <p><a id="fields"></a></p>
+<p>Each field is required for the listed kinds.</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head"><p>Field</p></th>
 <th class="head"><p>Kinds</p></th>
-<th class="head"><p>Required for</p></th>
 <th class="head"><p>Notes</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">op</span></code></p></td>
 <td><p>all</p></td>
-<td><p>all</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;upload&quot;</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">id</span></code></p></td>
-<td><p>module, tensor, bytes, library</p></td>
-<td><p>module, tensor, bytes, library</p></td>
-<td><p>Unique handle name; rejected for file</p></td>
+<td><p>all</p></td>
+<td><p>Unique handle name</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">kind</span></code></p></td>
-<td><p>all</p></td>
 <td><p>all</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;module&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;tensor&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;bytes&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;file&quot;</span></code>, or <code class="docutils literal notranslate"><span class="pre">&quot;library&quot;</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">source</span></code></p></td>
 <td><p>module</p></td>
-<td><p>module</p></td>
-<td><p>UTF-8 Python or CUDA source defining a module</p></td>
+<td><p>Python source executed to define a module</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">language</span></code></p></td>
-<td><p>module</p></td>
-<td><p>—</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&quot;python&quot;</span></code> (default) or <code class="docutils literal notranslate"><span class="pre">&quot;cuda&quot;</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">blob</span></code></p></td>
-<td><p>tensor, bytes, file, library</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">blob</span></code></p></td>
 <td><p>tensor, bytes, file, library</p></td>
 <td><p>SHA-256 of the raw bytes</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">path</span></code></p></td>
-<td><p>file</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">path</span></code></p></td>
 <td><p>file</p></td>
 <td><p>Relative destination in the request working directory</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">dtype</span></code></p></td>
-<td><p>tensor</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">dtype</span></code></p></td>
 <td><p>tensor</p></td>
 <td><p>Tensor data type</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">shape</span></code></p></td>
-<td><p>tensor</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">shape</span></code></p></td>
 <td><p>tensor</p></td>
 <td><p>Tensor shape</p></td>
 </tr>
@@ -626,7 +612,7 @@ produce a handle.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><p><a id="module"></a><code class="docutils literal notranslate"><span class="pre">module</span></code></p></td>
-<td><p>Inline <code class="docutils literal notranslate"><span class="pre">source</span></code>. <code class="docutils literal notranslate"><span class="pre">language=&quot;python&quot;</span></code> executes it to form a namespace; <code class="docutils literal notranslate"><span class="pre">language=&quot;cuda&quot;</span></code> retains it for compilation. The handle binds the whole module.</p></td>
+<td><p>Inline Python <code class="docutils literal notranslate"><span class="pre">source</span></code>, executed to form a namespace. The handle binds the whole module.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a id="tensor"></a><code class="docutils literal notranslate"><span class="pre">tensor</span></code></p></td>
 <td><p>Raw contiguous row-major bytes, copied to the assigned GPU. The byte length must equal <code class="docutils literal notranslate"><span class="pre">product(shape)</span> <span class="pre">*</span> <span class="pre">dtype.itemsize</span></code>.</p></td>
@@ -635,10 +621,10 @@ produce a handle.</p>
 <td><p>The blob’s bytes unchanged in CPU memory. Pass them to uploaded Python to parse files or other binary formats.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">file</span></code></p></td>
-<td><p>Materialize the blob at <code class="docutils literal notranslate"><span class="pre">path</span></code> in the request workspace. Creates no handle, rejects <code class="docutils literal notranslate"><span class="pre">id</span></code>, and needs no GPU. See the file rules below.</p></td>
+<td><p>Materialize the blob at <code class="docutils literal notranslate"><span class="pre">path</span></code> in the request workspace and bind its normalized relative path as a string. Needs no GPU. See the file rules below.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">library</span></code></p></td>
-<td><p>An ELF shared object for the server’s platform, loaded with <code class="docutils literal notranslate"><span class="pre">tvm_ffi.load_module</span></code>. The handle binds the loaded module; see <a class="reference internal" href="#library">Library</a>.</p></td>
+<td><p>A precompiled TVM FFI shared library for the server’s platform, loaded with <code class="docutils literal notranslate"><span class="pre">tvm_ffi.load_module</span></code>. The handle binds the loaded module; see <a class="reference internal" href="#library">Library</a>.</p></td>
 </tr>
 </tbody>
 </table>
@@ -646,8 +632,9 @@ produce a handle.</p>
 <p><a id="cuda-c-modules"></a>
 <a id="cutedsl-modules"></a>
 <a id="triton-modules"></a></p>
-<p>For modules, <code class="docutils literal notranslate"><span class="pre">get_function</span></code> selects an object from the namespace or CUDA source.
+<p>For modules, <code class="docutils literal notranslate"><span class="pre">get_function</span></code> selects an object from the executed Python namespace.
 The object need not be directly callable: a compiler tool may consume it first.
+Upload CUDA source as a <code class="docutils literal notranslate"><span class="pre">file</span></code> and pass its path and export names to your compiler.
 All Python-based kernel languages use the same module upload shape; uploaded
 harness code handles compilation. See the
 <a class="reference internal" href="../tutorials/benchmark-kernel.html#on-a-gpu-server"><span class="std std-ref">benchmark tutorial</span></a>.</p>
@@ -656,8 +643,8 @@ harness code handles compilation. See the
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">[</span>
 <span class="w">  </span><span class="p">{</span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"upload"</span><span class="p">,</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"input"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"tensor"</span><span class="p">,</span><span class="w"> </span><span class="nt">"blob"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;sha256&gt;"</span><span class="p">,</span>
 <span class="w">   </span><span class="nt">"dtype"</span><span class="p">:</span><span class="w"> </span><span class="s2">"float16"</span><span class="p">,</span><span class="w"> </span><span class="nt">"shape"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">32</span><span class="p">,</span><span class="w"> </span><span class="mi">128</span><span class="p">]},</span>
-<span class="w">  </span><span class="p">{</span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"upload"</span><span class="p">,</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"file"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bytes"</span><span class="p">,</span><span class="w"> </span><span class="nt">"blob"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;sha256&gt;"</span><span class="p">},</span>
-<span class="w">  </span><span class="p">{</span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"upload"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"file"</span><span class="p">,</span><span class="w"> </span><span class="nt">"blob"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;sha256&gt;"</span><span class="p">,</span><span class="w"> </span><span class="nt">"path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"data/tensor.bin"</span><span class="p">}</span>
+<span class="w">  </span><span class="p">{</span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"upload"</span><span class="p">,</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"raw_bytes"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bytes"</span><span class="p">,</span><span class="w"> </span><span class="nt">"blob"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;sha256&gt;"</span><span class="p">},</span>
+<span class="w">  </span><span class="p">{</span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"upload"</span><span class="p">,</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"file_path"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"file"</span><span class="p">,</span><span class="w"> </span><span class="nt">"blob"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;sha256&gt;"</span><span class="p">,</span><span class="w"> </span><span class="nt">"path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"data/tensor.bin"</span><span class="p">}</span>
 <span class="p">]</span>
 </pre></div>
 </div>
@@ -686,16 +673,16 @@ harness code handles compilation. See the
 <td><p>A fresh temporary working directory per request, owned by the parent process and removed after completion, failure, timeout, or worker crash.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Lifetime</p></td>
-<td><p>File uploads cannot be referenced or returned as handles. Blob cache entries remain available after materialized files are removed.</p></td>
+<td><p>Blob cache entries remain available after materialized files are removed.</p></td>
 </tr>
 </tbody>
 </table>
 </div>
 <section id="library">
 <h4>Library<a class="headerlink" href="#library" title="Link to this heading">¶</a></h4>
-<p>A library is an already-built shared object, whether its bytes came from the
-client’s toolchain or a preceding CPU-server request. The GPU server compiles
-nothing:</p>
+<p>A library is an already-built TVM FFI module, whether its bytes came from the
+client’s toolchain or a preceding CPU-server request. Uploading it requires no
+compilation:</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
 <span class="w">  </span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"upload"</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"kernels"</span><span class="p">,</span>
@@ -706,7 +693,7 @@ nothing:</p>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">blob</span></code> names the bytes of an ELF shared object for the server’s platform. The
 server loads it with <code class="docutils literal notranslate"><span class="pre">tvm_ffi.load_module</span></code> and binds the resulting module.
-Later <code class="docutils literal notranslate"><span class="pre">get_function</span></code> instructions may bind any number of its exports. A library
+Later <code class="docutils literal notranslate"><span class="pre">get_function</span></code> instructions may bind any number of its TVM FFI exports. A library
 that cannot be loaded, or a requested function that is absent, fails with a
 <code class="docutils literal notranslate"><span class="pre">compile</span></code> error. Nothing else about the object is inspected, so any producer
 TVM FFI can load is accepted. Three are usual:</p>
@@ -720,7 +707,7 @@ TVM FFI can load is accepted. Three are usual:</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>C++ / <code class="docutils literal notranslate"><span class="pre">tvm_ffi.cpp.build</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">TVM_FFI_DLL_EXPORT_TYPED_FUNC</span></code> emits <code class="docutils literal notranslate"><span class="pre">__tvm_ffi_&lt;name&gt;</span></code>; <code class="docutils literal notranslate"><span class="pre">tvm_ffi.cpp.build</span></code> applies it automatically. A code generator can emit the symbol directly.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">TVM_FFI_DLL_EXPORT_TYPED_FUNC</span></code> emits <code class="docutils literal notranslate"><span class="pre">__tvm_ffi_&lt;name&gt;</span></code>; <code class="docutils literal notranslate"><span class="pre">tvm_ffi.cpp.build_inline(functions=...)</span></code> adds it automatically. A code generator can emit the symbol directly.</p></td>
 <td><p>TVM FFI</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">tvm.Executable.export_library</span></code></p></td>
@@ -862,10 +849,7 @@ part, exactly as a tensor’s do.</p>
 <tr class="row-even"><td><p>Python module</p></td>
 <td><p>Looks up <code class="docutils literal notranslate"><span class="pre">name</span></code> in the executed namespace.</p></td>
 </tr>
-<tr class="row-odd"><td><p>CUDA module</p></td>
-<td><p>Returns an object with the uploaded text as <code class="docutils literal notranslate"><span class="pre">source</span></code> and the selected function name as <code class="docutils literal notranslate"><span class="pre">name</span></code>, for a compiler to consume. Uploading <code class="docutils literal notranslate"><span class="pre">&quot;void</span> <span class="pre">add()</span> <span class="pre">{}&quot;</span></code> and selecting <code class="docutils literal notranslate"><span class="pre">&quot;add&quot;</span></code> yields <code class="docutils literal notranslate"><span class="pre">source</span> <span class="pre">==</span> <span class="pre">&quot;void</span> <span class="pre">add()</span> <span class="pre">{}&quot;</span></code> and <code class="docutils literal notranslate"><span class="pre">name</span> <span class="pre">==</span> <span class="pre">&quot;add&quot;</span></code>. C++ <code class="docutils literal notranslate"><span class="pre">main</span></code> and non-identifiers are rejected.</p></td>
-</tr>
-<tr class="row-even"><td><p>TVM-FFI library</p></td>
+<tr class="row-odd"><td><p>TVM-FFI library</p></td>
 <td><p>Calls the loaded module’s <code class="docutils literal notranslate"><span class="pre">get_function</span></code>. The selected function keeps its defining module alive.</p></td>
 </tr>
 </tbody>
@@ -1449,7 +1433,7 @@ encoding adds neither a <code class="docutils literal notranslate"><span class="
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">instruction_id</span></code></p></td>
 <td><p>string | null</p></td>
-<td><p>The instruction’s <code class="docutils literal notranslate"><span class="pre">id</span></code>; <code class="docutils literal notranslate"><span class="pre">null</span></code> for <code class="docutils literal notranslate"><span class="pre">return</span></code> and file upload</p></td>
+<td><p>The instruction’s <code class="docutils literal notranslate"><span class="pre">id</span></code>; <code class="docutils literal notranslate"><span class="pre">null</span></code> only for <code class="docutils literal notranslate"><span class="pre">return</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">traceback</span></code></p></td>
 <td><p>string</p></td>
@@ -1562,7 +1546,7 @@ The same upload/get_function/run shape supports GPU harnesses and compiler tools
 <td><p><a class="reference internal" href="writing-a-program.html"><span class="std std-doc">Program guide</span></a>; <a class="reference internal" href="../python-api/index.html"><span class="std std-doc">API signatures and errors</span></a></p></td>
 </tr>
 <tr class="row-even"><td><p>Upload files and folders</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">upload_folder</span></code> expands into ordinary file-upload instructions with no new operation. File uploads return no register. See <a class="reference internal" href="writing-a-program.html#files-used-by-uploaded-scripts"><span class="std std-ref">files used by uploaded scripts</span></a>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">upload_folder</span></code> expands into ordinary file-upload instructions with no new operation. See <a class="reference internal" href="writing-a-program.html#files-used-by-uploaded-scripts"><span class="std std-ref">files used by uploaded scripts</span></a>.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Receive files and folders</p></td>
 <td><p>Results decode to <code class="docutils literal notranslate"><span class="pre">ReturnedFile</span></code> and <code class="docutils literal notranslate"><span class="pre">ReturnedFolder</span></code>. See <a class="reference internal" href="writing-a-program.html#returning-files-and-folders"><span class="std std-ref">client usage</span></a>.</p></td>
@@ -1659,7 +1643,7 @@ The same upload/get_function/run shape supports GPU harnesses and compiler tools
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=d713a863"></script>
+</div><script src="../_static/documentation_options.js?v=e35d3959"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

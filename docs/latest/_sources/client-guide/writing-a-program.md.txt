@@ -72,8 +72,8 @@ name; it is not the value itself.
 
 | Method | Purpose | Returns |
 | --- | --- | --- |
-| `upload(kind=..., ...)` | Upload module source, a tensor, bytes or a compiled library | `Register` |
-| `upload_file(blob=..., path=...)` | Snapshot bytes as a file in the request workspace | `None` |
+| `upload(kind=..., ...)` | Upload module source, a tensor, bytes or a compiled TVM FFI library | `Register` |
+| `upload_file(blob=..., path=...)` | Snapshot bytes as a file in the request workspace | `Register` |
 | `upload_folder(folder, path=...)` | Snapshot a local directory as file uploads | `None` |
 | `get_function(module=..., name=..., cpu_only=False)` | Select a function or object from an earlier module or library | `Register` |
 | `run(fn=..., args=None)` | Call a selected or computed callable | `Register` |
@@ -231,7 +231,7 @@ result = program.run(fn=reader)
 ```
 
 The module can use `open("inputs/tensor.bin", "rb")` unchanged. File uploads
-return no register. Put them before any instruction that reads the files,
+return a register containing the relative path. Put them before any instruction that reads the files,
 including a module upload whose top-level code opens them.
 
 To snapshot a local directory at the current program position:

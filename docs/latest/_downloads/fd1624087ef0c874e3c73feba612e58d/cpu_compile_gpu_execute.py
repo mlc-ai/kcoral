@@ -60,7 +60,7 @@ def assert_close(actual, expected):
     return {"ok": True}
 
 
-def compile_cuda_binary(source, cfg):
+def compile_cuda_binary(source_path, cfg):
     import os
     from pathlib import Path
 
@@ -74,9 +74,9 @@ def compile_cuda_binary(source, cfg):
     os.environ[key] = f"{int(digits[:-1])}.{digits[-1]}{suffix}"
     try:
         path = tvm_ffi.cpp.build_inline(
-            name=f"example_{source.name}",
-            cuda_sources=source.source,
-            functions=source.name,
+            name=cfg["name"],
+            cuda_sources=Path(source_path).read_text(encoding="utf-8"),
+            functions=cfg["functions"],
             backend="cuda",
             extra_cuda_cflags=cfg.get("extra_cuda_cflags"),
         )
@@ -95,17 +95,21 @@ def compile_program(arch: str) -> Program:
     compile_cuda_binary = program.get_function(
         id="compile_cuda_binary", module=operations, name="compile_cuda_binary", cpu_only=True
     )
-    module = program.upload(
-        id="source",
-        kind="module",
-        language="cuda",
-        source=CUDA_SOURCE,
+    source_path = program.upload_file(
+        id="source", blob=CUDA_SOURCE.encode("utf-8"), path="src/add_one.cu"
     )
-    source = program.get_function(id="add_one_source", module=module, name="add_one")
     library = program.run(
         id="library",
         fn=compile_cuda_binary,
-        args=[source, {"arch": arch, "extra_cuda_cflags": ["-O3"]}],
+        args=[
+            source_path,
+            {
+                "name": "example_add_one",
+                "functions": ["add_one"],
+                "arch": arch,
+                "extra_cuda_cflags": ["-O3"],
+            },
+        ],
     )
     program.return_(key="library", value=library)
     return program

@@ -111,7 +111,7 @@ def assert_close(actual, expected):
     return {"ok": True}
 
 
-def compile_cuda_binary(source, cfg):
+def compile_cuda_binary(source_path, cfg):
     import os
     from pathlib import Path
 
@@ -125,9 +125,9 @@ def compile_cuda_binary(source, cfg):
     os.environ[key] = f"{int(digits[:-1])}.{digits[-1]}{suffix}"
     try:
         path = tvm_ffi.cpp.build_inline(
-            name=f"example_{source.name}",
-            cuda_sources=source.source,
-            functions=source.name,
+            name=cfg["name"],
+            cuda_sources=Path(source_path).read_text(encoding="utf-8"),
+            functions=cfg["functions"],
             backend="cuda",
             extra_cuda_cflags=cfg.get("extra_cuda_cflags"),
         )
@@ -139,7 +139,7 @@ def compile_cuda_binary(source, cfg):
             os.environ[key] = previous
 
 
-def compile_cuda(source):
+def compile_cuda(source_path, cfg):
     import tempfile
     from pathlib import Path
 
@@ -148,12 +148,12 @@ def compile_cuda(source):
 
     major, minor = torch.cuda.get_device_capability()
     arch = f"sm_{major}{minor}" + ("a" if major >= 9 else "")
-    data = compile_cuda_binary(source, {"arch": arch})
+    data = compile_cuda_binary(source_path, {**cfg, "arch": arch})
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "kernel.so"
         path.write_bytes(data)
         module = tvm_ffi.load_module(str(path))
-    function = module.get_function(source.name)
+    function = module.get_function(cfg["functions"][0])
 
     # Keep the defining module alive with its callable.
     def invoke(*args):
@@ -248,16 +248,19 @@ def cuda_program() -> Program:
     assert_close = program.get_function(id="assert_close", module=operations, name="assert_close")
     benchmark = program.get_function(id="benchmark", module=operations, name="benchmark")
     compile_cuda = program.get_function(id="compile_cuda", module=operations, name="compile_cuda")
-    # `language` makes this a CUDA C source module; selecting a function from it
-    # creates the source descriptor consumed by compile_cuda in OPERATIONS.
-    module = program.upload(id="kernel_module", kind="module", source=CUDA_KERNEL, language="cuda")
-    kernel = program.get_function(id="kernel", module=module, name="add_one")
+    source_path = program.upload_file(
+        id="source", blob=CUDA_KERNEL.encode("utf-8"), path="src/add_one.cu"
+    )
     src = program.upload(id="src", kind="tensor", value=np.arange(N, dtype=np.float32))
     dst = program.run(id="dst", fn=empty, args=[{"shape": [N], "dtype": "float32"}])
 
     # Built for the worker GPU's arch, and cached on disk by source and flags, so
     # recompiling the same source is much cheaper.
-    compiled = program.run(id="compiled", fn=compile_cuda, args=[kernel])
+    compiled = program.run(
+        id="compiled",
+        fn=compile_cuda,
+        args=[source_path, {"name": "example_add_one", "functions": ["add_one"]}],
+    )
     program.run(id="invoke", fn=compiled, args=[src, dst])
     check_against_cpu_reference(program, dst, assert_close)
     timing = program.run(
