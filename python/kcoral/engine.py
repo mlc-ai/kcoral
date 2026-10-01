@@ -225,7 +225,11 @@ def _execute_in_workspace(
                     # A launch-configuration error can sit in CUDA's last-error slot
                     # without failing synchronize. Consume it here so it belongs to this
                     # request; reading clears it, and the context is still healthy.
-                    if last_error is not None and error is not None and error["kind"] == "gpu_access":
+                    if (
+                        last_error is not None
+                        and error is not None
+                        and error["kind"] == "gpu_access"
+                    ):
                         # The violation is the earlier fault, and the parent reads its fields.
                         error["message"] += f"; CUDA also reports {last_error}"
                     elif last_error is not None:
