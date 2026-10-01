@@ -668,7 +668,7 @@ A `FAILED` response's `error` describes that instruction:
 | `message` | string | Human-readable description |
 | `instruction_index` | integer | Zero-based position in `instructions` |
 | `instruction_op` | string | `"upload"`, `"get_function"`, `"run"`, or `"return"` |
-| `instruction_id` | string \| null | The instruction's `id`; `null` for `return` and file upload |
+| `instruction_id` | string \| null | The instruction's `id`; `null` only for `return` |
 | `traceback` | string | Server-side traceback, truncated to 8192 bytes |
 
 Instruction error kinds are `parse`, `compile`, `runtime`, `gpu_access`,
