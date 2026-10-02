@@ -34,11 +34,7 @@ server = [
 kcoral = "kcoral.__main__:main"
 
 [dependency-groups]
-# A default group, so `uv sync` still builds an environment that can serve. An
-# extra cannot be a default on its own; uv has no `default-extras`.
-server = [
-  "kcoral[server]",
-]
+server = ["kcoral[server]"]
 test = [
   "kcoral[server]", # the suite exercises the server
   "pytest>=8",
@@ -47,7 +43,6 @@ test = [
 gpu = ["kcoral[server]"]
 
 [tool.uv]
-default-groups = ["server"]
 environments = ["sys_platform == 'linux'"]
 
 [tool.setuptools.packages.find]
