@@ -14,7 +14,7 @@ dependencies = [
   "ml_dtypes>=0.5", # the bfloat16 and float8 scalar types numpy lacks
 ]
 
-# The base install supports clients and the Rust router. The server extra
+# The base install supports clients and, in Linux wheels, the Rust router. The server extra
 # supplies both GPU execution and CPU compilation dependencies.
 [project.optional-dependencies]
 server = [
@@ -45,18 +45,6 @@ where = ["python"]
 include = ["kcoral*"]
 
 [tool.setuptools_scm]
-
-[[tool.setuptools-rust.bins]]
-target = "kcoral-router"
-path = "rust/kcoral/Cargo.toml"
-cargo-manifest-args = ["--locked"]
-strip = "All"
-
-[[tool.setuptools-rust.bins]]
-target = "kcoral-node"
-path = "rust/kcoral/Cargo.toml"
-cargo-manifest-args = ["--locked"]
-strip = "All"
 
 [tool.pytest.ini_options]
 pythonpath = ["python"]
