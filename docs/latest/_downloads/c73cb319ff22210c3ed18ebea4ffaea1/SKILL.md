@@ -58,7 +58,7 @@ def main(n):
 main = program.get_function(module=module, name="main")
 report = program.run(fn=main, args=[256])
 program.return_(key="report", value=report)
-with Client("http://localhost:8000") as client:
+with Client("http://127.0.0.1:8000") as client:
     result = client.execute(program, timeout_seconds=120)
 print(result.results)
 ```

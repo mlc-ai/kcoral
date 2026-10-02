@@ -196,7 +196,6 @@
     <img class="sidebar-logo only-dark" src="_static/brand/kcoral-logo-dark.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">KCoral documentation</span>
   
 </a>
 <details class="version-switcher">
@@ -226,17 +225,20 @@
 <li class="toctree-l1"><a class="reference internal" href="getting-started/installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="getting-started/quickstart.html">Your First Program</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<p class="caption" role="heading"><span class="caption-text">Protocol</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="client-guide/protocol.html">KCoral Protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<ul>
 <li class="toctree-l1"><a class="reference internal" href="client-guide/writing-a-program.html">Write a client program</a></li>
 <li class="toctree-l1"><a class="reference internal" href="client-guide/builtin-cli-tools.html">Builtin CLI Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="server-guide/launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="server-guide/logging.html">Logging</a></li>
 <li class="toctree-l1"><a class="reference internal" href="server-guide/router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="server-guide/logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
 <ul>
@@ -322,13 +324,6 @@
 <p>KCoral runs programs on remote GPU workers. Upload code and data,
 call functions, check correctness and return measurements. CPU compilation
 services can build kernels for a separate GPU server.</p>
-<div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>KCoral allows clients to execute arbitrary code on its workers. Only allow
-trusted clients to access your KCoral server or Router. Deploy on a trusted,
-isolated network and never expose these endpoints to the public internet.
-Run workers in a sandbox with restricted permissions and access to host resources.</p>
-</div>
 <section id="start-here">
 <h2>Start here<a class="headerlink" href="#start-here" title="Link to this heading">¶</a></h2>
 <div class="table-wrapper colwidths-auto docutils container">
@@ -362,6 +357,8 @@ Run workers in a sandbox with restricted permissions and access to host resource
 </tr>
 </tbody>
 </table>
+</div>
+<div class="toctree-wrapper compound">
 </div>
 <div class="toctree-wrapper compound">
 </div>
@@ -435,7 +432,7 @@ Run workers in a sandbox with restricted permissions and access to host resource
       
     </aside>
   </div>
-</div><script src="_static/documentation_options.js?v=e35d3959"></script>
+</div><script src="_static/documentation_options.js?v=aad43eb6"></script>
     <script src="_static/doctools.js?v=fd6eb6e6"></script>
     <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>

@@ -3,136 +3,126 @@
 
 # Write a client program
 
-`Client` connects to a KCoral server. `Program` describes work to run there.
-Building a program does not execute it: `Client.execute()` submits the ordered
-instructions and decodes the selected results. The
-[first GPU program](../getting-started/quickstart.md) shows a complete runnable example.
+To submit a benchmark to KCoral, you describe the work in a program. Each program
+represents one request: it specifies the code and data to upload, the functions
+to run, and the results to return. You build the program locally, send it to the
+server, and receive the results after the server executes its instructions in
+order. The [first GPU program](../getting-started/quickstart.md) walks through
+this workflow with a complete runnable example.
 
-## Create and close a client
+## Build programs with instructions
 
-Use a context manager so the client's HTTP connections are closed when you finish.
-One client can submit many programs to the same server.
+A program is a sequence of instructions that one worker on the server executes
+in order. Each instruction describes one step, such as uploading data or calling
+a function. The `Program` builder provides methods for composing these steps
+into a request. There are four core instructions:
+
+| Instruction | Python method | Purpose |
+| --- | --- | --- |
+| `upload` | `upload(kind=..., ...)` | Upload code, tensors, bytes, or compiled libraries |
+| `get_function` | `get_function(module=..., name=...)` | Select a function from an uploaded module or library |
+| `run` | `run(fn=..., args=...)` | Call a function with the supplied arguments |
+| `return` | `return_(key=..., value=...)` | Select a value to send back to the client |
+
+The builder also provides helpers for working with files: `upload_file()` and
+`upload_folder()` add uploads to the program, while `return_file()` and
+`return_folder()` select files or folders to send back. These use the same
+`upload` and `return` instructions. The sections on
+[uploading files](#uploading-files-and-folders) and
+[returning files](#returning-files-and-folders) cover these helpers in detail.
+
+When an instruction produces a value, the builder returns a `Register`: a local
+Python reference to the value that will exist on the server when the instruction
+runs. Pass registers to later instructions to select a function to call, supply
+its arguments, or choose a result to return. This lets you pass data through
+several function calls within one program. Each register must come from an
+earlier instruction in the same program.
+
+With `Program` imported from `kcoral`, this snippet builds a program that
+multiplies `3` by `2` and returns the result as `"output"`:
+
+```python
+program = Program()
+module = program.upload(
+    kind="module", source="def scale(x, factor): return x * factor"
+)
+scale = program.get_function(module=module, name="scale")
+y = program.run(fn=scale, args=[3, 2])
+program.return_(key="output", value=y)
+```
+
+`upload()` supplies the code, and `get_function()` selects `scale` from it.
+The `scale` register tells `run()` which function to call; `args` supplies its
+inputs. Finally, `return_()` selects the value referenced by `y` to send back
+under the key `"output"`. After submission, that value will be `6`.
+
+See the [Python API](../python-api/index.rst) for complete method signatures and
+parameter types.
+
+## Create a client and submit programs
+
+The Python client's `Client` class connects to a KCoral server. Create a client
+with the server's address; you can use the same client to submit many programs.
 
 ```python
 from kcoral import Client
 
-with Client("http://localhost:8000", connect_timeout_seconds=10) as client:
+with Client("http://127.0.0.1:8000", connect_timeout_seconds=10) as client:
     health = client.health()
     target = client.target()
     print(health["versions"])
     print(target["arch"])
 ```
 
-`health()` reports endpoint status, load, and compilation metadata.
-`target()` reads the GPU architecture an uploaded compiled library must match; ask the GPU
-server for it, not a CPU compilation server. Optional `headers` are sent with
-every request. If you do not use `with`, call `client.close()` explicitly.
+The client provides `health()` to check the server's status and software versions,
+and `target()` to check its GPU architecture.
 
-`connect_timeout_seconds` limits connection establishment. It does not limit
-execution. Pass `timeout_seconds` to `execute()` for a server-side execution
-deadline, and `output_limit_bytes` to limit captured output per stream.
+The first argument is the server URL. `connect_timeout_seconds` controls how long
+the client waits to open a connection to that server, in seconds. For example,
+if the server's machine is unreachable and the connection attempt receives no
+response, the setting above stops that attempt after 10 seconds. This setting
+does not limit how long a submitted program can run. See the
+[Python API](../python-api/index.rst) for all client options.
 
-## Remote functions
+### Simple program
 
-Use `@client.function()` for a self-contained Python function. Configure the server
-address on `Client`; decorated functions reuse its connections and headers:
+To demonstrate `client.execute()` and its options, this example uploads one line
+of Python that prints `2` on the server. The call submits the program and returns
+its results, including the captured output:
 
 ```python
-from kcoral import Client
+from kcoral import Client, Program
 
-with Client("http://localhost:8000") as client:
+print_program = Program()
+print_program.upload(kind="module", source="print(1 + 1)")
 
-    @client.function(timeout=30)
-    def gpu_sum(n):
-        import torch
+with Client("http://127.0.0.1:8000") as client:
+    result = client.execute(print_program, timeout_seconds=30, output_limit_bytes=1024)
 
-        return torch.arange(n, device="cuda").sum().item()
-
-    print(gpu_sum.remote(4))  # 6
+if not result.completed:
+    raise RuntimeError(result.error)
+print(result.stdout, end="")  # 2
 ```
 
-Save the function in a Python file, import dependencies inside it, and install
-them on the server. Closures, external globals, additional decorators, async
-functions and generators are unsupported. Arguments accept JSON values, bytes
-and tensors; bytes and tensors must be whole arguments, not nested in containers.
-Returned tensors are local NumPy arrays. Each remote call has no retained state.
-See `examples/remote_function.py` for a tensor upload/run/download example.
+Here, `timeout_seconds=30` gives the server a 30-second execution limit, and
+`output_limit_bytes=1024` captures up to 1 KiB each of standard output and
+standard error. The server runs `print(1 + 1)` after `client.execute(print_program, ...)`
+submits the program, rather than when `print_program.upload(...)` adds the instruction.
 
-Ordinary calls such as `gpu_sum(4)` execute locally. `.remote()` raises
-`RemoteExecutionError` on an instruction failure; its `.result` retains the error,
-traceback and captured output. `.execute()` returns the full `ProgramResult`,
-including failed outcomes. `.build_program()` builds the equivalent `Program`
-without executing it. Keep the client open for remote calls.
+Each submission is independent: the server keeps no program session between
+requests. When a request finishes, its temporary files and values are discarded,
+and its registers can no longer be used to access them. You can submit the same
+`Program` again, but its instructions will run again with fresh values. Results
+already returned to the client remain available.
 
-## Build instructions with Program
+### Read results
 
-The builder returns a `Register` when an instruction produces a value. A register
-is a local Python reference to a server-side value identified by its instruction
-name; it is not the value itself.
-
-| Method | Purpose | Returns |
-| --- | --- | --- |
-| `upload(kind=..., ...)` | Upload module source, a tensor, bytes or a compiled TVM FFI library | `Register` |
-| `upload_file(blob=..., path=...)` | Snapshot bytes as a file in the request workspace | `Register` |
-| `upload_folder(folder, path=...)` | Snapshot a local directory as file uploads | `None` |
-| `get_function(module=..., name=..., cpu_only=False)` | Select a function or object from an earlier module or library | `Register` |
-| `run(fn=..., args=None)` | Call a selected or computed callable | `Register` |
-| `return_(key=..., value=...)` | Select an earlier value for the response | `None` |
-| `return_file(key=..., path=...)` | Select a workspace file for the response | `None` |
-| `return_folder(key=..., path=...)` | Select a workspace folder for the response | `None` |
-| `instructions` | Inspect a shallow copy of the wire instruction list | `list[dict]` |
-
-`Program` automatically generates an ID for each value-producing instruction.
-Use the optional `id` field to customize it.
-
-Use the [Python API](../python-api/index.rst) for complete signatures and parameter types.
-
-### Upload and select a function
+For the multiplication program built earlier, `return_(key="output", value=y)`
+selects the value to retrieve. After submitting that program, check whether it
+completed and read `"output"` from the response:
 
 ```python
-import numpy as np
-
-from kcoral import Program
-
-program = Program()
-module = program.upload(
-    kind="module", source="def scale(x, factor): return x * factor"
-)
-scale = program.get_function(module=module, name="scale")
-values = np.zeros(4, dtype=np.float32)
-x = program.upload(kind="tensor", value=values)
-y = program.run(fn=scale, args=[x, 2])
-program.return_(key="output", value=y)
-```
-
-`upload` accepts `module`, `tensor`, `bytes` and `library`. Its file counterpart
-is `upload_file`; `upload(kind="file")` is not a supported Python call. A module
-binds a namespace; `get_function` explicitly selects an object from it. A
-precompiled library follows the same selection step.
-
-### Pass values and references
-
-Pass the value returned by `get_function` as the `fn` argument to `run`:
-
-```python
-scale = program.get_function(module=module, name="scale")
-y = program.run(fn=scale, args=[x, 2])
-```
-
-`scale` is a `Register`, a Python object holding the generated instruction ID.
-The client serializes it as `{"$ref": scale.id}` in the request. The same applies to a
-`Register` returned by a `run` that produced another callable.
-
-Top-level `Register` arguments in `args` are encoded the same way. Ordinary
-numbers, strings, lists and dictionaries pass as JSON literals. An explicit
-`{"$ref": "id"}` in a top-level argument also resolves to that earlier value;
-reference-shaped dictionaries nested inside lists or objects remain literals.
-All references must point to earlier instructions in the same request.
-
-## Submit and read results
-
-```python
-with Client("http://localhost:8000") as client:
+with Client("http://127.0.0.1:8000") as client:
     result = client.execute(program, timeout_seconds=120, output_limit_bytes=65536)
 
 if result.completed:
@@ -143,47 +133,87 @@ else:
 print(result.stdout, result.stderr)
 ```
 
-The returned `ProgramResult` includes `status`, `request_id`, `results`, `error`,
-captured `stdout` and `stderr`, and flags showing whether either stream was
-truncated. Tensor results are NumPy arrays in client CPU memory; byte results
-are Python `bytes`. Modules and callable handles cannot be returned.
+The returned `ProgramResult` contains the values you selected in `results`, along
+with the request's `status`, `request_id`, and any `error`. It also includes
+captured `stdout` and `stderr` and flags indicating whether either was truncated.
+Returned tensors arrive as NumPy arrays in client CPU memory, and byte results
+arrive as Python `bytes`. Modules and callable handles cannot be returned.
 
-`queue_ms` measures waiting for a worker. `elapsed_ms` is worker execution time,
-including `lease_wait_ms` waiting for exclusive GPU access and `lease_held_ms`
-holding that access. These request-level durations are different from a kernel's
-measurement reported by your harness or profiler.
+<a id="handling-failures"></a>
 
-## Request lifecycle
+A `COMPLETED` result means every instruction ran successfully. If an instruction
+fails, the result has status `FAILED`, and `result.error` describes what went
+wrong. The server skips the remaining instructions, but values selected by
+`return_()` before the failure remain in `result.results`. Returning an
+intermediate result can therefore preserve useful work if a later step fails.
 
-1. **Construct locally.** Builder calls append instructions; binary uploads
-   snapshot input at the time of the call.
-2. **Resolve uploads.** `execute()` first sends a cache-only request. Missing
-   cached blobs cause a retry with the missing bytes; a further miss causes
-   one last request containing every local blob.
-3. **Execute in order.** One worker runs the instructions. There is no retained
-   program session between submissions.
-4. **Return selected values.** Only return instructions contribute result
-   entries. Returning early preserves that entry if a later instruction fails.
-5. **Clean up.** The request's registers, GPU values and temporary files expire.
-   Closing the client closes connections; it does not erase server caches.
+Some failures prevent the client from obtaining a program result. In those
+cases, `execute()` raises an exception: `KCoralError` for an HTTP error from the
+server, `TransportError` for a connection or transfer problem, or `ProtocolError`
+for an invalid response. A lost connection does not tell you whether the server
+ran the program, so consider whether repeating its work is safe before retrying.
+See the {ref}`Python API error reference <python-errors>` for details.
 
-You may submit the same `Program` again. Its binary snapshots are reused, but
-its instructions execute again and get fresh remote values. You cannot pass a
-register from an earlier request to a new program. The default server replaces
-a worker after each request; opting into worker reuse does not extend the
-protocol lifetime of a register.
+Alongside these results, the response includes timing metrics to help you
+understand where the request spent its time. `queue_ms` measures how long it
+waited for a worker, while `elapsed_ms` measures time spent on the worker.
+Within that worker time, `lease_wait_ms` records the wait for exclusive GPU
+access, and `lease_held_ms` records how long the request held that access.
+These metrics can help distinguish a busy server or GPU from a slow program.
+They describe the request as a whole; use the measurements from your benchmark
+harness or profiler to assess the kernel's execution time.
 
-File and memory caches retain uploaded bytes as an optimization. A cache hit
-does not preserve a previous tensor's mutations, a compiled callable, or an
-execution's output. Compare their lifetimes and limits in the protocol's
-[cache table](protocol.md#caching).
+### Remote functions
 
-## Tensors
+KCoral also provides `@client.function()` to run a Python function on the server
+without building a program by hand. In this example, `gpu_sum.remote(4)` creates
+the values 0 through 3 on the server's GPU, adds them, and returns `6`:
 
-You can initialize tensors remotely by uploading Python, or upload tensors
-created locally.
+```python
+from kcoral import Client
 
-For remote initialization:
+with Client("http://127.0.0.1:8000") as client:
+
+    @client.function(timeout=30)
+    def gpu_sum(n):
+        import torch
+
+        return torch.arange(n, device="cuda").sum().item()
+
+    print(gpu_sum.remote(4))  # 6
+```
+
+The decorated function must be self-contained. When writing one:
+
+- Define it in a Python file so the client can read its source.
+- Import dependencies inside the function and install them on the server.
+- Pass inputs as arguments; the function cannot use variables from the surrounding
+  scope or global variables defined outside it.
+- Use `.remote()` to run it on the server and receive its return value. An ordinary
+  call such as `gpu_sum(4)` runs locally.
+
+Each remote call is an independent request. `.remote()` raises an exception if
+the remote execution fails. See the [Python API](../python-api/index.rst) for
+supported argument types, restrictions, and other ways to invoke the function.
+For a complete example that uploads a tensor, adds one on the GPU, and returns a
+NumPy array, {download}`download remote_function.py <../../examples/remote_function.py>`.
+
+## Working with tensors and files
+
+A program may need tensor inputs or files for its code to read, and it may
+produce tensors or files you want to retrieve. You can upload data from the
+client or create it on the server, then select the outputs to return. The
+following snippets illustrate separate uses of a `Program`; start with a fresh
+`program = Program()` for each example.
+
+### Tensors
+
+Tensors hold the inputs and outputs of most machine learning kernels. KCoral
+lets you create them on the server or upload them from the client, then pass
+them to functions through registers.
+
+When you only need generated inputs, such as random values for a benchmark, you
+can create them directly on the GPU by uploading a Python function:
 
 ```python
 module = program.upload(kind="module", source="""
@@ -196,7 +226,7 @@ make_input = program.get_function(module=module, name="make_input")
 x = program.run(fn=make_input)
 ```
 
-For a local tensor:
+When you already have input data on the client, upload it with `kind="tensor"`:
 
 ```python
 import numpy as np
@@ -208,115 +238,100 @@ x = program.upload(kind="tensor", value=values)
 `kind="tensor"` accepts a NumPy array, a torch tensor, any object supporting
 DLPack, or raw bytes together with `dtype` and `shape`.
 
-Accepted dtypes: `bool`, `uint8`, `int8`, `int16`, `int32`, `int64`, `float16`,
+Supported dtypes include `bool`, `uint8`, `int8`, `int16`, `int32`, `int64`, `float16`,
 `float32`, `float64`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`.
 
-Returned tensors arrive as CPU `numpy.ndarray`, with `bfloat16` and the float8
-types carried by `ml_dtypes`. To hand one to torch, reinterpret the raw bytes:
+To retrieve a tensor, select its register with `program.return_(key="output", value=x)`.
+After execution, `result.results["output"]` is a NumPy array in client CPU memory.
+The `bfloat16` and float8 dtypes use `ml_dtypes`. With NumPy imported as `np` and
+PyTorch as `torch` on the client, convert a returned `bfloat16` array named `value`
+to a PyTorch tensor by reinterpreting its bytes:
 
 ```python
 torch.from_numpy(value.view(np.uint8)).view(torch.bfloat16)
 ```
 
-## Files used by uploaded scripts
+<a id="files-used-by-uploaded-scripts"></a>
 
-Use `upload_file` when uploaded Python code expects a relative file path:
+### Uploading files and folders
+
+Use `upload_file()` to make a file available to code running on the server.
+Supply its contents as bytes and choose a destination in the request's working
+directory:
 
 ```python
-program = Program()
-program.upload_file(blob=tensor_bytes, path="./inputs/tensor.bin")
-module = program.upload(kind="module", source=READER_SOURCE)
-reader = program.get_function(module=module, name="main")
-result = program.run(fn=reader)
+program.upload_file(blob=tensor_bytes, path="inputs/tensor.bin")
 ```
 
-The module can use `open("inputs/tensor.bin", "rb")` unchanged. File uploads
-return a register containing the relative path. Put them before any instruction that reads the files,
-including a module upload whose top-level code opens them.
+To upload an existing local file, read its contents and pass them as `blob`:
 
-To snapshot a local directory at the current program position:
+```python
+from pathlib import Path
+
+program.upload_file(blob=Path("./data/tensor.bin").read_bytes(), path="inputs/tensor.bin")
+```
+
+Here, `./data/tensor.bin` is the local source file, and `inputs/tensor.bin` is its
+destination on the server. Use either upload above; both create the same remote
+path.
+
+Code that runs after this instruction can read the file with
+`open("inputs/tensor.bin", "rb")`. The upload also returns a register containing
+the relative path, which you can pass as an argument to a function.
+
+To upload a local folder and its contents, use `upload_folder()`:
 
 ```python
 program.upload_folder("./assets", path="inputs")
 ```
 
-`assets/a` becomes `inputs/a`; `assets/sub/b` becomes `inputs/sub/b`. Both helpers
-snapshot content when called, so later changes to the supplied bytes or local
-files do not affect execution or retries. Folder uploads include hidden files
-and reject symbolic links (including the source directory), repeated directories,
-and special files such as FIFOs. Empty directories and original permissions and
-timestamps are omitted; an empty folder adds no instructions.
+This places `assets/a` at `inputs/a` and `assets/sub/b` at `inputs/sub/b`.
+Both helpers capture the contents when called, so later changes to local files
+do not change a program you have already prepared. Folder uploads include hidden
+files, but omit empty directories and original file permissions. Symbolic links
+and special files are not supported.
 
-Destinations must be relative POSIX paths without `..` components. Duplicate
-paths and file/directory conflicts are rejected; parent directories are created
-automatically. A traversal, read, or destination-validation failure leaves the
-program unchanged.
+Upload destinations are relative to the request's working directory, which is
+removed when the request finishes. See the {ref}`file upload rules <file>` for
+path requirements and restrictions.
 
-Each execution gets a fresh working directory, removed after completion,
-failure, timeout, or worker crash. Caching is automatic and best-effort.
-The workspace is not a sandbox for uploaded Python code.
+### Returning files and folders
 
-## Returning files and folders
-
-After uploaded code creates outputs in the request workspace:
+A program may produce files you want to keep, such as a profiling report or a
+folder of debugging output. Use `return_file()` or `return_folder()` to retrieve
+these outputs. Add the instructions after the code that writes the files, then
+save the returned contents on the client:
 
 ```python
 program.return_file(key="report", path="outputs/report.txt")
 program.return_folder(key="debug", path="outputs/debug")
-result = client.execute(program)
+with Client("http://127.0.0.1:8000") as client:
+    result = client.execute(program)
+
+if not result.completed:
+    raise RuntimeError(result.error)
 result["report"].save("report.txt")
 result["debug"].save("debug")
 ```
 
-`path` accepts a relative POSIX path or an earlier `Register` containing one.
-Each return captures contents at that instruction; later writes do not change
-it. Ordinary `return_` of a path string returns only the string. Earlier returns
-remain available if a later instruction fails; a failed collection adds nothing.
+The `path` identifies a file or folder in the request's working directory. It
+can be a relative path string or a register containing one. Each return captures
+the contents at that point in the program, so finish writing the files first.
 
-`ReturnedFile.read_bytes()` reads the received contents. `ReturnedFolder.files`
-maps relative paths to `ReturnedFile`; `.directories` lists its directories.
-Folders include hidden files and empty directories, but omit original metadata.
-Missing paths, symlinks, special files, and files changing during collection fail
-the return. Finish writing outputs before returning them.
+Calling `execute()` retrieves the selected contents, and `.save()` writes them
+to a local destination. The destination's parent directory must already exist.
+To replace an existing file, pass `overwrite=True`; a folder destination must
+be new. Returned contents remain available after the client is closed.
 
-`.save()` writes the exact local destination and requires an existing parent.
-File replacement needs `overwrite=True`; folder destinations must be new.
-Saving rejects symlink traversal and `..` and preserves existing files on failure.
-Folders are visible while being written. Failed saves remove partial folders;
-an abrupt process exit can leave them behind.
-Results remain usable after closing the client. Filesystem operations target Linux.
-
-Contents arrive in the same buffered response and are subject to server limits;
-`execute()` does not save files automatically.
-
-## Handling failures
-
-A submission ends in one of three ways, and the difference between them matters:
-
-```python
-result = client.execute(program)
-if result.status == "FAILED":
-    error = result.error          # kind, message, instruction_index, instruction_id, traceback
-```
-
-- **`COMPLETED`** — every instruction ran.
-- **`FAILED`** — one instruction failed, and the instructions after it were
-  skipped. Returns that already ran are still in `results`, so putting a
-  `return_` before a risky instruction preserves the work up to that point.
-  `error["kind"]` is one of `parse`, `compile`, `runtime`, `gpu_access`,
-  `correctness`, `serialization`, `unavailable` or `engine`, and
-  `error["instruction_id"]` names the instruction that failed.
-- **An exception** — the client could not obtain a valid program outcome.
-  `KCoralError` carries `status_code` and `kind`: `503` with a
-  `Retry-After` header means no worker was free, and `504` means the program hit
-  `timeout_seconds` (default 300 s, maximum 900). `TransportError` means no HTTP
-  response could be obtained; the server may already have executed the program,
-  so check whether repeating its effects is acceptable before retrying.
-  `ProtocolError` means the response did not follow the protocol.
-
+You can also inspect the contents without saving them: `ReturnedFile.read_bytes()`
+returns the file's bytes, while `ReturnedFolder.files` and `.directories` expose
+the folder's files and directory paths. Returned folders include hidden files
+and empty directories, but do not preserve original file metadata. See the
+[Python API](../python-api/index.rst) for the full return and save options.
 
 ## Next steps
 
+<!-- Preserve legacy section anchors so older links still reach this page. -->
 <a id="the-shape-of-a-program"></a>
 <a id="where-to-compile"></a>
 <a id="languages-supported-by-remote-compilation"></a>
@@ -324,9 +339,11 @@ if result.status == "FAILED":
 <a id="checking-correctness"></a>
 <a id="running-your-own-code-off-the-gpu"></a>
 
-- [Benchmark a Kernel with KCoral](../tutorials/benchmark-kernel.md) explains
-  compilation choices, supported languages, correctness checks, measurement,
-  uploaded harnesses and functions that release the GPU.
-- [KCoral Protocol](protocol.md) defines endpoints and instruction fields.
-- [Agent Integration Guide](../tutorials/agent-integration.md) shows how to give a
-  coding agent the repository skill and a concrete execution task.
+- [Benchmark a Kernel with KCoral](../tutorials/benchmark-kernel.md): compile a
+  kernel, check its output, and measure its execution time.
+- [Remote Compilation](../tutorials/remote-compilation.md): compile on a CPU
+  server and run the resulting library on a GPU server.
+- [Agent Integration Guide](../tutorials/agent-integration.md): give a coding
+  agent the context it needs to write and submit KCoral programs.
+- [Python API](../python-api/index.rst) and [KCoral Protocol](protocol.md): look up
+  method signatures or the underlying request and response formats.

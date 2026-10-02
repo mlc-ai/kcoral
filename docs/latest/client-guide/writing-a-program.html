@@ -196,7 +196,6 @@
     <img class="sidebar-logo only-dark" src="../_static/brand/kcoral-logo-dark.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">KCoral documentation</span>
   
 </a>
 <details class="version-switcher">
@@ -226,17 +225,20 @@
 <li class="toctree-l1"><a class="reference internal" href="../getting-started/installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../getting-started/quickstart.html">Your First Program</a></li>
 </ul>
+<p class="caption" role="heading"><span class="caption-text">Protocol</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="protocol.html">KCoral Protocol</a></li>
+</ul>
 <p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
 <ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="protocol.html">KCoral Protocol</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Write a client program</a></li>
 <li class="toctree-l1"><a class="reference internal" href="builtin-cli-tools.html">Builtin CLI Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
 <ul>
@@ -321,158 +323,131 @@
 <a id="writing-a-program"></a></p>
 <section id="write-a-client-program">
 <h1>Write a client program<a class="headerlink" href="#write-a-client-program" title="Link to this heading">¶</a></h1>
-<p><code class="docutils literal notranslate"><span class="pre">Client</span></code> connects to a KCoral server. <code class="docutils literal notranslate"><span class="pre">Program</span></code> describes work to run there.
-Building a program does not execute it: <code class="docutils literal notranslate"><span class="pre">Client.execute()</span></code> submits the ordered
-instructions and decodes the selected results. The
-<a class="reference internal" href="../getting-started/quickstart.html"><span class="std std-doc">first GPU program</span></a> shows a complete runnable example.</p>
-<section id="create-and-close-a-client">
-<h2>Create and close a client<a class="headerlink" href="#create-and-close-a-client" title="Link to this heading">¶</a></h2>
-<p>Use a context manager so the client’s HTTP connections are closed when you finish.
-One client can submit many programs to the same server.</p>
+<p>To submit a benchmark to KCoral, you describe the work in a program. Each program
+represents one request: it specifies the code and data to upload, the functions
+to run, and the results to return. You build the program locally, send it to the
+server, and receive the results after the server executes its instructions in
+order. The <a class="reference internal" href="../getting-started/quickstart.html"><span class="std std-doc">first GPU program</span></a> walks through
+this workflow with a complete runnable example.</p>
+<section id="build-programs-with-instructions">
+<h2>Build programs with instructions<a class="headerlink" href="#build-programs-with-instructions" title="Link to this heading">¶</a></h2>
+<p>A program is a sequence of instructions that one worker on the server executes
+in order. Each instruction describes one step, such as uploading data or calling
+a function. The <code class="docutils literal notranslate"><span class="pre">Program</span></code> builder provides methods for composing these steps
+into a request. There are four core instructions:</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Instruction</p></th>
+<th class="head"><p>Python method</p></th>
+<th class="head"><p>Purpose</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">upload</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">upload(kind=...,</span> <span class="pre">...)</span></code></p></td>
+<td><p>Upload code, tensors, bytes, or compiled libraries</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">get_function</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">get_function(module=...,</span> <span class="pre">name=...)</span></code></p></td>
+<td><p>Select a function from an uploaded module or library</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">run(fn=...,</span> <span class="pre">args=...)</span></code></p></td>
+<td><p>Call a function with the supplied arguments</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">return</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">return_(key=...,</span> <span class="pre">value=...)</span></code></p></td>
+<td><p>Select a value to send back to the client</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The builder also provides helpers for working with files: <code class="docutils literal notranslate"><span class="pre">upload_file()</span></code> and
+<code class="docutils literal notranslate"><span class="pre">upload_folder()</span></code> add uploads to the program, while <code class="docutils literal notranslate"><span class="pre">return_file()</span></code> and
+<code class="docutils literal notranslate"><span class="pre">return_folder()</span></code> select files or folders to send back. These use the same
+<code class="docutils literal notranslate"><span class="pre">upload</span></code> and <code class="docutils literal notranslate"><span class="pre">return</span></code> instructions. The sections on
+<a class="reference internal" href="#uploading-files-and-folders">uploading files</a> and
+<a class="reference internal" href="#returning-files-and-folders">returning files</a> cover these helpers in detail.</p>
+<p>When an instruction produces a value, the builder returns a <code class="docutils literal notranslate"><span class="pre">Register</span></code>: a local
+Python reference to the value that will exist on the server when the instruction
+runs. Pass registers to later instructions to select a function to call, supply
+its arguments, or choose a result to return. This lets you pass data through
+several function calls within one program. Each register must come from an
+earlier instruction in the same program.</p>
+<p>With <code class="docutils literal notranslate"><span class="pre">Program</span></code> imported from <code class="docutils literal notranslate"><span class="pre">kcoral</span></code>, this snippet builds a program that
+multiplies <code class="docutils literal notranslate"><span class="pre">3</span></code> by <code class="docutils literal notranslate"><span class="pre">2</span></code> and returns the result as <code class="docutils literal notranslate"><span class="pre">&quot;output&quot;</span></code>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">program</span> <span class="o">=</span> <span class="n">Program</span><span class="p">()</span>
+<span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span>
+    <span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">"def scale(x, factor): return x * factor"</span>
+<span class="p">)</span>
+<span class="n">scale</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"scale"</span><span class="p">)</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">scale</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
+<span class="n">program</span><span class="o">.</span><span class="n">return_</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="s2">"output"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">y</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">upload()</span></code> supplies the code, and <code class="docutils literal notranslate"><span class="pre">get_function()</span></code> selects <code class="docutils literal notranslate"><span class="pre">scale</span></code> from it.
+The <code class="docutils literal notranslate"><span class="pre">scale</span></code> register tells <code class="docutils literal notranslate"><span class="pre">run()</span></code> which function to call; <code class="docutils literal notranslate"><span class="pre">args</span></code> supplies its
+inputs. Finally, <code class="docutils literal notranslate"><span class="pre">return_()</span></code> selects the value referenced by <code class="docutils literal notranslate"><span class="pre">y</span></code> to send back
+under the key <code class="docutils literal notranslate"><span class="pre">&quot;output&quot;</span></code>. After submission, that value will be <code class="docutils literal notranslate"><span class="pre">6</span></code>.</p>
+<p>See the <a class="reference internal" href="../python-api/index.html"><span class="std std-doc">Python API</span></a> for complete method signatures and
+parameter types.</p>
+</section>
+<section id="create-a-client-and-submit-programs">
+<h2>Create a client and submit programs<a class="headerlink" href="#create-a-client-and-submit-programs" title="Link to this heading">¶</a></h2>
+<p>The Python client’s <code class="docutils literal notranslate"><span class="pre">Client</span></code> class connects to a KCoral server. Create a client
+with the server’s address; you can use the same client to submit many programs.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">kcoral</span><span class="w"> </span><span class="kn">import</span> <span class="n">Client</span>
 
-<span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="s2">"http://localhost:8000"</span><span class="p">,</span> <span class="n">connect_timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+<span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="s2">"http://127.0.0.1:8000"</span><span class="p">,</span> <span class="n">connect_timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
     <span class="n">health</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">health</span><span class="p">()</span>
     <span class="n">target</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">target</span><span class="p">()</span>
     <span class="nb">print</span><span class="p">(</span><span class="n">health</span><span class="p">[</span><span class="s2">"versions"</span><span class="p">])</span>
     <span class="nb">print</span><span class="p">(</span><span class="n">target</span><span class="p">[</span><span class="s2">"arch"</span><span class="p">])</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">health()</span></code> reports endpoint status, load, and compilation metadata.
-<code class="docutils literal notranslate"><span class="pre">target()</span></code> reads the GPU architecture an uploaded compiled library must match; ask the GPU
-server for it, not a CPU compilation server. Optional <code class="docutils literal notranslate"><span class="pre">headers</span></code> are sent with
-every request. If you do not use <code class="docutils literal notranslate"><span class="pre">with</span></code>, call <code class="docutils literal notranslate"><span class="pre">client.close()</span></code> explicitly.</p>
-<p><code class="docutils literal notranslate"><span class="pre">connect_timeout_seconds</span></code> limits connection establishment. It does not limit
-execution. Pass <code class="docutils literal notranslate"><span class="pre">timeout_seconds</span></code> to <code class="docutils literal notranslate"><span class="pre">execute()</span></code> for a server-side execution
-deadline, and <code class="docutils literal notranslate"><span class="pre">output_limit_bytes</span></code> to limit captured output per stream.</p>
-</section>
-<section id="remote-functions">
-<h2>Remote functions<a class="headerlink" href="#remote-functions" title="Link to this heading">¶</a></h2>
-<p>Use <code class="docutils literal notranslate"><span class="pre">&#64;client.function()</span></code> for a self-contained Python function. Configure the server
-address on <code class="docutils literal notranslate"><span class="pre">Client</span></code>; decorated functions reuse its connections and headers:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">kcoral</span><span class="w"> </span><span class="kn">import</span> <span class="n">Client</span>
+<p>The client provides <code class="docutils literal notranslate"><span class="pre">health()</span></code> to check the server’s status and software versions,
+and <code class="docutils literal notranslate"><span class="pre">target()</span></code> to check its GPU architecture.</p>
+<p>The first argument is the server URL. <code class="docutils literal notranslate"><span class="pre">connect_timeout_seconds</span></code> controls how long
+the client waits to open a connection to that server, in seconds. For example,
+if the server’s machine is unreachable and the connection attempt receives no
+response, the setting above stops that attempt after 10 seconds. This setting
+does not limit how long a submitted program can run. See the
+<a class="reference internal" href="../python-api/index.html"><span class="std std-doc">Python API</span></a> for all client options.</p>
+<section id="simple-program">
+<h3>Simple program<a class="headerlink" href="#simple-program" title="Link to this heading">¶</a></h3>
+<p>To demonstrate <code class="docutils literal notranslate"><span class="pre">client.execute()</span></code> and its options, this example uploads one line
+of Python that prints <code class="docutils literal notranslate"><span class="pre">2</span></code> on the server. The call submits the program and returns
+its results, including the captured output:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">kcoral</span><span class="w"> </span><span class="kn">import</span> <span class="n">Client</span><span class="p">,</span> <span class="n">Program</span>
 
-<span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="s2">"http://localhost:8000"</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+<span class="n">print_program</span> <span class="o">=</span> <span class="n">Program</span><span class="p">()</span>
+<span class="n">print_program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">"print(1 + 1)"</span><span class="p">)</span>
 
-    <span class="nd">@client</span><span class="o">.</span><span class="n">function</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">gpu_sum</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
-        <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="s2">"http://127.0.0.1:8000"</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">print_program</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">output_limit_bytes</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span>
 
-        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
-
-    <span class="nb">print</span><span class="p">(</span><span class="n">gpu_sum</span><span class="o">.</span><span class="n">remote</span><span class="p">(</span><span class="mi">4</span><span class="p">))</span>  <span class="c1"># 6</span>
+<span class="k">if</span> <span class="ow">not</span> <span class="n">result</span><span class="o">.</span><span class="n">completed</span><span class="p">:</span>
+    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">error</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">""</span><span class="p">)</span>  <span class="c1"># 2</span>
 </pre></div>
 </div>
-<p>Save the function in a Python file, import dependencies inside it, and install
-them on the server. Closures, external globals, additional decorators, async
-functions and generators are unsupported. Arguments accept JSON values, bytes
-and tensors; bytes and tensors must be whole arguments, not nested in containers.
-Returned tensors are local NumPy arrays. Each remote call has no retained state.
-See <code class="docutils literal notranslate"><span class="pre">examples/remote_function.py</span></code> for a tensor upload/run/download example.</p>
-<p>Ordinary calls such as <code class="docutils literal notranslate"><span class="pre">gpu_sum(4)</span></code> execute locally. <code class="docutils literal notranslate"><span class="pre">.remote()</span></code> raises
-<code class="docutils literal notranslate"><span class="pre">RemoteExecutionError</span></code> on an instruction failure; its <code class="docutils literal notranslate"><span class="pre">.result</span></code> retains the error,
-traceback and captured output. <code class="docutils literal notranslate"><span class="pre">.execute()</span></code> returns the full <code class="docutils literal notranslate"><span class="pre">ProgramResult</span></code>,
-including failed outcomes. <code class="docutils literal notranslate"><span class="pre">.build_program()</span></code> builds the equivalent <code class="docutils literal notranslate"><span class="pre">Program</span></code>
-without executing it. Keep the client open for remote calls.</p>
+<p>Here, <code class="docutils literal notranslate"><span class="pre">timeout_seconds=30</span></code> gives the server a 30-second execution limit, and
+<code class="docutils literal notranslate"><span class="pre">output_limit_bytes=1024</span></code> captures up to 1 KiB each of standard output and
+standard error. The server runs <code class="docutils literal notranslate"><span class="pre">print(1</span> <span class="pre">+</span> <span class="pre">1)</span></code> after <code class="docutils literal notranslate"><span class="pre">client.execute(print_program,</span> <span class="pre">...)</span></code>
+submits the program, rather than when <code class="docutils literal notranslate"><span class="pre">print_program.upload(...)</span></code> adds the instruction.</p>
+<p>Each submission is independent: the server keeps no program session between
+requests. When a request finishes, its temporary files and values are discarded,
+and its registers can no longer be used to access them. You can submit the same
+<code class="docutils literal notranslate"><span class="pre">Program</span></code> again, but its instructions will run again with fresh values. Results
+already returned to the client remain available.</p>
 </section>
-<section id="build-instructions-with-program">
-<h2>Build instructions with Program<a class="headerlink" href="#build-instructions-with-program" title="Link to this heading">¶</a></h2>
-<p>The builder returns a <code class="docutils literal notranslate"><span class="pre">Register</span></code> when an instruction produces a value. A register
-is a local Python reference to a server-side value identified by its instruction
-name; it is not the value itself.</p>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Method</p></th>
-<th class="head"><p>Purpose</p></th>
-<th class="head"><p>Returns</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">upload(kind=...,</span> <span class="pre">...)</span></code></p></td>
-<td><p>Upload module source, a tensor, bytes or a compiled TVM FFI library</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">Register</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">upload_file(blob=...,</span> <span class="pre">path=...)</span></code></p></td>
-<td><p>Snapshot bytes as a file in the request workspace</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">Register</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">upload_folder(folder,</span> <span class="pre">path=...)</span></code></p></td>
-<td><p>Snapshot a local directory as file uploads</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">None</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">get_function(module=...,</span> <span class="pre">name=...,</span> <span class="pre">cpu_only=False)</span></code></p></td>
-<td><p>Select a function or object from an earlier module or library</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">Register</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run(fn=...,</span> <span class="pre">args=None)</span></code></p></td>
-<td><p>Call a selected or computed callable</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">Register</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">return_(key=...,</span> <span class="pre">value=...)</span></code></p></td>
-<td><p>Select an earlier value for the response</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">None</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">return_file(key=...,</span> <span class="pre">path=...)</span></code></p></td>
-<td><p>Select a workspace file for the response</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">None</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">return_folder(key=...,</span> <span class="pre">path=...)</span></code></p></td>
-<td><p>Select a workspace folder for the response</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">None</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">instructions</span></code></p></td>
-<td><p>Inspect a shallow copy of the wire instruction list</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">list[dict]</span></code></p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p><code class="docutils literal notranslate"><span class="pre">Program</span></code> automatically generates an ID for each value-producing instruction.
-Use the optional <code class="docutils literal notranslate"><span class="pre">id</span></code> field to customize it.</p>
-<p>Use the <a class="reference internal" href="../python-api/index.html"><span class="std std-doc">Python API</span></a> for complete signatures and parameter types.</p>
-<section id="upload-and-select-a-function">
-<h3>Upload and select a function<a class="headerlink" href="#upload-and-select-a-function" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-
-<span class="kn">from</span><span class="w"> </span><span class="nn">kcoral</span><span class="w"> </span><span class="kn">import</span> <span class="n">Program</span>
-
-<span class="n">program</span> <span class="o">=</span> <span class="n">Program</span><span class="p">()</span>
-<span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span>
-    <span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">"def scale(x, factor): return x * factor"</span>
-<span class="p">)</span>
-<span class="n">scale</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"scale"</span><span class="p">)</span>
-<span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-<span class="n">x</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"tensor"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">values</span><span class="p">)</span>
-<span class="n">y</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">scale</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">x</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
-<span class="n">program</span><span class="o">.</span><span class="n">return_</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="s2">"output"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">y</span><span class="p">)</span>
-</pre></div>
-</div>
-<p><code class="docutils literal notranslate"><span class="pre">upload</span></code> accepts <code class="docutils literal notranslate"><span class="pre">module</span></code>, <code class="docutils literal notranslate"><span class="pre">tensor</span></code>, <code class="docutils literal notranslate"><span class="pre">bytes</span></code> and <code class="docutils literal notranslate"><span class="pre">library</span></code>. Its file counterpart
-is <code class="docutils literal notranslate"><span class="pre">upload_file</span></code>; <code class="docutils literal notranslate"><span class="pre">upload(kind=&quot;file&quot;)</span></code> is not a supported Python call. A module
-binds a namespace; <code class="docutils literal notranslate"><span class="pre">get_function</span></code> explicitly selects an object from it. A
-precompiled library follows the same selection step.</p>
-</section>
-<section id="pass-values-and-references">
-<h3>Pass values and references<a class="headerlink" href="#pass-values-and-references" title="Link to this heading">¶</a></h3>
-<p>Pass the value returned by <code class="docutils literal notranslate"><span class="pre">get_function</span></code> as the <code class="docutils literal notranslate"><span class="pre">fn</span></code> argument to <code class="docutils literal notranslate"><span class="pre">run</span></code>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">scale</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"scale"</span><span class="p">)</span>
-<span class="n">y</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">scale</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">x</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
-</pre></div>
-</div>
-<p><code class="docutils literal notranslate"><span class="pre">scale</span></code> is a <code class="docutils literal notranslate"><span class="pre">Register</span></code>, a Python object holding the generated instruction ID.
-The client serializes it as <code class="docutils literal notranslate"><span class="pre">{&quot;$ref&quot;:</span> <span class="pre">scale.id}</span></code> in the request. The same applies to a
-<code class="docutils literal notranslate"><span class="pre">Register</span></code> returned by a <code class="docutils literal notranslate"><span class="pre">run</span></code> that produced another callable.</p>
-<p>Top-level <code class="docutils literal notranslate"><span class="pre">Register</span></code> arguments in <code class="docutils literal notranslate"><span class="pre">args</span></code> are encoded the same way. Ordinary
-numbers, strings, lists and dictionaries pass as JSON literals. An explicit
-<code class="docutils literal notranslate"><span class="pre">{&quot;$ref&quot;:</span> <span class="pre">&quot;id&quot;}</span></code> in a top-level argument also resolves to that earlier value;
-reference-shaped dictionaries nested inside lists or objects remain literals.
-All references must point to earlier instructions in the same request.</p>
-</section>
-</section>
-<section id="submit-and-read-results">
-<h2>Submit and read results<a class="headerlink" href="#submit-and-read-results" title="Link to this heading">¶</a></h2>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="s2">"http://localhost:8000"</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+<section id="read-results">
+<h3>Read results<a class="headerlink" href="#read-results" title="Link to this heading">¶</a></h3>
+<p>For the multiplication program built earlier, <code class="docutils literal notranslate"><span class="pre">return_(key=&quot;output&quot;,</span> <span class="pre">value=y)</span></code>
+selects the value to retrieve. After submitting that program, check whether it
+completed and read <code class="docutils literal notranslate"><span class="pre">&quot;output&quot;</span></code> from the response:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="s2">"http://127.0.0.1:8000"</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
     <span class="n">result</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">program</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">120</span><span class="p">,</span> <span class="n">output_limit_bytes</span><span class="o">=</span><span class="mi">65536</span><span class="p">)</span>
 
 <span class="k">if</span> <span class="n">result</span><span class="o">.</span><span class="n">completed</span><span class="p">:</span>
@@ -483,45 +458,80 @@ All references must point to earlier instructions in the same request.</p>
 <span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span> <span class="n">result</span><span class="o">.</span><span class="n">stderr</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>The returned <code class="docutils literal notranslate"><span class="pre">ProgramResult</span></code> includes <code class="docutils literal notranslate"><span class="pre">status</span></code>, <code class="docutils literal notranslate"><span class="pre">request_id</span></code>, <code class="docutils literal notranslate"><span class="pre">results</span></code>, <code class="docutils literal notranslate"><span class="pre">error</span></code>,
-captured <code class="docutils literal notranslate"><span class="pre">stdout</span></code> and <code class="docutils literal notranslate"><span class="pre">stderr</span></code>, and flags showing whether either stream was
-truncated. Tensor results are NumPy arrays in client CPU memory; byte results
-are Python <code class="docutils literal notranslate"><span class="pre">bytes</span></code>. Modules and callable handles cannot be returned.</p>
-<p><code class="docutils literal notranslate"><span class="pre">queue_ms</span></code> measures waiting for a worker. <code class="docutils literal notranslate"><span class="pre">elapsed_ms</span></code> is worker execution time,
-including <code class="docutils literal notranslate"><span class="pre">lease_wait_ms</span></code> waiting for exclusive GPU access and <code class="docutils literal notranslate"><span class="pre">lease_held_ms</span></code>
-holding that access. These request-level durations are different from a kernel’s
-measurement reported by your harness or profiler.</p>
+<p>The returned <code class="docutils literal notranslate"><span class="pre">ProgramResult</span></code> contains the values you selected in <code class="docutils literal notranslate"><span class="pre">results</span></code>, along
+with the request’s <code class="docutils literal notranslate"><span class="pre">status</span></code>, <code class="docutils literal notranslate"><span class="pre">request_id</span></code>, and any <code class="docutils literal notranslate"><span class="pre">error</span></code>. It also includes
+captured <code class="docutils literal notranslate"><span class="pre">stdout</span></code> and <code class="docutils literal notranslate"><span class="pre">stderr</span></code> and flags indicating whether either was truncated.
+Returned tensors arrive as NumPy arrays in client CPU memory, and byte results
+arrive as Python <code class="docutils literal notranslate"><span class="pre">bytes</span></code>. Modules and callable handles cannot be returned.</p>
+<p><a id="handling-failures"></a></p>
+<p>A <code class="docutils literal notranslate"><span class="pre">COMPLETED</span></code> result means every instruction ran successfully. If an instruction
+fails, the result has status <code class="docutils literal notranslate"><span class="pre">FAILED</span></code>, and <code class="docutils literal notranslate"><span class="pre">result.error</span></code> describes what went
+wrong. The server skips the remaining instructions, but values selected by
+<code class="docutils literal notranslate"><span class="pre">return_()</span></code> before the failure remain in <code class="docutils literal notranslate"><span class="pre">result.results</span></code>. Returning an
+intermediate result can therefore preserve useful work if a later step fails.</p>
+<p>Some failures prevent the client from obtaining a program result. In those
+cases, <code class="docutils literal notranslate"><span class="pre">execute()</span></code> raises an exception: <code class="docutils literal notranslate"><span class="pre">KCoralError</span></code> for an HTTP error from the
+server, <code class="docutils literal notranslate"><span class="pre">TransportError</span></code> for a connection or transfer problem, or <code class="docutils literal notranslate"><span class="pre">ProtocolError</span></code>
+for an invalid response. A lost connection does not tell you whether the server
+ran the program, so consider whether repeating its work is safe before retrying.
+See the <a class="reference internal" href="../python-api/index.html#python-errors"><span class="std std-ref">Python API error reference</span></a> for details.</p>
+<p>Alongside these results, the response includes timing metrics to help you
+understand where the request spent its time. <code class="docutils literal notranslate"><span class="pre">queue_ms</span></code> measures how long it
+waited for a worker, while <code class="docutils literal notranslate"><span class="pre">elapsed_ms</span></code> measures time spent on the worker.
+Within that worker time, <code class="docutils literal notranslate"><span class="pre">lease_wait_ms</span></code> records the wait for exclusive GPU
+access, and <code class="docutils literal notranslate"><span class="pre">lease_held_ms</span></code> records how long the request held that access.
+These metrics can help distinguish a busy server or GPU from a slow program.
+They describe the request as a whole; use the measurements from your benchmark
+harness or profiler to assess the kernel’s execution time.</p>
 </section>
-<section id="request-lifecycle">
-<h2>Request lifecycle<a class="headerlink" href="#request-lifecycle" title="Link to this heading">¶</a></h2>
-<ol class="arabic simple">
-<li><p><strong>Construct locally.</strong> Builder calls append instructions; binary uploads
-snapshot input at the time of the call.</p></li>
-<li><p><strong>Resolve uploads.</strong> <code class="docutils literal notranslate"><span class="pre">execute()</span></code> first sends a cache-only request. Missing
-cached blobs cause a retry with the missing bytes; a further miss causes
-one last request containing every local blob.</p></li>
-<li><p><strong>Execute in order.</strong> One worker runs the instructions. There is no retained
-program session between submissions.</p></li>
-<li><p><strong>Return selected values.</strong> Only return instructions contribute result
-entries. Returning early preserves that entry if a later instruction fails.</p></li>
-<li><p><strong>Clean up.</strong> The request’s registers, GPU values and temporary files expire.
-Closing the client closes connections; it does not erase server caches.</p></li>
-</ol>
-<p>You may submit the same <code class="docutils literal notranslate"><span class="pre">Program</span></code> again. Its binary snapshots are reused, but
-its instructions execute again and get fresh remote values. You cannot pass a
-register from an earlier request to a new program. The default server replaces
-a worker after each request; opting into worker reuse does not extend the
-protocol lifetime of a register.</p>
-<p>File and memory caches retain uploaded bytes as an optimization. A cache hit
-does not preserve a previous tensor’s mutations, a compiled callable, or an
-execution’s output. Compare their lifetimes and limits in the protocol’s
-<a class="reference internal" href="protocol.html#caching"><span class="std std-ref">cache table</span></a>.</p>
+<section id="remote-functions">
+<h3>Remote functions<a class="headerlink" href="#remote-functions" title="Link to this heading">¶</a></h3>
+<p>KCoral also provides <code class="docutils literal notranslate"><span class="pre">&#64;client.function()</span></code> to run a Python function on the server
+without building a program by hand. In this example, <code class="docutils literal notranslate"><span class="pre">gpu_sum.remote(4)</span></code> creates
+the values 0 through 3 on the server’s GPU, adds them, and returns <code class="docutils literal notranslate"><span class="pre">6</span></code>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">kcoral</span><span class="w"> </span><span class="kn">import</span> <span class="n">Client</span>
+
+<span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="s2">"http://127.0.0.1:8000"</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+
+    <span class="nd">@client</span><span class="o">.</span><span class="n">function</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">gpu_sum</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+        <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+
+        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="n">gpu_sum</span><span class="o">.</span><span class="n">remote</span><span class="p">(</span><span class="mi">4</span><span class="p">))</span>  <span class="c1"># 6</span>
+</pre></div>
+</div>
+<p>The decorated function must be self-contained. When writing one:</p>
+<ul class="simple">
+<li><p>Define it in a Python file so the client can read its source.</p></li>
+<li><p>Import dependencies inside the function and install them on the server.</p></li>
+<li><p>Pass inputs as arguments; the function cannot use variables from the surrounding
+scope or global variables defined outside it.</p></li>
+<li><p>Use <code class="docutils literal notranslate"><span class="pre">.remote()</span></code> to run it on the server and receive its return value. An ordinary
+call such as <code class="docutils literal notranslate"><span class="pre">gpu_sum(4)</span></code> runs locally.</p></li>
+</ul>
+<p>Each remote call is an independent request. <code class="docutils literal notranslate"><span class="pre">.remote()</span></code> raises an exception if
+the remote execution fails. See the <a class="reference internal" href="../python-api/index.html"><span class="std std-doc">Python API</span></a> for
+supported argument types, restrictions, and other ways to invoke the function.
+For a complete example that uploads a tensor, adds one on the GPU, and returns a
+NumPy array, <a class="reference download internal" download="" href="../_downloads/b9a1f3d3b6e2589d5eb247ee57f32d4a/remote_function.py"><code class="xref download docutils literal notranslate"><span class="pre">download</span> <span class="pre">remote_function.py</span></code></a>.</p>
 </section>
+</section>
+<section id="working-with-tensors-and-files">
+<h2>Working with tensors and files<a class="headerlink" href="#working-with-tensors-and-files" title="Link to this heading">¶</a></h2>
+<p>A program may need tensor inputs or files for its code to read, and it may
+produce tensors or files you want to retrieve. You can upload data from the
+client or create it on the server, then select the outputs to return. The
+following snippets illustrate separate uses of a <code class="docutils literal notranslate"><span class="pre">Program</span></code>; start with a fresh
+<code class="docutils literal notranslate"><span class="pre">program</span> <span class="pre">=</span> <span class="pre">Program()</span></code> for each example.</p>
 <section id="tensors">
-<h2>Tensors<a class="headerlink" href="#tensors" title="Link to this heading">¶</a></h2>
-<p>You can initialize tensors remotely by uploading Python, or upload tensors
-created locally.</p>
-<p>For remote initialization:</p>
+<h3>Tensors<a class="headerlink" href="#tensors" title="Link to this heading">¶</a></h3>
+<p>Tensors hold the inputs and outputs of most machine learning kernels. KCoral
+lets you create them on the server or upload them from the client, then pass
+them to functions through registers.</p>
+<p>When you only need generated inputs, such as random values for a benchmark, you
+can create them directly on the GPU by uploading a Python function:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">"""</span>
 <span class="s2">import torch</span>
 
@@ -532,7 +542,7 @@ created locally.</p>
 <span class="n">x</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">make_input</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>For a local tensor:</p>
+<p>When you already have input data on the client, upload it with <code class="docutils literal notranslate"><span class="pre">kind=&quot;tensor&quot;</span></code>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 
 <span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
@@ -541,100 +551,85 @@ created locally.</p>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">kind=&quot;tensor&quot;</span></code> accepts a NumPy array, a torch tensor, any object supporting
 DLPack, or raw bytes together with <code class="docutils literal notranslate"><span class="pre">dtype</span></code> and <code class="docutils literal notranslate"><span class="pre">shape</span></code>.</p>
-<p>Accepted dtypes: <code class="docutils literal notranslate"><span class="pre">bool</span></code>, <code class="docutils literal notranslate"><span class="pre">uint8</span></code>, <code class="docutils literal notranslate"><span class="pre">int8</span></code>, <code class="docutils literal notranslate"><span class="pre">int16</span></code>, <code class="docutils literal notranslate"><span class="pre">int32</span></code>, <code class="docutils literal notranslate"><span class="pre">int64</span></code>, <code class="docutils literal notranslate"><span class="pre">float16</span></code>,
+<p>Supported dtypes include <code class="docutils literal notranslate"><span class="pre">bool</span></code>, <code class="docutils literal notranslate"><span class="pre">uint8</span></code>, <code class="docutils literal notranslate"><span class="pre">int8</span></code>, <code class="docutils literal notranslate"><span class="pre">int16</span></code>, <code class="docutils literal notranslate"><span class="pre">int32</span></code>, <code class="docutils literal notranslate"><span class="pre">int64</span></code>, <code class="docutils literal notranslate"><span class="pre">float16</span></code>,
 <code class="docutils literal notranslate"><span class="pre">float32</span></code>, <code class="docutils literal notranslate"><span class="pre">float64</span></code>, <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code>, <code class="docutils literal notranslate"><span class="pre">float8_e4m3fn</span></code>, <code class="docutils literal notranslate"><span class="pre">float8_e5m2</span></code>.</p>
-<p>Returned tensors arrive as CPU <code class="docutils literal notranslate"><span class="pre">numpy.ndarray</span></code>, with <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> and the float8
-types carried by <code class="docutils literal notranslate"><span class="pre">ml_dtypes</span></code>. To hand one to torch, reinterpret the raw bytes:</p>
+<p>To retrieve a tensor, select its register with <code class="docutils literal notranslate"><span class="pre">program.return_(key=&quot;output&quot;,</span> <span class="pre">value=x)</span></code>.
+After execution, <code class="docutils literal notranslate"><span class="pre">result.results[&quot;output&quot;]</span></code> is a NumPy array in client CPU memory.
+The <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> and float8 dtypes use <code class="docutils literal notranslate"><span class="pre">ml_dtypes</span></code>. With NumPy imported as <code class="docutils literal notranslate"><span class="pre">np</span></code> and
+PyTorch as <code class="docutils literal notranslate"><span class="pre">torch</span></code> on the client, convert a returned <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> array named <code class="docutils literal notranslate"><span class="pre">value</span></code>
+to a PyTorch tensor by reinterpreting its bytes:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">from_numpy</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">))</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
 </pre></div>
 </div>
+<p><a id="files-used-by-uploaded-scripts"></a></p>
 </section>
-<section id="files-used-by-uploaded-scripts">
-<h2>Files used by uploaded scripts<a class="headerlink" href="#files-used-by-uploaded-scripts" title="Link to this heading">¶</a></h2>
-<p>Use <code class="docutils literal notranslate"><span class="pre">upload_file</span></code> when uploaded Python code expects a relative file path:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">program</span> <span class="o">=</span> <span class="n">Program</span><span class="p">()</span>
-<span class="n">program</span><span class="o">.</span><span class="n">upload_file</span><span class="p">(</span><span class="n">blob</span><span class="o">=</span><span class="n">tensor_bytes</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="s2">"./inputs/tensor.bin"</span><span class="p">)</span>
-<span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">READER_SOURCE</span><span class="p">)</span>
-<span class="n">reader</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"main"</span><span class="p">)</span>
-<span class="n">result</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">reader</span><span class="p">)</span>
+<section id="uploading-files-and-folders">
+<h3>Uploading files and folders<a class="headerlink" href="#uploading-files-and-folders" title="Link to this heading">¶</a></h3>
+<p>Use <code class="docutils literal notranslate"><span class="pre">upload_file()</span></code> to make a file available to code running on the server.
+Supply its contents as bytes and choose a destination in the request’s working
+directory:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">program</span><span class="o">.</span><span class="n">upload_file</span><span class="p">(</span><span class="n">blob</span><span class="o">=</span><span class="n">tensor_bytes</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="s2">"inputs/tensor.bin"</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>The module can use <code class="docutils literal notranslate"><span class="pre">open(&quot;inputs/tensor.bin&quot;,</span> <span class="pre">&quot;rb&quot;)</span></code> unchanged. File uploads
-return a register containing the relative path. Put them before any instruction that reads the files,
-including a module upload whose top-level code opens them.</p>
-<p>To snapshot a local directory at the current program position:</p>
+<p>To upload an existing local file, read its contents and pass them as <code class="docutils literal notranslate"><span class="pre">blob</span></code>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+
+<span class="n">program</span><span class="o">.</span><span class="n">upload_file</span><span class="p">(</span><span class="n">blob</span><span class="o">=</span><span class="n">Path</span><span class="p">(</span><span class="s2">"./data/tensor.bin"</span><span class="p">)</span><span class="o">.</span><span class="n">read_bytes</span><span class="p">(),</span> <span class="n">path</span><span class="o">=</span><span class="s2">"inputs/tensor.bin"</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Here, <code class="docutils literal notranslate"><span class="pre">./data/tensor.bin</span></code> is the local source file, and <code class="docutils literal notranslate"><span class="pre">inputs/tensor.bin</span></code> is its
+destination on the server. Use either upload above; both create the same remote
+path.</p>
+<p>Code that runs after this instruction can read the file with
+<code class="docutils literal notranslate"><span class="pre">open(&quot;inputs/tensor.bin&quot;,</span> <span class="pre">&quot;rb&quot;)</span></code>. The upload also returns a register containing
+the relative path, which you can pass as an argument to a function.</p>
+<p>To upload a local folder and its contents, use <code class="docutils literal notranslate"><span class="pre">upload_folder()</span></code>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">program</span><span class="o">.</span><span class="n">upload_folder</span><span class="p">(</span><span class="s2">"./assets"</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="s2">"inputs"</span><span class="p">)</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">assets/a</span></code> becomes <code class="docutils literal notranslate"><span class="pre">inputs/a</span></code>; <code class="docutils literal notranslate"><span class="pre">assets/sub/b</span></code> becomes <code class="docutils literal notranslate"><span class="pre">inputs/sub/b</span></code>. Both helpers
-snapshot content when called, so later changes to the supplied bytes or local
-files do not affect execution or retries. Folder uploads include hidden files
-and reject symbolic links (including the source directory), repeated directories,
-and special files such as FIFOs. Empty directories and original permissions and
-timestamps are omitted; an empty folder adds no instructions.</p>
-<p>Destinations must be relative POSIX paths without <code class="docutils literal notranslate"><span class="pre">..</span></code> components. Duplicate
-paths and file/directory conflicts are rejected; parent directories are created
-automatically. A traversal, read, or destination-validation failure leaves the
-program unchanged.</p>
-<p>Each execution gets a fresh working directory, removed after completion,
-failure, timeout, or worker crash. Caching is automatic and best-effort.
-The workspace is not a sandbox for uploaded Python code.</p>
+<p>This places <code class="docutils literal notranslate"><span class="pre">assets/a</span></code> at <code class="docutils literal notranslate"><span class="pre">inputs/a</span></code> and <code class="docutils literal notranslate"><span class="pre">assets/sub/b</span></code> at <code class="docutils literal notranslate"><span class="pre">inputs/sub/b</span></code>.
+Both helpers capture the contents when called, so later changes to local files
+do not change a program you have already prepared. Folder uploads include hidden
+files, but omit empty directories and original file permissions. Symbolic links
+and special files are not supported.</p>
+<p>Upload destinations are relative to the request’s working directory, which is
+removed when the request finishes. See the <a class="reference internal" href="protocol.html#file"><span class="std std-ref">file upload rules</span></a> for
+path requirements and restrictions.</p>
 </section>
 <section id="returning-files-and-folders">
-<h2>Returning files and folders<a class="headerlink" href="#returning-files-and-folders" title="Link to this heading">¶</a></h2>
-<p>After uploaded code creates outputs in the request workspace:</p>
+<h3>Returning files and folders<a class="headerlink" href="#returning-files-and-folders" title="Link to this heading">¶</a></h3>
+<p>A program may produce files you want to keep, such as a profiling report or a
+folder of debugging output. Use <code class="docutils literal notranslate"><span class="pre">return_file()</span></code> or <code class="docutils literal notranslate"><span class="pre">return_folder()</span></code> to retrieve
+these outputs. Add the instructions after the code that writes the files, then
+save the returned contents on the client:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">program</span><span class="o">.</span><span class="n">return_file</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="s2">"report"</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="s2">"outputs/report.txt"</span><span class="p">)</span>
 <span class="n">program</span><span class="o">.</span><span class="n">return_folder</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="s2">"debug"</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="s2">"outputs/debug"</span><span class="p">)</span>
-<span class="n">result</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">program</span><span class="p">)</span>
+<span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="s2">"http://127.0.0.1:8000"</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">program</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="ow">not</span> <span class="n">result</span><span class="o">.</span><span class="n">completed</span><span class="p">:</span>
+    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">error</span><span class="p">)</span>
 <span class="n">result</span><span class="p">[</span><span class="s2">"report"</span><span class="p">]</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="s2">"report.txt"</span><span class="p">)</span>
 <span class="n">result</span><span class="p">[</span><span class="s2">"debug"</span><span class="p">]</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="s2">"debug"</span><span class="p">)</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">path</span></code> accepts a relative POSIX path or an earlier <code class="docutils literal notranslate"><span class="pre">Register</span></code> containing one.
-Each return captures contents at that instruction; later writes do not change
-it. Ordinary <code class="docutils literal notranslate"><span class="pre">return_</span></code> of a path string returns only the string. Earlier returns
-remain available if a later instruction fails; a failed collection adds nothing.</p>
-<p><code class="docutils literal notranslate"><span class="pre">ReturnedFile.read_bytes()</span></code> reads the received contents. <code class="docutils literal notranslate"><span class="pre">ReturnedFolder.files</span></code>
-maps relative paths to <code class="docutils literal notranslate"><span class="pre">ReturnedFile</span></code>; <code class="docutils literal notranslate"><span class="pre">.directories</span></code> lists its directories.
-Folders include hidden files and empty directories, but omit original metadata.
-Missing paths, symlinks, special files, and files changing during collection fail
-the return. Finish writing outputs before returning them.</p>
-<p><code class="docutils literal notranslate"><span class="pre">.save()</span></code> writes the exact local destination and requires an existing parent.
-File replacement needs <code class="docutils literal notranslate"><span class="pre">overwrite=True</span></code>; folder destinations must be new.
-Saving rejects symlink traversal and <code class="docutils literal notranslate"><span class="pre">..</span></code> and preserves existing files on failure.
-Folders are visible while being written. Failed saves remove partial folders;
-an abrupt process exit can leave them behind.
-Results remain usable after closing the client. Filesystem operations target Linux.</p>
-<p>Contents arrive in the same buffered response and are subject to server limits;
-<code class="docutils literal notranslate"><span class="pre">execute()</span></code> does not save files automatically.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">path</span></code> identifies a file or folder in the request’s working directory. It
+can be a relative path string or a register containing one. Each return captures
+the contents at that point in the program, so finish writing the files first.</p>
+<p>Calling <code class="docutils literal notranslate"><span class="pre">execute()</span></code> retrieves the selected contents, and <code class="docutils literal notranslate"><span class="pre">.save()</span></code> writes them
+to a local destination. The destination’s parent directory must already exist.
+To replace an existing file, pass <code class="docutils literal notranslate"><span class="pre">overwrite=True</span></code>; a folder destination must
+be new. Returned contents remain available after the client is closed.</p>
+<p>You can also inspect the contents without saving them: <code class="docutils literal notranslate"><span class="pre">ReturnedFile.read_bytes()</span></code>
+returns the file’s bytes, while <code class="docutils literal notranslate"><span class="pre">ReturnedFolder.files</span></code> and <code class="docutils literal notranslate"><span class="pre">.directories</span></code> expose
+the folder’s files and directory paths. Returned folders include hidden files
+and empty directories, but do not preserve original file metadata. See the
+<a class="reference internal" href="../python-api/index.html"><span class="std std-doc">Python API</span></a> for the full return and save options.</p>
 </section>
-<section id="handling-failures">
-<h2>Handling failures<a class="headerlink" href="#handling-failures" title="Link to this heading">¶</a></h2>
-<p>A submission ends in one of three ways, and the difference between them matters:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">result</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">program</span><span class="p">)</span>
-<span class="k">if</span> <span class="n">result</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="s2">"FAILED"</span><span class="p">:</span>
-    <span class="n">error</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">error</span>          <span class="c1"># kind, message, instruction_index, instruction_id, traceback</span>
-</pre></div>
-</div>
-<ul class="simple">
-<li><p><strong><code class="docutils literal notranslate"><span class="pre">COMPLETED</span></code></strong> — every instruction ran.</p></li>
-<li><p><strong><code class="docutils literal notranslate"><span class="pre">FAILED</span></code></strong> — one instruction failed, and the instructions after it were
-skipped. Returns that already ran are still in <code class="docutils literal notranslate"><span class="pre">results</span></code>, so putting a
-<code class="docutils literal notranslate"><span class="pre">return_</span></code> before a risky instruction preserves the work up to that point.
-<code class="docutils literal notranslate"><span class="pre">error[&quot;kind&quot;]</span></code> is one of <code class="docutils literal notranslate"><span class="pre">parse</span></code>, <code class="docutils literal notranslate"><span class="pre">compile</span></code>, <code class="docutils literal notranslate"><span class="pre">runtime</span></code>, <code class="docutils literal notranslate"><span class="pre">gpu_access</span></code>,
-<code class="docutils literal notranslate"><span class="pre">correctness</span></code>, <code class="docutils literal notranslate"><span class="pre">serialization</span></code>, <code class="docutils literal notranslate"><span class="pre">unavailable</span></code> or <code class="docutils literal notranslate"><span class="pre">engine</span></code>, and
-<code class="docutils literal notranslate"><span class="pre">error[&quot;instruction_id&quot;]</span></code> names the instruction that failed.</p></li>
-<li><p><strong>An exception</strong> — the client could not obtain a valid program outcome.
-<code class="docutils literal notranslate"><span class="pre">KCoralError</span></code> carries <code class="docutils literal notranslate"><span class="pre">status_code</span></code> and <code class="docutils literal notranslate"><span class="pre">kind</span></code>: <code class="docutils literal notranslate"><span class="pre">503</span></code> with a
-<code class="docutils literal notranslate"><span class="pre">Retry-After</span></code> header means no worker was free, and <code class="docutils literal notranslate"><span class="pre">504</span></code> means the program hit
-<code class="docutils literal notranslate"><span class="pre">timeout_seconds</span></code> (default 300 s, maximum 900). <code class="docutils literal notranslate"><span class="pre">TransportError</span></code> means no HTTP
-response could be obtained; the server may already have executed the program,
-so check whether repeating its effects is acceptable before retrying.
-<code class="docutils literal notranslate"><span class="pre">ProtocolError</span></code> means the response did not follow the protocol.</p></li>
-</ul>
 </section>
 <section id="next-steps">
 <h2>Next steps<a class="headerlink" href="#next-steps" title="Link to this heading">¶</a></h2>
+<!-- Preserve legacy section anchors so older links still reach this page. -->
 <p><a id="the-shape-of-a-program"></a>
 <a id="where-to-compile"></a>
 <a id="languages-supported-by-remote-compilation"></a>
@@ -642,12 +637,14 @@ so check whether repeating its effects is acceptable before retrying.
 <a id="checking-correctness"></a>
 <a id="running-your-own-code-off-the-gpu"></a></p>
 <ul class="simple">
-<li><p><a class="reference internal" href="../tutorials/benchmark-kernel.html"><span class="std std-doc">Benchmark a Kernel with KCoral</span></a> explains
-compilation choices, supported languages, correctness checks, measurement,
-uploaded harnesses and functions that release the GPU.</p></li>
-<li><p><a class="reference internal" href="protocol.html"><span class="std std-doc">KCoral Protocol</span></a> defines endpoints and instruction fields.</p></li>
-<li><p><a class="reference internal" href="../tutorials/agent-integration.html"><span class="std std-doc">Agent Integration Guide</span></a> shows how to give a
-coding agent the repository skill and a concrete execution task.</p></li>
+<li><p><a class="reference internal" href="../tutorials/benchmark-kernel.html"><span class="std std-doc">Benchmark a Kernel with KCoral</span></a>: compile a
+kernel, check its output, and measure its execution time.</p></li>
+<li><p><a class="reference internal" href="../tutorials/remote-compilation.html"><span class="std std-doc">Remote Compilation</span></a>: compile on a CPU
+server and run the resulting library on a GPU server.</p></li>
+<li><p><a class="reference internal" href="../tutorials/agent-integration.html"><span class="std std-doc">Agent Integration Guide</span></a>: give a coding
+agent the context it needs to write and submit KCoral programs.</p></li>
+<li><p><a class="reference internal" href="../python-api/index.html"><span class="std std-doc">Python API</span></a> and <a class="reference internal" href="protocol.html"><span class="std std-doc">KCoral Protocol</span></a>: look up
+method signatures or the underlying request and response formats.</p></li>
 </ul>
 </section>
 </section>
@@ -705,19 +702,19 @@ coding agent the repository skill and a concrete execution task.</p></li>
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">Write a client program</a><ul>
-<li><a class="reference internal" href="#create-and-close-a-client">Create and close a client</a></li>
+<li><a class="reference internal" href="#build-programs-with-instructions">Build programs with instructions</a></li>
+<li><a class="reference internal" href="#create-a-client-and-submit-programs">Create a client and submit programs</a><ul>
+<li><a class="reference internal" href="#simple-program">Simple program</a></li>
+<li><a class="reference internal" href="#read-results">Read results</a></li>
 <li><a class="reference internal" href="#remote-functions">Remote functions</a></li>
-<li><a class="reference internal" href="#build-instructions-with-program">Build instructions with Program</a><ul>
-<li><a class="reference internal" href="#upload-and-select-a-function">Upload and select a function</a></li>
-<li><a class="reference internal" href="#pass-values-and-references">Pass values and references</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#submit-and-read-results">Submit and read results</a></li>
-<li><a class="reference internal" href="#request-lifecycle">Request lifecycle</a></li>
+<li><a class="reference internal" href="#working-with-tensors-and-files">Working with tensors and files</a><ul>
 <li><a class="reference internal" href="#tensors">Tensors</a></li>
-<li><a class="reference internal" href="#files-used-by-uploaded-scripts">Files used by uploaded scripts</a></li>
+<li><a class="reference internal" href="#uploading-files-and-folders">Uploading files and folders</a></li>
 <li><a class="reference internal" href="#returning-files-and-folders">Returning files and folders</a></li>
-<li><a class="reference internal" href="#handling-failures">Handling failures</a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#next-steps">Next steps</a></li>
 </ul>
 </li>
@@ -730,7 +727,7 @@ coding agent the repository skill and a concrete execution task.</p></li>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=e35d3959"></script>
+</div><script src="../_static/documentation_options.js?v=aad43eb6"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

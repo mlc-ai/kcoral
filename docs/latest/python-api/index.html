@@ -196,7 +196,6 @@
     <img class="sidebar-logo only-dark" src="../_static/brand/kcoral-logo-dark.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">KCoral documentation</span>
   
 </a>
 <details class="version-switcher">
@@ -226,17 +225,20 @@
 <li class="toctree-l1"><a class="reference internal" href="../getting-started/installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../getting-started/quickstart.html">Your First Program</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<p class="caption" role="heading"><span class="caption-text">Protocol</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/protocol.html">KCoral Protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<ul>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/writing-a-program.html">Write a client program</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/builtin-cli-tools.html">Builtin CLI Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
 <ul>
@@ -338,7 +340,7 @@ requires no GPU libraries; computation happens on the remote worker.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>base_url</strong> (<a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a>) – Server address, such as <code class="docutils literal notranslate"><span class="pre">http://localhost:8000</span></code>.</p></li>
+<li><p><strong>base_url</strong> (<a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a>) – Server address, such as <code class="docutils literal notranslate"><span class="pre">http://127.0.0.1:8000</span></code>.</p></li>
 <li><p><strong>headers</strong> (<a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#dict" title="(in Python v3.14)"><em>dict</em></a><em>[</em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em>, </em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em>] </em><em>| </em><em>None</em>) – Optional HTTP headers sent with every request.</p></li>
 <li><p><strong>connect_timeout_seconds</strong> (<a class="reference external" href="https://docs.python.org/3/builtins/functions.html#float" title="(in Python v3.14)"><em>float</em></a>) – Limit for establishing a connection.</p></li>
 </ul>
@@ -1203,7 +1205,7 @@ duplicate identifiers, invalid paths or references to later instructions.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=e35d3959"></script>
+</div><script src="../_static/documentation_options.js?v=aad43eb6"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

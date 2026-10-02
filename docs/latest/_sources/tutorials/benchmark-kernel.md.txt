@@ -14,7 +14,7 @@ uses TIRx, TVM's Python-embedded kernel language.
 ## Compile, check and measure
 
 ```bash
-KCORAL_URL=http://localhost:8000 python examples/benchmark_kernel.py
+KCORAL_URL=http://127.0.0.1:8000 python examples/benchmark_kernel.py
 ```
 
 <div class="code-example">
@@ -141,7 +141,7 @@ This client compiles, checks and measures TIRx, CUDA C, CuTeDSL and Triton kerne
 Set `KCORAL_URL` to the GPU server address.
 
 ```bash
-KCORAL_URL=http://localhost:8000 python examples/remote_compile_client.py
+KCORAL_URL=http://127.0.0.1:8000 python examples/remote_compile_client.py
 ```
 
 <div class="code-example">
@@ -173,7 +173,7 @@ a host C++ compiler and TVM FFI from the
 [compiler environment](../getting-started/installation.md#server-system-requirements).
 
 ```bash
-KCORAL_URL=http://localhost:8000 python examples/library_upload_client.py
+KCORAL_URL=http://127.0.0.1:8000 python examples/library_upload_client.py
 ```
 
 <div class="code-example">

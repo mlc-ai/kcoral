@@ -3,7 +3,7 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Benchmark a Kernel with KCoral" href="../tutorials/benchmark-kernel.html"><link rel="prev" title="Logging" href="logging.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Logging" href="logging.html"><link rel="prev" title="Launch the server" href="launch-the-server.html">
         <link rel="canonical" href="https://kcoral.mlc.ai/docs/latest/server-guide/router.html">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-light.png" as="image">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-dark.png" as="image">
@@ -196,7 +196,6 @@
     <img class="sidebar-logo only-dark" src="../_static/brand/kcoral-logo-dark.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">KCoral documentation</span>
   
 </a>
 <details class="version-switcher">
@@ -226,17 +225,20 @@
 <li class="toctree-l1"><a class="reference internal" href="../getting-started/installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../getting-started/quickstart.html">Your First Program</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<p class="caption" role="heading"><span class="caption-text">Protocol</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/protocol.html">KCoral Protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<ul>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/writing-a-program.html">Write a client program</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/builtin-cli-tools.html">Builtin CLI Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="logging.html">Logging</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
 <ul>
@@ -364,6 +366,13 @@ queues and HTTP/2 flow control limit buffering in the tunnel. The Python
 </section>
 <section id="build-and-launch">
 <h2>Build and launch<a class="headerlink" href="#build-and-launch" title="Link to this heading">¶</a></h2>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>KCoral allows clients to execute arbitrary code on its workers. Only allow
+trusted clients to access your KCoral server or Router. Deploy on a trusted,
+isolated network and never expose these endpoints to the public internet.
+Run workers in a sandbox with restricted permissions and access to host resources.</p>
+</div>
 <p>Use Rust 1.87 or newer and Cargo. The build supplies its own
 Protocol Buffers compiler. Build from the repository root:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--locked
@@ -384,7 +393,7 @@ kcoral<span class="w"> </span>server<span class="w"> </span><span class="se">\</
 </pre></div>
 </div>
 <p>The examples run on one machine. For remote nodes, bind the Router with
-<code class="docutils literal notranslate"><span class="pre">--host</span> <span class="pre">0.0.0.0</span></code> and replace <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code> with its reachable address. Give each node
+<code class="docutils literal notranslate"><span class="pre">--host</span> <span class="pre">0.0.0.0</span></code> and replace <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code> in the Router URL with its reachable address. Give each node
 a distinct stable <code class="docutils literal notranslate"><span class="pre">node-id</span></code>. The example uses plain HTTP for a controlled
 network; an HTTPS endpoint requires TLS terminated by a compatible proxy.
 The optional token authenticates node streams; it does not provide public
@@ -567,23 +576,23 @@ tree if the node manager itself dies.</p>
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="../tutorials/benchmark-kernel.html">
+          <a class="next-page" href="logging.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">Benchmark a Kernel with KCoral</div>
+                <div class="title">Logging</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="logging.html">
+          <a class="prev-page" href="launch-the-server.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">Logging</div>
+                <div class="title">Launch the server</div>
                 
               </div>
             </a>
@@ -630,7 +639,7 @@ tree if the node manager itself dies.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=e35d3959"></script>
+</div><script src="../_static/documentation_options.js?v=aad43eb6"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

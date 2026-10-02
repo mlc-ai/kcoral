@@ -196,7 +196,6 @@
     <img class="sidebar-logo only-dark" src="../_static/brand/kcoral-logo-dark.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">KCoral documentation</span>
   
 </a>
 <details class="version-switcher">
@@ -226,17 +225,20 @@
 <li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Your First Program</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<p class="caption" role="heading"><span class="caption-text">Protocol</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/protocol.html">KCoral Protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<ul>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/writing-a-program.html">Write a client program</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/builtin-cli-tools.html">Builtin CLI Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
 <ul>
@@ -323,16 +325,25 @@
 tensor on its GPU and returns the result.</p>
 <section id="required-hardware">
 <h2>Required hardware<a class="headerlink" href="#required-hardware" title="Link to this heading">¶</a></h2>
-<p>You need one Linux machine with an NVIDIA GPU and a compatible driver. Install
-the <a class="reference internal" href="installation.html#server-system-requirements"><span class="std std-ref">GPU server environment</span></a> on it; this
-also installs the client. The example uses PyTorch and does not compile a
-custom kernel.</p>
+<p>You need one Linux machine with an NVIDIA GPU and a compatible driver. Follow
+<a class="reference internal" href="installation.html#install-the-server"><span class="std std-ref">Install the server</span></a> and check the
+<a class="reference internal" href="installation.html#server-system-requirements"><span class="std std-ref">system requirements</span></a>; the server
+installation also includes the client. The example uses PyTorch and does not
+compile a custom kernel.</p>
 <p>The steps below run the server and client on that same machine, in two
 terminals. A CPU compilation server cannot run this program: the uploaded
-function checks that the tensor is on a GPU before doing arithmetic.</p>
+tensor requires GPU support, and the function also checks that it is on a GPU
+before doing arithmetic. Activate the same Python environment in both terminals.</p>
 </section>
 <section id="launch-the-server">
 <h2>Launch the server<a class="headerlink" href="#launch-the-server" title="Link to this heading">¶</a></h2>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>KCoral allows clients to execute arbitrary code on its workers. Only allow
+trusted clients to access your KCoral server or Router. Deploy on a trusted,
+isolated network and never expose these endpoints to the public internet.
+Run workers in a sandbox with restricted permissions and access to host resources.</p>
+</div>
 <p>In the first terminal, start one worker on GPU 0:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>server<span class="w"> </span>--device<span class="w"> </span>gpu<span class="w"> </span>--gpus<span class="w"> </span><span class="m">0</span><span class="w"> </span>--workers-per-gpu<span class="w"> </span><span class="m">1</span><span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 </pre></div>
@@ -362,16 +373,16 @@ and leave this terminal running. The client will connect to
 
 <span class="k">def</span><span class="w"> </span><span class="nf">build_program</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Program</span><span class="p">:</span>
     <span class="n">program</span> <span class="o">=</span> <span class="n">Program</span><span class="p">()</span>
-    <span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">SOURCE</span><span class="p">)</span>
-    <span class="n">add_one</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"add_one"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"add_one"</span><span class="p">)</span>
-    <span class="n">x</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"x"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"tensor"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
-    <span class="n">y</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"y"</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="n">add_one</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">x</span><span class="p">])</span>
+    <span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">SOURCE</span><span class="p">)</span>
+    <span class="n">add_one</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"add_one"</span><span class="p">)</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"tensor"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
+    <span class="n">y</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">add_one</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">x</span><span class="p">])</span>
     <span class="n">program</span><span class="o">.</span><span class="n">return_</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="s2">"output"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">y</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">program</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"KCORAL_URL"</span><span class="p">,</span> <span class="s2">"http://localhost:8000"</span><span class="p">))</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+    <span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"KCORAL_URL"</span><span class="p">,</span> <span class="s2">"http://127.0.0.1:8000"</span><span class="p">))</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
         <span class="n">result</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">build_program</span><span class="p">(),</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">result</span><span class="o">.</span><span class="n">completed</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">SystemExit</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Program failed: </span><span class="si">{</span><span class="n">result</span><span class="o">.</span><span class="n">error</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
@@ -402,26 +413,28 @@ stop it.</p>
 <p>To submit from another machine, start the server with <code class="docutils literal notranslate"><span class="pre">--host</span> <span class="pre">0.0.0.0</span></code> so it
 listens beyond the local machine. Install the
 <a class="reference internal" href="installation.html#install-the-client"><span class="std std-ref">client</span></a> on the submitting machine, save the same
-program there, and set <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</span></code> to the server’s reachable address, for
-example <code class="docutils literal notranslate"><span class="pre">http://192.168.1.10:8000</span></code>. The client machine does not need a GPU.
+program there, and set <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</span></code> to the server’s reachable address on port
+8000. The client machine does not need a GPU.
 See <a class="reference internal" href="../server-guide/launch-the-server.html"><span class="std std-doc">Launch the server</span></a> for more configuration.</p>
 </section>
 </section>
 <section id="how-it-works">
 <h2>How it works<a class="headerlink" href="#how-it-works" title="Link to this heading">¶</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">Program</span></code> calls describe the work; <code class="docutils literal notranslate"><span class="pre">client.execute()</span></code> submits it. The server
+then executes the instructions in order:</p>
 <ol class="arabic simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">Program.upload(kind=&quot;module&quot;)</span></code> sends the source defining <code class="docutils literal notranslate"><span class="pre">add_one</span></code>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">Program.get_function()</span></code> selects that function from the uploaded module.</p></li>
-<li><p>The tensor upload transfers the NumPy input to the server’s GPU.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">Program.run()</span></code> performs the addition on that GPU and binds the result to <code class="docutils literal notranslate"><span class="pre">y</span></code>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">Program.return_()</span></code> selects the output for the response. The client decodes it
-as a CPU NumPy array and checks the values.</p></li>
+<li><p>Load the uploaded source defining <code class="docutils literal notranslate"><span class="pre">add_one</span></code>.</p></li>
+<li><p>Select that function from the module.</p></li>
+<li><p>Transfer the uploaded NumPy input to the GPU.</p></li>
+<li><p>Call <code class="docutils literal notranslate"><span class="pre">add_one</span></code> with that tensor.</p></li>
+<li><p>Return the selected output. The client decodes it as a CPU NumPy array and
+checks the values.</p></li>
 </ol>
 <p>The example also checks <code class="docutils literal notranslate"><span class="pre">result.completed</span></code> before reading the output. Instruction
 failures are returned as data in <code class="docutils literal notranslate"><span class="pre">result.error</span></code>; connection failures and request
 errors raise the exceptions documented in the <a class="reference internal" href="../python-api/index.html#python-errors"><span class="std std-ref">Python API</span></a>.</p>
-<p>Continue to <a class="reference internal" href="../client-guide/writing-a-program.html"><span class="std std-doc">Write a client program</span></a> for the builder methods and
-request lifecycle, or <a class="reference internal" href="../tutorials/benchmark-kernel.html"><span class="std std-doc">Benchmark a Kernel with KCoral</span></a>
+<p>Continue to <a class="reference internal" href="../client-guide/writing-a-program.html"><span class="std std-doc">Write a client program</span></a> for
+building programs and reading results, or <a class="reference internal" href="../tutorials/benchmark-kernel.html"><span class="std std-doc">Benchmark a Kernel with KCoral</span></a>
 to compile a custom kernel, check correctness and measure its execution.</p>
 </section>
 </section>
@@ -497,7 +510,7 @@ to compile a custom kernel, check correctness and measure its execution.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=e35d3959"></script>
+</div><script src="../_static/documentation_options.js?v=aad43eb6"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

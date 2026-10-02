@@ -37,7 +37,7 @@ Read .agents/skills/kcoral-client/SKILL.md before writing the client.
 Use docs/client-guide/protocol.md for field validation. Upload your own Python harness
 for compilation, allocation, correctness checks, and measurement.
 
-Write a runnable Python client for the KCoral server at http://localhost:8000.
+Write a runnable Python client for the KCoral server at http://127.0.0.1:8000.
 Implement add-one for 4096 float32 elements using CUDA C. Compile on the
 GPU server, create or upload input tensors, compare the output with a Python
 reference, and benchmark only after correctness passes. Return the correctness

@@ -5,16 +5,25 @@ tensor on its GPU and returns the result.
 
 ## Required hardware
 
-You need one Linux machine with an NVIDIA GPU and a compatible driver. Install
-the [GPU server environment](installation.md#server-system-requirements) on it; this
-also installs the client. The example uses PyTorch and does not compile a
-custom kernel.
+You need one Linux machine with an NVIDIA GPU and a compatible driver. Follow
+[Install the server](installation.md#install-the-server) and check the
+[system requirements](installation.md#server-system-requirements); the server
+installation also includes the client. The example uses PyTorch and does not
+compile a custom kernel.
 
 The steps below run the server and client on that same machine, in two
 terminals. A CPU compilation server cannot run this program: the uploaded
-function checks that the tensor is on a GPU before doing arithmetic.
+tensor requires GPU support, and the function also checks that it is on a GPU
+before doing arithmetic. Activate the same Python environment in both terminals.
 
 ## Launch the server
+
+```{warning}
+KCoral allows clients to execute arbitrary code on its workers. Only allow
+trusted clients to access your KCoral server or Router. Deploy on a trusted,
+isolated network and never expose these endpoints to the public internet.
+Run workers in a sandbox with restricted permissions and access to host resources.
+```
 
 In the first terminal, start one worker on GPU 0:
 
@@ -57,23 +66,26 @@ stop it.
 To submit from another machine, start the server with `--host 0.0.0.0` so it
 listens beyond the local machine. Install the
 [client](installation.md#install-the-client) on the submitting machine, save the same
-program there, and set `KCORAL_URL` to the server's reachable address, for
-example `http://192.168.1.10:8000`. The client machine does not need a GPU.
+program there, and set `KCORAL_URL` to the server's reachable address on port
+8000. The client machine does not need a GPU.
 See [Launch the server](../server-guide/launch-the-server.md) for more configuration.
 
 ## How it works
 
-1. `Program.upload(kind="module")` sends the source defining `add_one`.
-2. `Program.get_function()` selects that function from the uploaded module.
-3. The tensor upload transfers the NumPy input to the server's GPU.
-4. `Program.run()` performs the addition on that GPU and binds the result to `y`.
-5. `Program.return_()` selects the output for the response. The client decodes it
-   as a CPU NumPy array and checks the values.
+The `Program` calls describe the work; `client.execute()` submits it. The server
+then executes the instructions in order:
+
+1. Load the uploaded source defining `add_one`.
+2. Select that function from the module.
+3. Transfer the uploaded NumPy input to the GPU.
+4. Call `add_one` with that tensor.
+5. Return the selected output. The client decodes it as a CPU NumPy array and
+   checks the values.
 
 The example also checks `result.completed` before reading the output. Instruction
 failures are returned as data in `result.error`; connection failures and request
 errors raise the exceptions documented in the {ref}`Python API <python-errors>`.
 
-Continue to [Write a client program](../client-guide/writing-a-program.md) for the builder methods and
-request lifecycle, or [Benchmark a Kernel with KCoral](../tutorials/benchmark-kernel.md)
+Continue to [Write a client program](../client-guide/writing-a-program.md) for
+building programs and reading results, or [Benchmark a Kernel with KCoral](../tutorials/benchmark-kernel.md)
 to compile a custom kernel, check correctness and measure its execution.

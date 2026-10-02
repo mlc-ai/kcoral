@@ -196,7 +196,6 @@
     <img class="sidebar-logo only-dark" src="../_static/brand/kcoral-logo-dark.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">KCoral documentation</span>
   
 </a>
 <details class="version-switcher">
@@ -226,17 +225,20 @@
 <li class="toctree-l1"><a class="reference internal" href="../getting-started/installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../getting-started/quickstart.html">Your First Program</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<p class="caption" role="heading"><span class="caption-text">Protocol</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/protocol.html">KCoral Protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<ul>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/writing-a-program.html">Write a client program</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/builtin-cli-tools.html">Builtin CLI Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
 <ul class="current">
@@ -383,6 +385,13 @@ The two server roles have different requirements:</p>
 </div>
 <p>This example uploads Python that builds CUDA C through TVM FFI, then uses
 CUPTI to collect GPU activity timestamps.</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>KCoral allows clients to execute arbitrary code on its workers. Only allow
+trusted clients to access your KCoral server or Router. Deploy on a trusted,
+isolated network and never expose these endpoints to the public internet.
+Run workers in a sandbox with restricted permissions and access to host resources.</p>
+</div>
 <p>On the compilation host, start a CPU server:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>server<span class="w"> </span>--device<span class="w"> </span>cpu<span class="w"> </span>--num-workers<span class="w"> </span><span class="m">8</span><span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 </pre></div>
@@ -397,16 +406,17 @@ configuration.</p>
 </section>
 <section id="run-the-complete-client">
 <h2>Run the complete client<a class="headerlink" href="#run-the-complete-client" title="Link to this heading">¶</a></h2>
-<p>From the repository checkout, replace these addresses with your servers:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">KCORAL_CPU_URL</span><span class="o">=</span>http://compiler.example.com:8000<span class="w"> </span><span class="se">\</span>
-<span class="nv">KCORAL_GPU_URL</span><span class="o">=</span>http://gpu.example.com:8001<span class="w"> </span><span class="se">\</span>
+<p>From the repository checkout, run the client with both servers on the local
+machine, or replace <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code> with each server’s reachable address:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">KCORAL_CPU_URL</span><span class="o">=</span>http://127.0.0.1:8000<span class="w"> </span><span class="se">\</span>
+<span class="nv">KCORAL_GPU_URL</span><span class="o">=</span>http://127.0.0.1:8001<span class="w"> </span><span class="se">\</span>
 python<span class="w"> </span>examples/cpu_compile_gpu_execute.py
 </pre></div>
 </div>
 <p><a class="reference download internal" download="" href="../_downloads/fd1624087ef0c874e3c73feba612e58d/cpu_compile_gpu_execute.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">the</span> <span class="pre">complete</span> <span class="pre">client</span></code></a>.
 The downloaded file can be run directly with the same environment variables.
 If both servers run on the client machine, the defaults are
-<code class="docutils literal notranslate"><span class="pre">http://localhost:8000</span></code> for compilation and <code class="docutils literal notranslate"><span class="pre">http://localhost:8001</span></code> for execution.</p>
+<code class="docutils literal notranslate"><span class="pre">http://127.0.0.1:8000</span></code> for compilation and <code class="docutils literal notranslate"><span class="pre">http://127.0.0.1:8001</span></code> for execution.</p>
 <p><code class="docutils literal notranslate"><span class="pre">KCORAL_CPU_URL</span></code> selects the compilation endpoint. To use one GPU server for
 both roles, install the compilation tools there and set both URL variables to
 that server’s address. The client still submits two independent programs.</p>
@@ -508,15 +518,12 @@ helpers uploaded by each program:</p>
 and configuration (<code class="docutils literal notranslate"><span class="pre">functions=[&quot;add_one&quot;]</span></code>, <code class="docutils literal notranslate"><span class="pre">arch</span></code>), and returns the library:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">compile_program</span><span class="p">(</span><span class="n">arch</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Program</span><span class="p">:</span>
     <span class="n">program</span> <span class="o">=</span> <span class="n">Program</span><span class="p">()</span>
-    <span class="n">operations</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"operations"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">OPERATIONS</span><span class="p">)</span>
+    <span class="n">operations</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">OPERATIONS</span><span class="p">)</span>
     <span class="n">compile_cuda_binary</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span>
-        <span class="nb">id</span><span class="o">=</span><span class="s2">"compile_cuda_binary"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"compile_cuda_binary"</span><span class="p">,</span> <span class="n">cpu_only</span><span class="o">=</span><span class="kc">True</span>
+        <span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"compile_cuda_binary"</span><span class="p">,</span> <span class="n">cpu_only</span><span class="o">=</span><span class="kc">True</span>
     <span class="p">)</span>
-    <span class="n">source_path</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload_file</span><span class="p">(</span>
-        <span class="nb">id</span><span class="o">=</span><span class="s2">"source"</span><span class="p">,</span> <span class="n">blob</span><span class="o">=</span><span class="n">CUDA_SOURCE</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">),</span> <span class="n">path</span><span class="o">=</span><span class="s2">"src/add_one.cu"</span>
-    <span class="p">)</span>
+    <span class="n">source_path</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload_file</span><span class="p">(</span><span class="n">blob</span><span class="o">=</span><span class="n">CUDA_SOURCE</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">),</span> <span class="n">path</span><span class="o">=</span><span class="s2">"src/add_one.cu"</span><span class="p">)</span>
     <span class="n">library</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
-        <span class="nb">id</span><span class="o">=</span><span class="s2">"library"</span><span class="p">,</span>
         <span class="n">fn</span><span class="o">=</span><span class="n">compile_cuda_binary</span><span class="p">,</span>
         <span class="n">args</span><span class="o">=</span><span class="p">[</span>
             <span class="n">source_path</span><span class="p">,</span>
@@ -549,26 +556,24 @@ them with <code class="docutils literal notranslate"><span class="pre">kind=&quo
 output tensors, and runs the kernel:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">benchmark_program</span><span class="p">(</span><span class="n">library</span><span class="p">:</span> <span class="nb">bytes</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Program</span><span class="p">:</span>
     <span class="n">program</span> <span class="o">=</span> <span class="n">Program</span><span class="p">()</span>
-    <span class="n">operations</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"operations"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">OPERATIONS</span><span class="p">)</span>
-    <span class="n">empty</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"empty"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"empty"</span><span class="p">)</span>
-    <span class="n">randn</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"randn"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"randn"</span><span class="p">)</span>
-    <span class="n">assert_close</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"assert_close"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"assert_close"</span><span class="p">)</span>
-    <span class="n">benchmark</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"benchmark"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"benchmark"</span><span class="p">)</span>
-    <span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"kernel_module"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"library"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">library</span><span class="p">)</span>
-    <span class="n">kernel</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"kernel"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"add_one"</span><span class="p">)</span>
-    <span class="n">reference_module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"reference_module"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">REFERENCE</span><span class="p">)</span>
-    <span class="n">reference</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"reference"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">reference_module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"main"</span><span class="p">)</span>
+    <span class="n">operations</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">OPERATIONS</span><span class="p">)</span>
+    <span class="n">empty</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"empty"</span><span class="p">)</span>
+    <span class="n">randn</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"randn"</span><span class="p">)</span>
+    <span class="n">assert_close</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"assert_close"</span><span class="p">)</span>
+    <span class="n">benchmark</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">operations</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"benchmark"</span><span class="p">)</span>
+    <span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"library"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">library</span><span class="p">)</span>
+    <span class="n">kernel</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"add_one"</span><span class="p">)</span>
+    <span class="n">reference_module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">REFERENCE</span><span class="p">)</span>
+    <span class="n">reference</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">reference_module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"main"</span><span class="p">)</span>
     <span class="n">src</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
-        <span class="nb">id</span><span class="o">=</span><span class="s2">"src"</span><span class="p">,</span>
         <span class="n">fn</span><span class="o">=</span><span class="n">randn</span><span class="p">,</span>
         <span class="n">args</span><span class="o">=</span><span class="p">[{</span><span class="s2">"shape"</span><span class="p">:</span> <span class="p">[</span><span class="n">N</span><span class="p">],</span> <span class="s2">"dtype"</span><span class="p">:</span> <span class="s2">"float32"</span><span class="p">,</span> <span class="s2">"seed"</span><span class="p">:</span> <span class="mi">0</span><span class="p">}],</span>
     <span class="p">)</span>
-    <span class="n">dst</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"dst"</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="n">empty</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[{</span><span class="s2">"shape"</span><span class="p">:</span> <span class="p">[</span><span class="n">N</span><span class="p">],</span> <span class="s2">"dtype"</span><span class="p">:</span> <span class="s2">"float32"</span><span class="p">}])</span>
-    <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"invoke"</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="n">kernel</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">src</span><span class="p">,</span> <span class="n">dst</span><span class="p">])</span>
-    <span class="n">expected</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"expected"</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="n">reference</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">src</span><span class="p">])</span>
-    <span class="n">check</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"check"</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="n">assert_close</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">dst</span><span class="p">,</span> <span class="n">expected</span><span class="p">])</span>
+    <span class="n">dst</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">empty</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[{</span><span class="s2">"shape"</span><span class="p">:</span> <span class="p">[</span><span class="n">N</span><span class="p">],</span> <span class="s2">"dtype"</span><span class="p">:</span> <span class="s2">"float32"</span><span class="p">}])</span>
+    <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">kernel</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">src</span><span class="p">,</span> <span class="n">dst</span><span class="p">])</span>
+    <span class="n">expected</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">reference</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">src</span><span class="p">])</span>
+    <span class="n">check</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">assert_close</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">dst</span><span class="p">,</span> <span class="n">expected</span><span class="p">])</span>
     <span class="n">timing</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
-        <span class="nb">id</span><span class="o">=</span><span class="s2">"timing"</span><span class="p">,</span>
         <span class="n">fn</span><span class="o">=</span><span class="n">benchmark</span><span class="p">,</span>
         <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">kernel</span><span class="p">,</span> <span class="n">src</span><span class="p">,</span> <span class="n">dst</span><span class="p">,</span> <span class="p">{</span><span class="s2">"warmup_ms"</span><span class="p">:</span> <span class="mi">25</span><span class="p">,</span> <span class="s2">"repeat_ms"</span><span class="p">:</span> <span class="mi">100</span><span class="p">}],</span>
     <span class="p">)</span>
@@ -592,8 +597,8 @@ server; the client receives the correctness report and timing statistics.</p>
 second builder. It checks that compilation completed and returned binary data
 before submitting anything to the execution server:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">cpu_url</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"KCORAL_CPU_URL"</span><span class="p">,</span> <span class="s2">"http://localhost:8000"</span><span class="p">)</span>
-    <span class="n">gpu_url</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"KCORAL_GPU_URL"</span><span class="p">,</span> <span class="s2">"http://localhost:8001"</span><span class="p">)</span>
+    <span class="n">cpu_url</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"KCORAL_CPU_URL"</span><span class="p">,</span> <span class="s2">"http://127.0.0.1:8000"</span><span class="p">)</span>
+    <span class="n">gpu_url</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"KCORAL_GPU_URL"</span><span class="p">,</span> <span class="s2">"http://127.0.0.1:8001"</span><span class="p">)</span>
     <span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="n">cpu_url</span><span class="p">)</span> <span class="k">as</span> <span class="n">cpu_client</span><span class="p">,</span> <span class="n">Client</span><span class="p">(</span><span class="n">gpu_url</span><span class="p">)</span> <span class="k">as</span> <span class="n">gpu_client</span><span class="p">:</span>
         <span class="n">arch</span> <span class="o">=</span> <span class="n">gpu_client</span><span class="o">.</span><span class="n">target</span><span class="p">()[</span><span class="s2">"arch"</span><span class="p">]</span>
         <span class="n">compiled</span> <span class="o">=</span> <span class="n">cpu_client</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">compile_program</span><span class="p">(</span><span class="n">arch</span><span class="p">),</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">120</span><span class="p">)</span>
@@ -642,7 +647,7 @@ for loading and export requirements.</p>
 execution stops it before reporting a successful benchmark. Inspect each
 result’s <code class="docutils literal notranslate"><span class="pre">error</span></code> and <code class="docutils literal notranslate"><span class="pre">request_id</span></code> to identify which server and instruction
 failed. Request or transport exceptions are distinct from a <code class="docutils literal notranslate"><span class="pre">FAILED</span></code> result;
-the <a class="reference internal" href="../client-guide/writing-a-program.html#handling-failures"><span class="std std-ref">failure guide</span></a>
+the <a class="reference internal" href="../client-guide/writing-a-program.html#read-results"><span class="std std-ref">result and failure guide</span></a>
 explains how to handle them.</p>
 </section>
 </section>
@@ -718,7 +723,7 @@ explains how to handle them.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=e35d3959"></script>
+</div><script src="../_static/documentation_options.js?v=aad43eb6"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

@@ -196,7 +196,6 @@
     <img class="sidebar-logo only-dark" src="../_static/brand/kcoral-logo-dark.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">KCoral documentation</span>
   
 </a>
 <details class="version-switcher">
@@ -226,17 +225,20 @@
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="quickstart.html">Your First Program</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<p class="caption" role="heading"><span class="caption-text">Protocol</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/protocol.html">KCoral Protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<ul>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/writing-a-program.html">Write a client program</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../client-guide/builtin-cli-tools.html">Builtin CLI Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
 <ul>
@@ -322,17 +324,24 @@
 <p>KCoral can be installed from a prebuilt package or built from source. Install
 the client on the machine that submits programs. If you also host a KCoral
 server, install the server dependencies on each machine that runs it.</p>
-<p>Python 3.10 or newer is required.</p>
+<p>Python 3.10 or newer is required. Use a virtual environment so the installation does not modify your system Python:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python3<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>.venv
+<span class="nb">source</span><span class="w"> </span>.venv/bin/activate
+python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>--upgrade<span class="w"> </span>pip
+</pre></div>
+</div>
+<p>Run the installation commands below with this environment active.</p>
 <section id="method-1-install-a-prebuilt-package">
 <h2>Method 1: Install a prebuilt package<a class="headerlink" href="#method-1-install-a-prebuilt-package" title="Link to this heading">¶</a></h2>
-<p>Prebuilt wheels are available on <a class="reference external" href="https://pypi.org/project/kcoral/">PyPI</a>.</p>
+<p>Prebuilt wheels are available on <a class="reference external" href="https://pypi.org/project/kcoral/">PyPI</a>.
+They support Linux on x86-64 and AArch64 with glibc 2.28 or newer.</p>
 <p><a id="the-client"></a></p>
 <section id="install-the-client">
 <h3>Install the client<a class="headerlink" href="#install-the-client" title="Link to this heading">¶</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>kcoral
 </pre></div>
 </div>
-<p>This installs the package with client dependencies. Running the clients needs no GPU.</p>
+<p>This installs the package with client dependencies. Running the client needs no GPU.</p>
 <p>Verify that the client imports successfully:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"from kcoral import Client, Program; print('KCoral client is ready')"</span>
 </pre></div>
@@ -356,7 +365,9 @@ server, install the server dependencies on each machine that runs it.</p>
 <p>Use a source installation to modify KCoral or install a specific revision.</p>
 <section id="get-the-source">
 <h3>Get the source<a class="headerlink" href="#get-the-source" title="Link to this heading">¶</a></h3>
-<p>Rust 1.87 or newer is required.</p>
+<p>Install Git, Rust 1.87 or newer with Cargo, and a C/C++ build toolchain.
+The package build compiles the Rust router and node supervisor, including when
+installing only the client dependencies.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/mlc-ai/kcoral.git
 <span class="nb">cd</span><span class="w"> </span>kcoral
 </pre></div>
@@ -377,6 +388,8 @@ server, install the server dependencies on each machine that runs it.</p>
 </section>
 <section id="server-system-requirements">
 <span id="cpu-compilation-server"></span><span id="gpu-server"></span><h2>Server system requirements<a class="headerlink" href="#server-system-requirements" title="Link to this heading">¶</a></h2>
+<p>The server runs on Linux. Its Python dependencies are installed by the <code class="docutils literal notranslate"><span class="pre">server</span></code>
+extra; the GPU driver and system tools below must be installed separately.</p>
 <p><a id="running-gpu-programs"></a>
 <a id="running-cpu-compilation-workers"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
@@ -408,6 +421,9 @@ On Debian/Ubuntu:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>bubblewrap
 </pre></div>
 </div>
+<p>The host or container must also permit unprivileged user namespaces. If the
+server’s startup check cannot launch bubblewrap, it warns and runs without
+filesystem isolation; see the isolation guide above for configuration.</p>
 <p>For deployment, see <a class="reference internal" href="../server-guide/launch-the-server.html"><span class="std std-doc">Launch the server</span></a>
 and <a class="reference internal" href="../tutorials/remote-compilation.html"><span class="std std-doc">Remote Compilation</span></a>.</p>
 </section>
@@ -488,7 +504,7 @@ and <a class="reference internal" href="../tutorials/remote-compilation.html"><s
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=e35d3959"></script>
+</div><script src="../_static/documentation_options.js?v=aad43eb6"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

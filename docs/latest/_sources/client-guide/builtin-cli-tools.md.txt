@@ -1,20 +1,23 @@
 # Builtin CLI Tools
 
-KCoral provides command line tools for running experiments on remote workers.
-Use `kcoral run TOOL` to upload inputs, execute a program, and retrieve its
-output through an existing KCoral server or Router.
+Developing a GPU kernel involves running experiments, checking correctness, and
+collecting profiles to decide what to change next. KCoral's built-in CLI tools
+let you do this on a remote worker using familiar commands. With `kcoral run TOOL`, you send the files needed for a run, invoke Python, a profiler, or another
+command, and retrieve its output without writing a client program yourself.
+
+Choose a tool for the task you want to perform:
 
 | Tool | Use it to |
 | --- | --- |
 | [python](#python) | Run a Python script, module, or inline command with the worker's interpreter. |
-| [compute-sanitizer](#compute-sanitizer) | Find CUDA memory-access and synchronization errors. |
 | [ncu](#ncu) | Collect NVIDIA Nsight Compute kernel performance reports. |
 | [run-iket](#run-iket) | Collect instrumented kernel execution timelines. |
+| [compute-sanitizer](#compute-sanitizer) | Find CUDA memory-access and synchronization errors. |
 | [shell](#shell) | Run a shell script, uploaded executable, or program installed on the worker. |
 
-The common reference below defines KCoral's options and execution behavior.
-Each tool section then describes its command format, dependencies, native
-arguments, returned files, and failure handling.
+All tools connect to an existing KCoral server or Router. The common reference
+covers how to select that server, upload inputs, and retrieve outputs. Each tool
+section then shows its command format, requirements, and examples.
 
 ## Common reference
 
@@ -51,7 +54,7 @@ KCoral does not select a server unless a connection option or a nonempty
 | Option | Default | Meaning and accepted values |
 | --- | --- | --- |
 | `-h`, `--help` | — | Show this tool's KCoral options and exit. |
-| `--url URL` | `KCORAL_URL` | Complete server URL, including an optional HTTPS scheme or path prefix. Cannot be combined with `--host` or `--port`. |
+| `--url URL` | `KCORAL_URL` | Complete server URL with an `http://` or `https://` scheme and an optional path prefix. Cannot be combined with `--host` or `--port`. |
 | `--host HOST` | `127.0.0.1` when only `--port` is supplied | HTTP server hostname, IPv4 address, or IPv6 address. Supply the host without a scheme, port, or path; IPv6 brackets are optional. |
 | `--port PORT` | `8000` when only `--host` is supplied | HTTP server port, an integer from 1 through 65535. |
 | `--timeout SECONDS` | `300` | Positive integer execution deadline for each request, capped by the server's configured maximum. |
@@ -64,30 +67,20 @@ KCoral does not select a server unless a connection option or a nonempty
 Select a server with an environment variable:
 
 ```bash
-export KCORAL_URL='http://gpu.example.com:8000'
+export KCORAL_URL='http://127.0.0.1:8000'
 kcoral run python -- -c 'print("hello from the worker")'
 ```
 
 Or specify the address on the invocation:
 
 ```bash
-kcoral run python --host gpu.example.com --port 8000 --send experiment -- experiment/check.py
+kcoral run python --host 127.0.0.1 --port 8000 --send experiment -- experiment/check.py
 ```
 
-| Connection selection | Result |
-| --- | --- |
-| `--url URL` | Uses this URL, overriding `KCORAL_URL`. Supports HTTPS and path prefixes. |
-| `--host`, `--port`, or both | Constructs `http://HOST:PORT`, using the defaults above for omitted components. No component is inherited from `KCORAL_URL`. |
-| Nonempty `KCORAL_URL`, with no connection flags | Uses the environment variable. |
-| `KCORAL_URL` unset or empty, with no connection flags | No server is selected. |
-| `--url` combined with `--host` or `--port` | Local argument error. |
-
-When `--host` or `--port` overrides a nonempty `KCORAL_URL`, KCoral warns on
-stderr and prints the selected address:
-
-```text
-kcoral: warning: --host/--port override KCORAL_URL; using http://gpu.example.com:8000
-```
+Explicit connection options override `KCORAL_URL`. With `--host` or `--port`,
+KCoral uses the defaults in the options table for any omitted component; it does
+not take that component from `KCORAL_URL`. When overriding an environment URL
+this way, it prints a warning with the selected address.
 
 <a id="input-layout-and-working-directory"></a>
 
@@ -107,11 +100,10 @@ files in a fresh working directory; `KCORAL_DIR` points to that directory.
 | Input rule | Behavior |
 | --- | --- |
 | Names and layout | A directory keeps its name and internal layout, without local parent directories. A file uses its filename alone. Trailing slashes do not change the layout. |
-| `.` and filesystem root | `.` uses the current directory's name. The filesystem root cannot be selected because it has no directory name. |
 | Multiple selections | Share one remote workspace. Differently named directories may contain identically named files; duplicate or conflicting remote file paths are rejected. |
 | File types | Symbolic links and special files are rejected. |
 | Hidden and empty entries | Skips Python `__pycache__` entries and empty input directories; includes other hidden files. |
-| Permissions | Preserves executable bits, not full original permission modes. |
+| Permissions | Preserves whether a file is executable, not its exact permission bits. |
 
 The command runs from the remote working directory, **not** from inside the
 uploaded directory. For `--send experiment`, pass `experiment/check.py` to Python
@@ -135,7 +127,8 @@ Environment overrides are optional. Without them, execution uses the
 worker's environment, including its assigned GPU. The worker's Python executable
 directory is prepended to `PATH` when locating programs.
 
-Use one `-e` or `--env` per variable:
+Use one `-e` or `--env` per variable. Set `MY_LOCAL_VARIABLE` in your local
+environment before running the first example:
 
 ```bash
 kcoral run python --send experiment --env MODE=debug --env MY_LOCAL_VARIABLE -- experiment/check.py
@@ -165,15 +158,15 @@ are quoted appropriately.
 
 ### Output and exit status
 
-| Stream behavior | Rule |
-| --- | --- |
-| Standard input | Closed for the launched subprocess. Local stdin is not forwarded; interactive prompts and sessions between requests are unsupported. |
-| Display timing | Captured during execution and replayed after the request finishes. Output is not streamed, including with Python's `-u`. |
-| Replay order | Captured stdout goes to local stdout, then captured stderr to local stderr. Each stream preserves text, line breaks, and order; original interleaving is lost. |
-| Encoding | UTF-8 with invalid bytes replaced. Return files for binary data or exact log bytes. |
-| Capture limits | Apply independently to each stream. Truncation warns on stderr and does not itself change the subprocess exit code. |
-| Terminal detection | No interactive terminal is allocated; programs may change colors or progress displays. |
-| KCoral diagnostics | Ordinary subprocess stdout has no added prefix. Artifact messages and warnings use stderr. |
+The tool captures stdout and stderr on the worker and displays them after the
+request finishes. Output is not streamed, even with Python's `-u`, and messages
+from the two streams may appear in a different order. Capture limits apply to
+each stream separately; KCoral warns if output is truncated. Use returned files
+for binary data or logs you need to preserve exactly.
+
+Commands run without an interactive terminal or forwarded stdin, so prompts and
+interactive sessions are unsupported. KCoral writes its own diagnostics to
+stderr, allowing you to redirect the program's stdout separately.
 
 Upload input files and pass their paths, or use a remote shell to redirect an
 uploaded file into a child program's stdin. Local redirection and pipelines
@@ -272,7 +265,7 @@ kcoral run python --send experiment --fetch results --out artifacts/python -- ex
 | --- | --- |
 | Returned report | Saved as `artifacts/python/results/report.json`. |
 | Exact binary output | Write a remote file and fetch it; stdout is decoded as text. |
-| `sys.exit(N)` | Becomes the CLI exit code. |
+| `sys.exit(N)` | KCoral preserves the exit status reported by the Python subprocess. |
 | Uncaught exception | Normally produces a traceback on stderr and a nonzero exit code. |
 | File collection after failure | Still runs after `sys.exit(N)` or an uncaught exception if execution reaches normal subprocess completion. |
 | Missing module | Upload it or install it on the worker. A client-only installation is insufficient. |
@@ -282,6 +275,158 @@ To inspect native Python help on the worker, use
 `kcoral run shell -- python --help`. Python's
 [command line reference](https://docs.python.org/3/using/cmdline.html) describes
 the native interpreter options.
+
+## ncu
+
+<a id="id2"></a>
+
+NVIDIA Nsight Compute measures GPU kernel performance and produces a report for
+later inspection. The worker needs `ncu`, an application compatible with the
+worker's GPU, and permission to collect the required GPU performance counters.
+The application must actually launch kernels selected by the profiling options.
+
+<a id="command-format-and-options"></a>
+
+```text
+kcoral run ncu [KCoral options] --out DIRECTORY -- [ncu options] -- APPLICATION [arguments]
+```
+
+This tool supports the common connection, execution, `--send`, and `--env`
+options. `--out` is required and `--fetch` is not supported. The first `--`
+starts Nsight Compute arguments; the second starts the application command.
+Both separators are required, even when no native profiler options are supplied.
+
+| Native option | Purpose |
+| --- | --- |
+| `--set basic` | Collect the basic section set. Use a set available in the installed version. |
+| `--set full` | Request the full section set, which can require more profiling passes and time. |
+| `--launch-count N` | Limit the number of profiled launches. |
+| `--launch-skip N` | Skip matching launches before profiling. |
+| `--kernel-name FILTER` | Select kernels using Nsight Compute's name-filter syntax. |
+| `--section IDENTIFIER` | Select a metric section supported by the installed version. |
+
+| KCoral-managed setting | Behavior |
+| --- | --- |
+| Capture and export | KCoral selects the export path and launches the application for profiling. Import or inspect the downloaded report locally. |
+| Rejected native options | `--export`/`-o`, `--import`/`-i`, `--mode`, `--config-file`, `--config-file-path`, and abbreviations that conflict with these options |
+| Configuration files | Implicit Nsight configuration files are disabled. |
+| Profiler environment | Defaults `NCU_PROFILE` to `1` if it is absent from the worker environment and `--env` overrides. Timing helpers that honor it can avoid a competing profiler subscription. |
+
+<a id="capture-a-report"></a>
+
+Collect one launch with the basic set:
+
+```bash
+kcoral run ncu --send experiment --out artifacts/ncu \
+  -- --set basic --launch-count 1 -- python experiment/capture.py
+```
+
+Use the native defaults, or select a kernel and skip warmup launches:
+
+```bash
+kcoral run ncu --send experiment --out artifacts/ncu-default \
+  -- -- python experiment/capture.py
+kcoral run ncu --send experiment --out artifacts/ncu-filtered --timeout 600 \
+  -- --kernel-name 'regex:my_kernel.*' --launch-skip 5 --launch-count 1 \
+  -- python experiment/capture.py
+```
+
+Native filtering and replay behavior are controlled by the installed profiler.
+Profiling time is not the same as an ordinary benchmark run: collecting more
+metrics may require repeated executions of the kernel.
+
+<a id="report-location-and-failure-handling"></a>
+
+For `--out artifacts/ncu`, the report is always:
+
+```text
+artifacts/ncu/capture.ncu-rep
+```
+
+The local destination must be new. Open the downloaded report with a compatible
+Nsight Compute installation, or print it with a local CLI:
+
+```bash
+ncu --import artifacts/ncu/capture.ncu-rep
+```
+
+| Result or failure | Behavior or check |
+| --- | --- |
+| Profiler or application exits | Returns the profiler's exit status and attempts to download any existing report, including after failure. |
+| No report created | Fails with a missing-artifact message even if `ncu` exited with zero. Check for unmatched filters, no CUDA kernel launches, unavailable performance counters, or failure before report creation. |
+| Hard timeout | Can prevent the report from being returned. |
+
+For native help without creating a report, run `kcoral run shell -- ncu --help`.
+See the [Nsight Compute CLI manual](https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html)
+for section sets, filters, replay, and platform requirements.
+
+## run-iket
+
+<a id="id3"></a>
+
+IKET records execution traces from supported GPU kernels. The worker needs
+`run-iket` and the runtime, GPU, and driver required by its installed version.
+Kernel support and instrumentation requirements depend on that version and the
+profiling mode. KCoral invokes the profiler with your application and retrieves
+its output; it does not modify uploaded source code.
+
+<a id="id4"></a>
+
+```text
+kcoral run run-iket [KCoral options] --out DIRECTORY -- profile [profile options] -- APPLICATION [arguments]
+```
+
+Common connection, execution, upload, and environment options apply. `--out`
+is required; `--fetch` is not supported. The first `--` starts native profiler
+arguments. The native `profile` command and the second `--` before the
+application are required.
+
+| Native option | Purpose |
+| --- | --- |
+| `--postprocess json` | Request JSON trace postprocessing. |
+| `--postprocess perfetto` | Request output for a compatible Perfetto trace viewer. |
+| `--keep` | Retain intermediate profiling outputs when supported by the installed version. |
+| `--use-config PATH` | Use a profiler configuration available on the worker; upload it with the experiment when needed. |
+
+| KCoral-managed setting | Behavior |
+| --- | --- |
+| Native arguments | Forwarded to the installed `run-iket`; available options and postprocessing formats depend on its version. |
+| Directories | KCoral selects the output directory and starts the profiler in the uploaded workspace. Native `--output-dir`/`-o` and `--working-dir` are rejected. |
+| Workflow | Requires `profile`; standalone native postprocessing subcommands are unsupported. |
+
+<a id="collect-and-retrieve-a-timeline"></a>
+
+```bash
+kcoral run run-iket --send experiment --out artifacts/iket \
+  -- profile --postprocess json -- python experiment/capture.py
+```
+
+To retain intermediate files as well as the processed trace:
+
+```bash
+kcoral run run-iket --send experiment --out artifacts/iket-debug --timeout 600 \
+  -- profile --postprocess json --keep -- python experiment/capture.py
+```
+
+<a id="exit-behavior-and-troubleshooting"></a>
+
+| Result or failure | Behavior or check |
+| --- | --- |
+| Returned files | All files left in the managed output directory are downloaded under `--out`, preserving layout. The native version determines trace names and intermediate directories; KCoral does not rename them. |
+| Profiler exit | Preserves the native exit code and returns available files after an unsuccessful subprocess exit as well. |
+| No output files | Reports missing output and returns nonzero. |
+| Empty or unusable trace | Check the profiler's kernel support and instrumentation requirements, native diagnostics, and the expected kernel activity. Existing files alone do not guarantee a useful timeline. Use a viewer compatible with the selected postprocessing format. |
+| Missing executable | Install IKET in the worker environment. |
+| Custom configuration | Upload any referenced files. |
+
+For a native option or format mismatch, inspect the installed help:
+
+```bash
+kcoral run shell -- run-iket profile --help
+```
+
+NVIDIA's [IKET profiling guide](https://docs.nvidia.com/cutlass/latest/media/docs/pythonDSL/cute_dsl_general/iket_profiling.html)
+describes kernel instrumentation and version-specific requirements.
 
 ## compute-sanitizer
 
@@ -348,158 +493,6 @@ kcoral run compute-sanitizer --send experiment \
 Use `kcoral run shell -- compute-sanitizer --help` to inspect the installed
 version. See NVIDIA's [Compute Sanitizer manual](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html)
 for checker coverage and native options.
-
-## ncu
-
-<a id="id2"></a>
-
-NVIDIA Nsight Compute measures GPU kernel performance and produces a report for
-later inspection. The worker needs `ncu`, an application compatible with the
-worker's GPU, and permission to collect the required GPU performance counters.
-The application must actually launch kernels selected by the profiling options.
-
-<a id="command-format-and-options"></a>
-
-```text
-kcoral run ncu [KCoral options] --out DIRECTORY -- [ncu options] -- APPLICATION [arguments]
-```
-
-This tool supports the common connection, execution, `--send`, and `--env`
-options. `--out` is required and `--fetch` is not supported. The first `--`
-starts Nsight Compute arguments; the second starts the application command.
-Both separators are required, even when no native profiler options are supplied.
-
-| Native option | Purpose |
-| --- | --- |
-| `--set basic` | Collect the basic section set. Use a set available in the installed version. |
-| `--set full` | Request the full section set, which can require more profiling passes and time. |
-| `--launch-count N` | Limit the number of profiled launches. |
-| `--launch-skip N` | Skip matching launches before profiling. |
-| `--kernel-name FILTER` | Select kernels using Nsight Compute's name-filter syntax. |
-| `--section IDENTIFIER` | Select a metric section supported by the installed version. |
-
-| KCoral-managed setting | Behavior |
-| --- | --- |
-| Capture and export | KCoral selects the export path and launches the application in capture mode. Import or inspect the downloaded report locally. |
-| Rejected native options | `--export`/`-o`, `--import`/`-i`, `--mode`, `--config-file`, `--config-file-path`, and abbreviations that conflict with these options |
-| Configuration files | Implicit Nsight configuration files are disabled. |
-| Profiler environment | Sets `NCU_PROFILE=1` unless overridden with `--env`. Timing helpers that honor it can avoid a competing profiler subscription. |
-
-<a id="capture-a-report"></a>
-
-Collect one launch with the basic set:
-
-```bash
-kcoral run ncu --send experiment --out artifacts/ncu \
-  -- --set basic --launch-count 1 -- python experiment/capture.py
-```
-
-Use the native defaults, or select a kernel and skip warmup launches:
-
-```bash
-kcoral run ncu --send experiment --out artifacts/ncu-default \
-  -- -- python experiment/capture.py
-kcoral run ncu --send experiment --out artifacts/ncu-filtered --timeout 600 \
-  -- --kernel-name 'regex:my_kernel.*' --launch-skip 5 --launch-count 1 \
-  -- python experiment/capture.py
-```
-
-Native filtering and replay behavior are controlled by the installed profiler.
-Profiling time is not the same as an ordinary benchmark run: collecting more
-metrics may require repeated executions of the kernel.
-
-<a id="report-location-and-failure-handling"></a>
-
-For `--out artifacts/ncu`, the report is always:
-
-```text
-artifacts/ncu/capture.ncu-rep
-```
-
-The local destination must be new. Open the downloaded report with a compatible
-Nsight Compute installation, or print it with a local CLI:
-
-```bash
-ncu --import artifacts/ncu/capture.ncu-rep
-```
-
-| Result or failure | Behavior or check |
-| --- | --- |
-| Profiler or application exits | Returns the profiler's exit status and attempts to download any existing report, including after failure. |
-| No report created | Fails with a missing-artifact message even if `ncu` exited with zero. Check for unmatched filters, no CUDA kernel launches, unavailable performance counters, or failure before report creation. |
-| Hard timeout | Can prevent the report from being returned. |
-
-For native help without creating a report, run `kcoral run shell -- ncu --help`.
-See the [Nsight Compute CLI manual](https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html)
-for section sets, filters, replay, and platform requirements.
-
-## run-iket
-
-<a id="id3"></a>
-
-IKET records execution traces from supported, instrumented kernels. The worker
-needs `run-iket`, a compatible CuTeDSL distribution with IKET support,
-and the GPU and driver required by that distribution. The application's kernel
-must contain suitable instrumentation for the timeline you want to collect;
-KCoral does not add instrumentation to uploaded source.
-
-<a id="id4"></a>
-
-```text
-kcoral run run-iket [KCoral options] --out DIRECTORY -- profile [profile options] -- APPLICATION [arguments]
-```
-
-Common connection, execution, upload, and environment options apply. `--out`
-is required; `--fetch` is not supported. The first `--` starts native profiler
-arguments. The native `profile` command and the second `--` before the
-application are required.
-
-| Native option | Purpose |
-| --- | --- |
-| `--postprocess json` | Request JSON trace postprocessing. |
-| `--postprocess perfetto` | Request output for a compatible Perfetto trace viewer. |
-| `--keep` | Retain intermediate profiling outputs when supported by the installed version. |
-| `--use-config PATH` | Use a profiler configuration available on the worker; upload it with the experiment when needed. |
-
-| KCoral-managed setting | Behavior |
-| --- | --- |
-| Native arguments | Forwarded to the installed `run-iket`; available options and postprocessing formats depend on its version. |
-| Directories | KCoral owns the profiler's output and working directories. Native `--output-dir`/`-o` and `--working-dir` are rejected. |
-| Workflow | Requires `profile`; standalone native postprocessing subcommands are unsupported. |
-
-<a id="collect-and-retrieve-a-timeline"></a>
-
-```bash
-kcoral run run-iket --send experiment --out artifacts/iket \
-  -- profile --postprocess json -- python experiment/capture.py
-```
-
-To retain intermediate files as well as the processed trace:
-
-```bash
-kcoral run run-iket --send experiment --out artifacts/iket-debug --timeout 600 \
-  -- profile --postprocess json --keep -- python experiment/capture.py
-```
-
-<a id="exit-behavior-and-troubleshooting"></a>
-
-| Result or failure | Behavior or check |
-| --- | --- |
-| Returned files | All files left in the managed output directory are downloaded under `--out`, preserving layout. The native version determines trace names and intermediate directories; KCoral does not rename them. |
-| Profiler exit | Preserves the native exit code and returns available files after an unsuccessful subprocess exit as well. |
-| No output files | Reports missing output and returns nonzero. |
-| Empty or unusable trace | Check kernel instrumentation, native diagnostics, and the expected kernel activity. Existing files alone do not guarantee a useful timeline. Use a viewer compatible with the selected postprocessing format. |
-| Missing executable | Install IKET in the worker environment. |
-| Custom configuration | Upload any referenced files. |
-
-For a native option or format mismatch, inspect the installed help:
-
-```bash
-kcoral run shell -- run-iket profile --help
-```
-
-NVIDIA's [IKET profiling guide](https://docs.nvidia.com/cutlass/latest/media/docs/pythonDSL/cute_dsl_general/iket_profiling.html)
-describes kernel instrumentation and version-specific requirements.
 
 ## shell
 

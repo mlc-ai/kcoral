@@ -4,11 +4,20 @@ KCoral can be installed from a prebuilt package or built from source. Install
 the client on the machine that submits programs. If you also host a KCoral
 server, install the server dependencies on each machine that runs it.
 
-Python 3.10 or newer is required.
+Python 3.10 or newer is required. Use a virtual environment so the installation does not modify your system Python:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+Run the installation commands below with this environment active.
 
 ## Method 1: Install a prebuilt package
 
 Prebuilt wheels are available on [PyPI](https://pypi.org/project/kcoral/).
+They support Linux on x86-64 and AArch64 with glibc 2.28 or newer.
 
 <a id="the-client"></a>
 
@@ -18,7 +27,7 @@ Prebuilt wheels are available on [PyPI](https://pypi.org/project/kcoral/).
 python -m pip install kcoral
 ```
 
-This installs the package with client dependencies. Running the clients needs no GPU.
+This installs the package with client dependencies. Running the client needs no GPU.
 
 Verify that the client imports successfully:
 
@@ -48,7 +57,9 @@ Use a source installation to modify KCoral or install a specific revision.
 
 ### Get the source
 
-Rust 1.87 or newer is required.
+Install Git, Rust 1.87 or newer with Cargo, and a C/C++ build toolchain.
+The package build compiles the Rust router and node supervisor, including when
+installing only the client dependencies.
 
 ```bash
 git clone https://github.com/mlc-ai/kcoral.git
@@ -75,6 +86,9 @@ python -m pip install -e '.[server]'
 (cpu-compilation-server)=
 ## Server system requirements
 
+The server runs on Linux. Its Python dependencies are installed by the `server`
+extra; the GPU driver and system tools below must be installed separately.
+
 <a id="running-gpu-programs"></a>
 <a id="running-cpu-compilation-workers"></a>
 
@@ -94,6 +108,10 @@ On Debian/Ubuntu:
 ```bash
 sudo apt install bubblewrap
 ```
+
+The host or container must also permit unprivileged user namespaces. If the
+server's startup check cannot launch bubblewrap, it warns and runs without
+filesystem isolation; see the isolation guide above for configuration.
 
 For deployment, see [Launch the server](../server-guide/launch-the-server.md)
 and [Remote Compilation](../tutorials/remote-compilation.md).

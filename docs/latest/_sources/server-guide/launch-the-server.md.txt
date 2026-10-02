@@ -6,6 +6,13 @@ compile CUDA C without a GPU.
 
 ## Start an instance
 
+```{warning}
+KCoral allows clients to execute arbitrary code on its workers. Only allow
+trusted clients to access your KCoral server or Router. Deploy on a trusted,
+isolated network and never expose these endpoints to the public internet.
+Run workers in a sandbox with restricted permissions and access to host resources.
+```
+
 ```bash
 kcoral server --host 127.0.0.1 --port 8000
 ```
@@ -164,7 +171,7 @@ server restarts. Caching is best-effort: storage failures and oversized objects
 do not prevent execution when the request supplies the bytes.
 
 File destinations are private to each request and removed when the request
-ends. See [file uploads](../client-guide/writing-a-program.md#files-used-by-uploaded-scripts) for
+ends. See [file uploads](../client-guide/writing-a-program.md#uploading-files-and-folders) for
 path restrictions, snapshot behavior and directory uploads.
 
 ### Logs

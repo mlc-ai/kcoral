@@ -196,7 +196,6 @@
     <img class="sidebar-logo only-dark" src="../_static/brand/kcoral-logo-dark.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">KCoral documentation</span>
   
 </a>
 <details class="version-switcher">
@@ -226,17 +225,20 @@
 <li class="toctree-l1"><a class="reference internal" href="../getting-started/installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../getting-started/quickstart.html">Your First Program</a></li>
 </ul>
+<p class="caption" role="heading"><span class="caption-text">Protocol</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="protocol.html">KCoral Protocol</a></li>
+</ul>
 <p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
 <ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="protocol.html">KCoral Protocol</a></li>
 <li class="toctree-l1"><a class="reference internal" href="writing-a-program.html">Write a client program</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Builtin CLI Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
 <ul>
@@ -319,9 +321,11 @@
         <article role="main" id="furo-main-content">
           <section id="builtin-cli-tools">
 <h1>Builtin CLI Tools<a class="headerlink" href="#builtin-cli-tools" title="Link to this heading">¶</a></h1>
-<p>KCoral provides command line tools for running experiments on remote workers.
-Use <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">run</span> <span class="pre">TOOL</span></code> to upload inputs, execute a program, and retrieve its
-output through an existing KCoral server or Router.</p>
+<p>Developing a GPU kernel involves running experiments, checking correctness, and
+collecting profiles to decide what to change next. KCoral’s built-in CLI tools
+let you do this on a remote worker using familiar commands. With <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">run</span> <span class="pre">TOOL</span></code>, you send the files needed for a run, invoke Python, a profiler, or another
+command, and retrieve its output without writing a client program yourself.</p>
+<p>Choose a tool for the task you want to perform:</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -333,14 +337,14 @@ output through an existing KCoral server or Router.</p>
 <tr class="row-even"><td><p><a class="reference internal" href="#python">python</a></p></td>
 <td><p>Run a Python script, module, or inline command with the worker’s interpreter.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#compute-sanitizer">compute-sanitizer</a></p></td>
-<td><p>Find CUDA memory-access and synchronization errors.</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#ncu">ncu</a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#ncu">ncu</a></p></td>
 <td><p>Collect NVIDIA Nsight Compute kernel performance reports.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#run-iket">run-iket</a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#run-iket">run-iket</a></p></td>
 <td><p>Collect instrumented kernel execution timelines.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#compute-sanitizer">compute-sanitizer</a></p></td>
+<td><p>Find CUDA memory-access and synchronization errors.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#shell">shell</a></p></td>
 <td><p>Run a shell script, uploaded executable, or program installed on the worker.</p></td>
@@ -348,9 +352,9 @@ output through an existing KCoral server or Router.</p>
 </tbody>
 </table>
 </div>
-<p>The common reference below defines KCoral’s options and execution behavior.
-Each tool section then describes its command format, dependencies, native
-arguments, returned files, and failure handling.</p>
+<p>All tools connect to an existing KCoral server or Router. The common reference
+covers how to select that server, upload inputs, and retrieve outputs. Each tool
+section then shows its command format, requirements, and examples.</p>
 <section id="common-reference">
 <h2>Common reference<a class="headerlink" href="#common-reference" title="Link to this heading">¶</a></h2>
 <p><a id="command-structure-and-help"></a></p>
@@ -389,7 +393,7 @@ Native options are interpreted by the version installed on the worker.</p>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--url</span> <span class="pre">URL</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">KCORAL_URL</span></code></p></td>
-<td><p>Complete server URL, including an optional HTTPS scheme or path prefix. Cannot be combined with <code class="docutils literal notranslate"><span class="pre">--host</span></code> or <code class="docutils literal notranslate"><span class="pre">--port</span></code>.</p></td>
+<td><p>Complete server URL with an <code class="docutils literal notranslate"><span class="pre">http://</span></code> or <code class="docutils literal notranslate"><span class="pre">https://</span></code> scheme and an optional path prefix. Cannot be combined with <code class="docutils literal notranslate"><span class="pre">--host</span></code> or <code class="docutils literal notranslate"><span class="pre">--port</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--host</span> <span class="pre">HOST</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code> when only <code class="docutils literal notranslate"><span class="pre">--port</span></code> is supplied</p></td>
@@ -427,45 +431,18 @@ Native options are interpreted by the version installed on the worker.</p>
 </table>
 </div>
 <p>Select a server with an environment variable:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">KCORAL_URL</span><span class="o">=</span><span class="s1">'http://gpu.example.com:8000'</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">KCORAL_URL</span><span class="o">=</span><span class="s1">'http://127.0.0.1:8000'</span>
 kcoral<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>--<span class="w"> </span>-c<span class="w"> </span><span class="s1">'print("hello from the worker")'</span>
 </pre></div>
 </div>
 <p>Or specify the address on the invocation:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>--host<span class="w"> </span>gpu.example.com<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--<span class="w"> </span>experiment/check.py
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--<span class="w"> </span>experiment/check.py
 </pre></div>
 </div>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Connection selection</p></th>
-<th class="head"><p>Result</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--url</span> <span class="pre">URL</span></code></p></td>
-<td><p>Uses this URL, overriding <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</span></code>. Supports HTTPS and path prefixes.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--host</span></code>, <code class="docutils literal notranslate"><span class="pre">--port</span></code>, or both</p></td>
-<td><p>Constructs <code class="docutils literal notranslate"><span class="pre">http://HOST:PORT</span></code>, using the defaults above for omitted components. No component is inherited from <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</span></code>.</p></td>
-</tr>
-<tr class="row-even"><td><p>Nonempty <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</span></code>, with no connection flags</p></td>
-<td><p>Uses the environment variable.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">KCORAL_URL</span></code> unset or empty, with no connection flags</p></td>
-<td><p>No server is selected.</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--url</span></code> combined with <code class="docutils literal notranslate"><span class="pre">--host</span></code> or <code class="docutils literal notranslate"><span class="pre">--port</span></code></p></td>
-<td><p>Local argument error.</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>When <code class="docutils literal notranslate"><span class="pre">--host</span></code> or <code class="docutils literal notranslate"><span class="pre">--port</span></code> overrides a nonempty <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</span></code>, KCoral warns on
-stderr and prints the selected address:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>kcoral: warning: --host/--port override KCORAL_URL; using http://gpu.example.com:8000
-</pre></div>
-</div>
+<p>Explicit connection options override <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</span></code>. With <code class="docutils literal notranslate"><span class="pre">--host</span></code> or <code class="docutils literal notranslate"><span class="pre">--port</span></code>,
+KCoral uses the defaults in the options table for any omitted component; it does
+not take that component from <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</span></code>. When overriding an environment URL
+this way, it prints a warning with the selected address.</p>
 <p><a id="input-layout-and-working-directory"></a></p>
 </section>
 <section id="files-and-workspace">
@@ -509,20 +486,17 @@ files in a fresh working directory; <code class="docutils literal notranslate"><
 <tr class="row-even"><td><p>Names and layout</p></td>
 <td><p>A directory keeps its name and internal layout, without local parent directories. A file uses its filename alone. Trailing slashes do not change the layout.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">.</span></code> and filesystem root</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">.</span></code> uses the current directory’s name. The filesystem root cannot be selected because it has no directory name.</p></td>
-</tr>
-<tr class="row-even"><td><p>Multiple selections</p></td>
+<tr class="row-odd"><td><p>Multiple selections</p></td>
 <td><p>Share one remote workspace. Differently named directories may contain identically named files; duplicate or conflicting remote file paths are rejected.</p></td>
 </tr>
-<tr class="row-odd"><td><p>File types</p></td>
+<tr class="row-even"><td><p>File types</p></td>
 <td><p>Symbolic links and special files are rejected.</p></td>
 </tr>
-<tr class="row-even"><td><p>Hidden and empty entries</p></td>
+<tr class="row-odd"><td><p>Hidden and empty entries</p></td>
 <td><p>Skips Python <code class="docutils literal notranslate"><span class="pre">__pycache__</span></code> entries and empty input directories; includes other hidden files.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Permissions</p></td>
-<td><p>Preserves executable bits, not full original permission modes.</p></td>
+<tr class="row-even"><td><p>Permissions</p></td>
+<td><p>Preserves whether a file is executable, not its exact permission bits.</p></td>
 </tr>
 </tbody>
 </table>
@@ -546,7 +520,8 @@ filesystem, subject to the server’s isolation settings.</p>
 <p>Environment overrides are optional. Without them, execution uses the
 worker’s environment, including its assigned GPU. The worker’s Python executable
 directory is prepended to <code class="docutils literal notranslate"><span class="pre">PATH</span></code> when locating programs.</p>
-<p>Use one <code class="docutils literal notranslate"><span class="pre">-e</span></code> or <code class="docutils literal notranslate"><span class="pre">--env</span></code> per variable:</p>
+<p>Use one <code class="docutils literal notranslate"><span class="pre">-e</span></code> or <code class="docutils literal notranslate"><span class="pre">--env</span></code> per variable. Set <code class="docutils literal notranslate"><span class="pre">MY_LOCAL_VARIABLE</span></code> in your local
+environment before running the first example:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--env<span class="w"> </span><span class="nv">MODE</span><span class="o">=</span>debug<span class="w"> </span>--env<span class="w"> </span>MY_LOCAL_VARIABLE<span class="w"> </span>--<span class="w"> </span>experiment/check.py
 kcoral<span class="w"> </span>run<span class="w"> </span>shell<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>-e<span class="w"> </span><span class="nv">MODE</span><span class="o">=</span>debug<span class="w"> </span>-e<span class="w"> </span><span class="nv">LABEL</span><span class="o">=</span><span class="s1">'trial one'</span><span class="w"> </span>--<span class="w"> </span>sh<span class="w"> </span>experiment/setup.sh
 </pre></div>
@@ -588,38 +563,14 @@ are quoted appropriately.</p>
 </section>
 <section id="output-and-exit-status">
 <h3>Output and exit status<a class="headerlink" href="#output-and-exit-status" title="Link to this heading">¶</a></h3>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Stream behavior</p></th>
-<th class="head"><p>Rule</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>Standard input</p></td>
-<td><p>Closed for the launched subprocess. Local stdin is not forwarded; interactive prompts and sessions between requests are unsupported.</p></td>
-</tr>
-<tr class="row-odd"><td><p>Display timing</p></td>
-<td><p>Captured during execution and replayed after the request finishes. Output is not streamed, including with Python’s <code class="docutils literal notranslate"><span class="pre">-u</span></code>.</p></td>
-</tr>
-<tr class="row-even"><td><p>Replay order</p></td>
-<td><p>Captured stdout goes to local stdout, then captured stderr to local stderr. Each stream preserves text, line breaks, and order; original interleaving is lost.</p></td>
-</tr>
-<tr class="row-odd"><td><p>Encoding</p></td>
-<td><p>UTF-8 with invalid bytes replaced. Return files for binary data or exact log bytes.</p></td>
-</tr>
-<tr class="row-even"><td><p>Capture limits</p></td>
-<td><p>Apply independently to each stream. Truncation warns on stderr and does not itself change the subprocess exit code.</p></td>
-</tr>
-<tr class="row-odd"><td><p>Terminal detection</p></td>
-<td><p>No interactive terminal is allocated; programs may change colors or progress displays.</p></td>
-</tr>
-<tr class="row-even"><td><p>KCoral diagnostics</p></td>
-<td><p>Ordinary subprocess stdout has no added prefix. Artifact messages and warnings use stderr.</p></td>
-</tr>
-</tbody>
-</table>
-</div>
+<p>The tool captures stdout and stderr on the worker and displays them after the
+request finishes. Output is not streamed, even with Python’s <code class="docutils literal notranslate"><span class="pre">-u</span></code>, and messages
+from the two streams may appear in a different order. Capture limits apply to
+each stream separately; KCoral warns if output is truncated. Use returned files
+for binary data or logs you need to preserve exactly.</p>
+<p>Commands run without an interactive terminal or forwarded stdin, so prompts and
+interactive sessions are unsupported. KCoral writes its own diagnostics to
+stderr, allowing you to redirect the program’s stdout separately.</p>
 <p>Upload input files and pass their paths, or use a remote shell to redirect an
 uploaded file into a child program’s stdin. Local redirection and pipelines
 still work:</p>
@@ -766,7 +717,7 @@ kcoral<span class="w"> </span>run<span class="w"> </span>python<span class="w"> 
 <td><p>Write a remote file and fetch it; stdout is decoded as text.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">sys.exit(N)</span></code></p></td>
-<td><p>Becomes the CLI exit code.</p></td>
+<td><p>KCoral preserves the exit status reported by the Python subprocess.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Uncaught exception</p></td>
 <td><p>Normally produces a traceback on stderr and a nonzero exit code.</p></td>
@@ -787,6 +738,230 @@ kcoral<span class="w"> </span>run<span class="w"> </span>python<span class="w"> 
 <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">run</span> <span class="pre">shell</span> <span class="pre">--</span> <span class="pre">python</span> <span class="pre">--help</span></code>. Python’s
 <a class="reference external" href="https://docs.python.org/3/using/cmdline.html">command line reference</a> describes
 the native interpreter options.</p>
+</section>
+<section id="ncu">
+<h2>ncu<a class="headerlink" href="#ncu" title="Link to this heading">¶</a></h2>
+<p><a id="id2"></a></p>
+<p>NVIDIA Nsight Compute measures GPU kernel performance and produces a report for
+later inspection. The worker needs <code class="docutils literal notranslate"><span class="pre">ncu</span></code>, an application compatible with the
+worker’s GPU, and permission to collect the required GPU performance counters.
+The application must actually launch kernels selected by the profiling options.</p>
+<p><a id="command-format-and-options"></a></p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>kcoral run ncu [KCoral options] --out DIRECTORY -- [ncu options] -- APPLICATION [arguments]
+</pre></div>
+</div>
+<p>This tool supports the common connection, execution, <code class="docutils literal notranslate"><span class="pre">--send</span></code>, and <code class="docutils literal notranslate"><span class="pre">--env</span></code>
+options. <code class="docutils literal notranslate"><span class="pre">--out</span></code> is required and <code class="docutils literal notranslate"><span class="pre">--fetch</span></code> is not supported. The first <code class="docutils literal notranslate"><span class="pre">--</span></code>
+starts Nsight Compute arguments; the second starts the application command.
+Both separators are required, even when no native profiler options are supplied.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Native option</p></th>
+<th class="head"><p>Purpose</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--set</span> <span class="pre">basic</span></code></p></td>
+<td><p>Collect the basic section set. Use a set available in the installed version.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--set</span> <span class="pre">full</span></code></p></td>
+<td><p>Request the full section set, which can require more profiling passes and time.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--launch-count</span> <span class="pre">N</span></code></p></td>
+<td><p>Limit the number of profiled launches.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--launch-skip</span> <span class="pre">N</span></code></p></td>
+<td><p>Skip matching launches before profiling.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--kernel-name</span> <span class="pre">FILTER</span></code></p></td>
+<td><p>Select kernels using Nsight Compute’s name-filter syntax.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--section</span> <span class="pre">IDENTIFIER</span></code></p></td>
+<td><p>Select a metric section supported by the installed version.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>KCoral-managed setting</p></th>
+<th class="head"><p>Behavior</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Capture and export</p></td>
+<td><p>KCoral selects the export path and launches the application for profiling. Import or inspect the downloaded report locally.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Rejected native options</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--export</span></code>/<code class="docutils literal notranslate"><span class="pre">-o</span></code>, <code class="docutils literal notranslate"><span class="pre">--import</span></code>/<code class="docutils literal notranslate"><span class="pre">-i</span></code>, <code class="docutils literal notranslate"><span class="pre">--mode</span></code>, <code class="docutils literal notranslate"><span class="pre">--config-file</span></code>, <code class="docutils literal notranslate"><span class="pre">--config-file-path</span></code>, and abbreviations that conflict with these options</p></td>
+</tr>
+<tr class="row-even"><td><p>Configuration files</p></td>
+<td><p>Implicit Nsight configuration files are disabled.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Profiler environment</p></td>
+<td><p>Defaults <code class="docutils literal notranslate"><span class="pre">NCU_PROFILE</span></code> to <code class="docutils literal notranslate"><span class="pre">1</span></code> if it is absent from the worker environment and <code class="docutils literal notranslate"><span class="pre">--env</span></code> overrides. Timing helpers that honor it can avoid a competing profiler subscription.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><a id="capture-a-report"></a></p>
+<p>Collect one launch with the basic set:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>ncu<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--out<span class="w"> </span>artifacts/ncu<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--<span class="w"> </span>--set<span class="w"> </span>basic<span class="w"> </span>--launch-count<span class="w"> </span><span class="m">1</span><span class="w"> </span>--<span class="w"> </span>python<span class="w"> </span>experiment/capture.py
+</pre></div>
+</div>
+<p>Use the native defaults, or select a kernel and skip warmup launches:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>ncu<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--out<span class="w"> </span>artifacts/ncu-default<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--<span class="w"> </span>--<span class="w"> </span>python<span class="w"> </span>experiment/capture.py
+kcoral<span class="w"> </span>run<span class="w"> </span>ncu<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--out<span class="w"> </span>artifacts/ncu-filtered<span class="w"> </span>--timeout<span class="w"> </span><span class="m">600</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--<span class="w"> </span>--kernel-name<span class="w"> </span><span class="s1">'regex:my_kernel.*'</span><span class="w"> </span>--launch-skip<span class="w"> </span><span class="m">5</span><span class="w"> </span>--launch-count<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--<span class="w"> </span>python<span class="w"> </span>experiment/capture.py
+</pre></div>
+</div>
+<p>Native filtering and replay behavior are controlled by the installed profiler.
+Profiling time is not the same as an ordinary benchmark run: collecting more
+metrics may require repeated executions of the kernel.</p>
+<p><a id="report-location-and-failure-handling"></a></p>
+<p>For <code class="docutils literal notranslate"><span class="pre">--out</span> <span class="pre">artifacts/ncu</span></code>, the report is always:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>artifacts/ncu/capture.ncu-rep
+</pre></div>
+</div>
+<p>The local destination must be new. Open the downloaded report with a compatible
+Nsight Compute installation, or print it with a local CLI:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ncu<span class="w"> </span>--import<span class="w"> </span>artifacts/ncu/capture.ncu-rep
+</pre></div>
+</div>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Result or failure</p></th>
+<th class="head"><p>Behavior or check</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Profiler or application exits</p></td>
+<td><p>Returns the profiler’s exit status and attempts to download any existing report, including after failure.</p></td>
+</tr>
+<tr class="row-odd"><td><p>No report created</p></td>
+<td><p>Fails with a missing-artifact message even if <code class="docutils literal notranslate"><span class="pre">ncu</span></code> exited with zero. Check for unmatched filters, no CUDA kernel launches, unavailable performance counters, or failure before report creation.</p></td>
+</tr>
+<tr class="row-even"><td><p>Hard timeout</p></td>
+<td><p>Can prevent the report from being returned.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>For native help without creating a report, run <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">run</span> <span class="pre">shell</span> <span class="pre">--</span> <span class="pre">ncu</span> <span class="pre">--help</span></code>.
+See the <a class="reference external" href="https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html">Nsight Compute CLI manual</a>
+for section sets, filters, replay, and platform requirements.</p>
+</section>
+<section id="run-iket">
+<h2>run-iket<a class="headerlink" href="#run-iket" title="Link to this heading">¶</a></h2>
+<p><a id="id3"></a></p>
+<p>IKET records execution traces from supported GPU kernels. The worker needs
+<code class="docutils literal notranslate"><span class="pre">run-iket</span></code> and the runtime, GPU, and driver required by its installed version.
+Kernel support and instrumentation requirements depend on that version and the
+profiling mode. KCoral invokes the profiler with your application and retrieves
+its output; it does not modify uploaded source code.</p>
+<p><a id="id4"></a></p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>kcoral run run-iket [KCoral options] --out DIRECTORY -- profile [profile options] -- APPLICATION [arguments]
+</pre></div>
+</div>
+<p>Common connection, execution, upload, and environment options apply. <code class="docutils literal notranslate"><span class="pre">--out</span></code>
+is required; <code class="docutils literal notranslate"><span class="pre">--fetch</span></code> is not supported. The first <code class="docutils literal notranslate"><span class="pre">--</span></code> starts native profiler
+arguments. The native <code class="docutils literal notranslate"><span class="pre">profile</span></code> command and the second <code class="docutils literal notranslate"><span class="pre">--</span></code> before the
+application are required.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Native option</p></th>
+<th class="head"><p>Purpose</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--postprocess</span> <span class="pre">json</span></code></p></td>
+<td><p>Request JSON trace postprocessing.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--postprocess</span> <span class="pre">perfetto</span></code></p></td>
+<td><p>Request output for a compatible Perfetto trace viewer.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--keep</span></code></p></td>
+<td><p>Retain intermediate profiling outputs when supported by the installed version.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--use-config</span> <span class="pre">PATH</span></code></p></td>
+<td><p>Use a profiler configuration available on the worker; upload it with the experiment when needed.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>KCoral-managed setting</p></th>
+<th class="head"><p>Behavior</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Native arguments</p></td>
+<td><p>Forwarded to the installed <code class="docutils literal notranslate"><span class="pre">run-iket</span></code>; available options and postprocessing formats depend on its version.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Directories</p></td>
+<td><p>KCoral selects the output directory and starts the profiler in the uploaded workspace. Native <code class="docutils literal notranslate"><span class="pre">--output-dir</span></code>/<code class="docutils literal notranslate"><span class="pre">-o</span></code> and <code class="docutils literal notranslate"><span class="pre">--working-dir</span></code> are rejected.</p></td>
+</tr>
+<tr class="row-even"><td><p>Workflow</p></td>
+<td><p>Requires <code class="docutils literal notranslate"><span class="pre">profile</span></code>; standalone native postprocessing subcommands are unsupported.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><a id="collect-and-retrieve-a-timeline"></a></p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>run-iket<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--out<span class="w"> </span>artifacts/iket<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--<span class="w"> </span>profile<span class="w"> </span>--postprocess<span class="w"> </span>json<span class="w"> </span>--<span class="w"> </span>python<span class="w"> </span>experiment/capture.py
+</pre></div>
+</div>
+<p>To retain intermediate files as well as the processed trace:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>run-iket<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--out<span class="w"> </span>artifacts/iket-debug<span class="w"> </span>--timeout<span class="w"> </span><span class="m">600</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--<span class="w"> </span>profile<span class="w"> </span>--postprocess<span class="w"> </span>json<span class="w"> </span>--keep<span class="w"> </span>--<span class="w"> </span>python<span class="w"> </span>experiment/capture.py
+</pre></div>
+</div>
+<p><a id="exit-behavior-and-troubleshooting"></a></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Result or failure</p></th>
+<th class="head"><p>Behavior or check</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Returned files</p></td>
+<td><p>All files left in the managed output directory are downloaded under <code class="docutils literal notranslate"><span class="pre">--out</span></code>, preserving layout. The native version determines trace names and intermediate directories; KCoral does not rename them.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Profiler exit</p></td>
+<td><p>Preserves the native exit code and returns available files after an unsuccessful subprocess exit as well.</p></td>
+</tr>
+<tr class="row-even"><td><p>No output files</p></td>
+<td><p>Reports missing output and returns nonzero.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Empty or unusable trace</p></td>
+<td><p>Check the profiler’s kernel support and instrumentation requirements, native diagnostics, and the expected kernel activity. Existing files alone do not guarantee a useful timeline. Use a viewer compatible with the selected postprocessing format.</p></td>
+</tr>
+<tr class="row-even"><td><p>Missing executable</p></td>
+<td><p>Install IKET in the worker environment.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Custom configuration</p></td>
+<td><p>Upload any referenced files.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>For a native option or format mismatch, inspect the installed help:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>shell<span class="w"> </span>--<span class="w"> </span>run-iket<span class="w"> </span>profile<span class="w"> </span>--help
+</pre></div>
+</div>
+<p>NVIDIA’s <a class="reference external" href="https://docs.nvidia.com/cutlass/latest/media/docs/pythonDSL/cute_dsl_general/iket_profiling.html">IKET profiling guide</a>
+describes kernel instrumentation and version-specific requirements.</p>
 </section>
 <section id="compute-sanitizer">
 <h2>compute-sanitizer<a class="headerlink" href="#compute-sanitizer" title="Link to this heading">¶</a></h2>
@@ -877,230 +1052,6 @@ information recommended by Compute Sanitizer.</p>
 <p>Use <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">run</span> <span class="pre">shell</span> <span class="pre">--</span> <span class="pre">compute-sanitizer</span> <span class="pre">--help</span></code> to inspect the installed
 version. See NVIDIA’s <a class="reference external" href="https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html">Compute Sanitizer manual</a>
 for checker coverage and native options.</p>
-</section>
-<section id="ncu">
-<h2>ncu<a class="headerlink" href="#ncu" title="Link to this heading">¶</a></h2>
-<p><a id="id2"></a></p>
-<p>NVIDIA Nsight Compute measures GPU kernel performance and produces a report for
-later inspection. The worker needs <code class="docutils literal notranslate"><span class="pre">ncu</span></code>, an application compatible with the
-worker’s GPU, and permission to collect the required GPU performance counters.
-The application must actually launch kernels selected by the profiling options.</p>
-<p><a id="command-format-and-options"></a></p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>kcoral run ncu [KCoral options] --out DIRECTORY -- [ncu options] -- APPLICATION [arguments]
-</pre></div>
-</div>
-<p>This tool supports the common connection, execution, <code class="docutils literal notranslate"><span class="pre">--send</span></code>, and <code class="docutils literal notranslate"><span class="pre">--env</span></code>
-options. <code class="docutils literal notranslate"><span class="pre">--out</span></code> is required and <code class="docutils literal notranslate"><span class="pre">--fetch</span></code> is not supported. The first <code class="docutils literal notranslate"><span class="pre">--</span></code>
-starts Nsight Compute arguments; the second starts the application command.
-Both separators are required, even when no native profiler options are supplied.</p>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Native option</p></th>
-<th class="head"><p>Purpose</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--set</span> <span class="pre">basic</span></code></p></td>
-<td><p>Collect the basic section set. Use a set available in the installed version.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--set</span> <span class="pre">full</span></code></p></td>
-<td><p>Request the full section set, which can require more profiling passes and time.</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--launch-count</span> <span class="pre">N</span></code></p></td>
-<td><p>Limit the number of profiled launches.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--launch-skip</span> <span class="pre">N</span></code></p></td>
-<td><p>Skip matching launches before profiling.</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--kernel-name</span> <span class="pre">FILTER</span></code></p></td>
-<td><p>Select kernels using Nsight Compute’s name-filter syntax.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--section</span> <span class="pre">IDENTIFIER</span></code></p></td>
-<td><p>Select a metric section supported by the installed version.</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>KCoral-managed setting</p></th>
-<th class="head"><p>Behavior</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>Capture and export</p></td>
-<td><p>KCoral selects the export path and launches the application in capture mode. Import or inspect the downloaded report locally.</p></td>
-</tr>
-<tr class="row-odd"><td><p>Rejected native options</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--export</span></code>/<code class="docutils literal notranslate"><span class="pre">-o</span></code>, <code class="docutils literal notranslate"><span class="pre">--import</span></code>/<code class="docutils literal notranslate"><span class="pre">-i</span></code>, <code class="docutils literal notranslate"><span class="pre">--mode</span></code>, <code class="docutils literal notranslate"><span class="pre">--config-file</span></code>, <code class="docutils literal notranslate"><span class="pre">--config-file-path</span></code>, and abbreviations that conflict with these options</p></td>
-</tr>
-<tr class="row-even"><td><p>Configuration files</p></td>
-<td><p>Implicit Nsight configuration files are disabled.</p></td>
-</tr>
-<tr class="row-odd"><td><p>Profiler environment</p></td>
-<td><p>Sets <code class="docutils literal notranslate"><span class="pre">NCU_PROFILE=1</span></code> unless overridden with <code class="docutils literal notranslate"><span class="pre">--env</span></code>. Timing helpers that honor it can avoid a competing profiler subscription.</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p><a id="capture-a-report"></a></p>
-<p>Collect one launch with the basic set:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>ncu<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--out<span class="w"> </span>artifacts/ncu<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--<span class="w"> </span>--set<span class="w"> </span>basic<span class="w"> </span>--launch-count<span class="w"> </span><span class="m">1</span><span class="w"> </span>--<span class="w"> </span>python<span class="w"> </span>experiment/capture.py
-</pre></div>
-</div>
-<p>Use the native defaults, or select a kernel and skip warmup launches:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>ncu<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--out<span class="w"> </span>artifacts/ncu-default<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--<span class="w"> </span>--<span class="w"> </span>python<span class="w"> </span>experiment/capture.py
-kcoral<span class="w"> </span>run<span class="w"> </span>ncu<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--out<span class="w"> </span>artifacts/ncu-filtered<span class="w"> </span>--timeout<span class="w"> </span><span class="m">600</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--<span class="w"> </span>--kernel-name<span class="w"> </span><span class="s1">'regex:my_kernel.*'</span><span class="w"> </span>--launch-skip<span class="w"> </span><span class="m">5</span><span class="w"> </span>--launch-count<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--<span class="w"> </span>python<span class="w"> </span>experiment/capture.py
-</pre></div>
-</div>
-<p>Native filtering and replay behavior are controlled by the installed profiler.
-Profiling time is not the same as an ordinary benchmark run: collecting more
-metrics may require repeated executions of the kernel.</p>
-<p><a id="report-location-and-failure-handling"></a></p>
-<p>For <code class="docutils literal notranslate"><span class="pre">--out</span> <span class="pre">artifacts/ncu</span></code>, the report is always:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>artifacts/ncu/capture.ncu-rep
-</pre></div>
-</div>
-<p>The local destination must be new. Open the downloaded report with a compatible
-Nsight Compute installation, or print it with a local CLI:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ncu<span class="w"> </span>--import<span class="w"> </span>artifacts/ncu/capture.ncu-rep
-</pre></div>
-</div>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Result or failure</p></th>
-<th class="head"><p>Behavior or check</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>Profiler or application exits</p></td>
-<td><p>Returns the profiler’s exit status and attempts to download any existing report, including after failure.</p></td>
-</tr>
-<tr class="row-odd"><td><p>No report created</p></td>
-<td><p>Fails with a missing-artifact message even if <code class="docutils literal notranslate"><span class="pre">ncu</span></code> exited with zero. Check for unmatched filters, no CUDA kernel launches, unavailable performance counters, or failure before report creation.</p></td>
-</tr>
-<tr class="row-even"><td><p>Hard timeout</p></td>
-<td><p>Can prevent the report from being returned.</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>For native help without creating a report, run <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">run</span> <span class="pre">shell</span> <span class="pre">--</span> <span class="pre">ncu</span> <span class="pre">--help</span></code>.
-See the <a class="reference external" href="https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html">Nsight Compute CLI manual</a>
-for section sets, filters, replay, and platform requirements.</p>
-</section>
-<section id="run-iket">
-<h2>run-iket<a class="headerlink" href="#run-iket" title="Link to this heading">¶</a></h2>
-<p><a id="id3"></a></p>
-<p>IKET records execution traces from supported, instrumented kernels. The worker
-needs <code class="docutils literal notranslate"><span class="pre">run-iket</span></code>, a compatible CuTeDSL distribution with IKET support,
-and the GPU and driver required by that distribution. The application’s kernel
-must contain suitable instrumentation for the timeline you want to collect;
-KCoral does not add instrumentation to uploaded source.</p>
-<p><a id="id4"></a></p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>kcoral run run-iket [KCoral options] --out DIRECTORY -- profile [profile options] -- APPLICATION [arguments]
-</pre></div>
-</div>
-<p>Common connection, execution, upload, and environment options apply. <code class="docutils literal notranslate"><span class="pre">--out</span></code>
-is required; <code class="docutils literal notranslate"><span class="pre">--fetch</span></code> is not supported. The first <code class="docutils literal notranslate"><span class="pre">--</span></code> starts native profiler
-arguments. The native <code class="docutils literal notranslate"><span class="pre">profile</span></code> command and the second <code class="docutils literal notranslate"><span class="pre">--</span></code> before the
-application are required.</p>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Native option</p></th>
-<th class="head"><p>Purpose</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--postprocess</span> <span class="pre">json</span></code></p></td>
-<td><p>Request JSON trace postprocessing.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--postprocess</span> <span class="pre">perfetto</span></code></p></td>
-<td><p>Request output for a compatible Perfetto trace viewer.</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--keep</span></code></p></td>
-<td><p>Retain intermediate profiling outputs when supported by the installed version.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--use-config</span> <span class="pre">PATH</span></code></p></td>
-<td><p>Use a profiler configuration available on the worker; upload it with the experiment when needed.</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>KCoral-managed setting</p></th>
-<th class="head"><p>Behavior</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>Native arguments</p></td>
-<td><p>Forwarded to the installed <code class="docutils literal notranslate"><span class="pre">run-iket</span></code>; available options and postprocessing formats depend on its version.</p></td>
-</tr>
-<tr class="row-odd"><td><p>Directories</p></td>
-<td><p>KCoral owns the profiler’s output and working directories. Native <code class="docutils literal notranslate"><span class="pre">--output-dir</span></code>/<code class="docutils literal notranslate"><span class="pre">-o</span></code> and <code class="docutils literal notranslate"><span class="pre">--working-dir</span></code> are rejected.</p></td>
-</tr>
-<tr class="row-even"><td><p>Workflow</p></td>
-<td><p>Requires <code class="docutils literal notranslate"><span class="pre">profile</span></code>; standalone native postprocessing subcommands are unsupported.</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p><a id="collect-and-retrieve-a-timeline"></a></p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>run-iket<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--out<span class="w"> </span>artifacts/iket<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--<span class="w"> </span>profile<span class="w"> </span>--postprocess<span class="w"> </span>json<span class="w"> </span>--<span class="w"> </span>python<span class="w"> </span>experiment/capture.py
-</pre></div>
-</div>
-<p>To retain intermediate files as well as the processed trace:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>run-iket<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--out<span class="w"> </span>artifacts/iket-debug<span class="w"> </span>--timeout<span class="w"> </span><span class="m">600</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--<span class="w"> </span>profile<span class="w"> </span>--postprocess<span class="w"> </span>json<span class="w"> </span>--keep<span class="w"> </span>--<span class="w"> </span>python<span class="w"> </span>experiment/capture.py
-</pre></div>
-</div>
-<p><a id="exit-behavior-and-troubleshooting"></a></p>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Result or failure</p></th>
-<th class="head"><p>Behavior or check</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>Returned files</p></td>
-<td><p>All files left in the managed output directory are downloaded under <code class="docutils literal notranslate"><span class="pre">--out</span></code>, preserving layout. The native version determines trace names and intermediate directories; KCoral does not rename them.</p></td>
-</tr>
-<tr class="row-odd"><td><p>Profiler exit</p></td>
-<td><p>Preserves the native exit code and returns available files after an unsuccessful subprocess exit as well.</p></td>
-</tr>
-<tr class="row-even"><td><p>No output files</p></td>
-<td><p>Reports missing output and returns nonzero.</p></td>
-</tr>
-<tr class="row-odd"><td><p>Empty or unusable trace</p></td>
-<td><p>Check kernel instrumentation, native diagnostics, and the expected kernel activity. Existing files alone do not guarantee a useful timeline. Use a viewer compatible with the selected postprocessing format.</p></td>
-</tr>
-<tr class="row-even"><td><p>Missing executable</p></td>
-<td><p>Install IKET in the worker environment.</p></td>
-</tr>
-<tr class="row-odd"><td><p>Custom configuration</p></td>
-<td><p>Upload any referenced files.</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>For a native option or format mismatch, inspect the installed help:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>shell<span class="w"> </span>--<span class="w"> </span>run-iket<span class="w"> </span>profile<span class="w"> </span>--help
-</pre></div>
-</div>
-<p>NVIDIA’s <a class="reference external" href="https://docs.nvidia.com/cutlass/latest/media/docs/pythonDSL/cute_dsl_general/iket_profiling.html">IKET profiling guide</a>
-describes kernel instrumentation and version-specific requirements.</p>
 </section>
 <section id="shell">
 <h2>shell<a class="headerlink" href="#shell" title="Link to this heading">¶</a></h2>
@@ -1279,9 +1230,9 @@ such as <code class="docutils literal notranslate"><span class="pre">sh</span> <
 </ul>
 </li>
 <li><a class="reference internal" href="#python">python</a></li>
-<li><a class="reference internal" href="#compute-sanitizer">compute-sanitizer</a></li>
 <li><a class="reference internal" href="#ncu">ncu</a></li>
 <li><a class="reference internal" href="#run-iket">run-iket</a></li>
+<li><a class="reference internal" href="#compute-sanitizer">compute-sanitizer</a></li>
 <li><a class="reference internal" href="#shell">shell</a></li>
 </ul>
 </li>
@@ -1294,7 +1245,7 @@ such as <code class="docutils literal notranslate"><span class="pre">sh</span> <
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=e35d3959"></script>
+</div><script src="../_static/documentation_options.js?v=aad43eb6"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

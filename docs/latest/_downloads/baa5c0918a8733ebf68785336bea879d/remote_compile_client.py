@@ -180,30 +180,29 @@ def compile_triton(kernel, *args):
 
 
 def check_against_cpu_reference(program: Program, dst, assert_close) -> None:
-    module = program.upload(id="reference_module", kind="module", source=CPU_REFERENCE)
-    reference = program.get_function(id="reference", module=module, name="expected", cpu_only=True)
-    expected = program.run(id="expected", fn=reference, args=[N])
-    program.run(id="check", fn=assert_close, args=[dst, expected])
+    module = program.upload(kind="module", source=CPU_REFERENCE)
+    reference = program.get_function(module=module, name="expected", cpu_only=True)
+    expected = program.run(fn=reference, args=[N])
+    program.run(fn=assert_close, args=[dst, expected])
 
 
 def tirx_program() -> Program:
     program = Program()
-    operations = program.upload(id="operations", kind="module", source=OPERATIONS)
-    empty = program.get_function(id="empty", module=operations, name="empty")
-    assert_close = program.get_function(id="assert_close", module=operations, name="assert_close")
-    benchmark = program.get_function(id="benchmark", module=operations, name="benchmark")
-    compile_tirx = program.get_function(id="compile_tirx", module=operations, name="compile_tirx")
-    module = program.upload(id="kernel_module", kind="module", source=TIRX_KERNEL)
-    kernel = program.get_function(id="kernel", module=module, name="main")
-    src = program.upload(id="src", kind="tensor", value=np.arange(N, dtype=np.float32))
-    dst = program.run(id="dst", fn=empty, args=[{"shape": [N], "dtype": "float32"}])
+    operations = program.upload(kind="module", source=OPERATIONS)
+    empty = program.get_function(module=operations, name="empty")
+    assert_close = program.get_function(module=operations, name="assert_close")
+    benchmark = program.get_function(module=operations, name="benchmark")
+    compile_tirx = program.get_function(module=operations, name="compile_tirx")
+    module = program.upload(kind="module", source=TIRX_KERNEL)
+    kernel = program.get_function(module=module, name="main")
+    src = program.upload(kind="tensor", value=np.arange(N, dtype=np.float32))
+    dst = program.run(fn=empty, args=[{"shape": [N], "dtype": "float32"}])
 
     # `bindings` supplies the T.constexpr values the @T.jit kernel specializes on.
-    compiled = program.run(id="compiled", fn=compile_tirx, args=[kernel, {"N": N}])
-    program.run(id="invoke", fn=compiled, args=[src, dst])
+    compiled = program.run(fn=compile_tirx, args=[kernel, {"N": N}])
+    program.run(fn=compiled, args=[src, dst])
     check_against_cpu_reference(program, dst, assert_close)
     timing = program.run(
-        id="timing",
         fn=benchmark,
         args=[compiled, src, dst, {"warmup_ms": 25, "repeat_ms": 100}],
     )
@@ -214,25 +213,22 @@ def tirx_program() -> Program:
 
 def cutedsl_program() -> Program:
     program = Program()
-    operations = program.upload(id="operations", kind="module", source=OPERATIONS)
-    empty = program.get_function(id="empty", module=operations, name="empty")
-    assert_close = program.get_function(id="assert_close", module=operations, name="assert_close")
-    benchmark = program.get_function(id="benchmark", module=operations, name="benchmark")
-    compile_cutedsl = program.get_function(
-        id="compile_cutedsl", module=operations, name="compile_cutedsl"
-    )
-    module = program.upload(id="kernel_module", kind="module", source=CUTEDSL_KERNEL)
-    kernel = program.get_function(id="kernel", module=module, name="add_one")
-    src = program.upload(id="src", kind="tensor", value=np.arange(N, dtype=np.float32))
-    dst = program.run(id="dst", fn=empty, args=[{"shape": [N], "dtype": "float32"}])
+    operations = program.upload(kind="module", source=OPERATIONS)
+    empty = program.get_function(module=operations, name="empty")
+    assert_close = program.get_function(module=operations, name="assert_close")
+    benchmark = program.get_function(module=operations, name="benchmark")
+    compile_cutedsl = program.get_function(module=operations, name="compile_cutedsl")
+    module = program.upload(kind="module", source=CUTEDSL_KERNEL)
+    kernel = program.get_function(module=module, name="add_one")
+    src = program.upload(kind="tensor", value=np.arange(N, dtype=np.float32))
+    dst = program.run(fn=empty, args=[{"shape": [N], "dtype": "float32"}])
 
     # CuTeDSL specializes on the tensors, so compiling takes them too; what comes
     # back is called with the same plain ones.
-    compiled = program.run(id="compiled", fn=compile_cutedsl, args=[kernel, src, dst])
-    program.run(id="invoke", fn=compiled, args=[src, dst])
+    compiled = program.run(fn=compile_cutedsl, args=[kernel, src, dst])
+    program.run(fn=compiled, args=[src, dst])
     check_against_cpu_reference(program, dst, assert_close)
     timing = program.run(
-        id="timing",
         fn=benchmark,
         args=[compiled, src, dst, {"warmup_ms": 25, "repeat_ms": 100}],
     )
@@ -243,28 +239,24 @@ def cutedsl_program() -> Program:
 
 def cuda_program() -> Program:
     program = Program()
-    operations = program.upload(id="operations", kind="module", source=OPERATIONS)
-    empty = program.get_function(id="empty", module=operations, name="empty")
-    assert_close = program.get_function(id="assert_close", module=operations, name="assert_close")
-    benchmark = program.get_function(id="benchmark", module=operations, name="benchmark")
-    compile_cuda = program.get_function(id="compile_cuda", module=operations, name="compile_cuda")
-    source_path = program.upload_file(
-        id="source", blob=CUDA_KERNEL.encode("utf-8"), path="src/add_one.cu"
-    )
-    src = program.upload(id="src", kind="tensor", value=np.arange(N, dtype=np.float32))
-    dst = program.run(id="dst", fn=empty, args=[{"shape": [N], "dtype": "float32"}])
+    operations = program.upload(kind="module", source=OPERATIONS)
+    empty = program.get_function(module=operations, name="empty")
+    assert_close = program.get_function(module=operations, name="assert_close")
+    benchmark = program.get_function(module=operations, name="benchmark")
+    compile_cuda = program.get_function(module=operations, name="compile_cuda")
+    source_path = program.upload_file(blob=CUDA_KERNEL.encode("utf-8"), path="src/add_one.cu")
+    src = program.upload(kind="tensor", value=np.arange(N, dtype=np.float32))
+    dst = program.run(fn=empty, args=[{"shape": [N], "dtype": "float32"}])
 
     # Built for the worker GPU's arch, and cached on disk by source and flags, so
     # recompiling the same source is much cheaper.
     compiled = program.run(
-        id="compiled",
         fn=compile_cuda,
         args=[source_path, {"name": "example_add_one", "functions": ["add_one"]}],
     )
-    program.run(id="invoke", fn=compiled, args=[src, dst])
+    program.run(fn=compiled, args=[src, dst])
     check_against_cpu_reference(program, dst, assert_close)
     timing = program.run(
-        id="timing",
         fn=benchmark,
         args=[compiled, src, dst, {"warmup_ms": 25, "repeat_ms": 100}],
     )
@@ -275,30 +267,26 @@ def cuda_program() -> Program:
 
 def triton_program() -> Program:
     program = Program()
-    operations = program.upload(id="operations", kind="module", source=OPERATIONS)
-    empty = program.get_function(id="empty", module=operations, name="empty")
-    assert_close = program.get_function(id="assert_close", module=operations, name="assert_close")
-    benchmark = program.get_function(id="benchmark", module=operations, name="benchmark")
-    compile_triton = program.get_function(
-        id="compile_triton", module=operations, name="compile_triton"
-    )
-    module = program.upload(id="kernel_module", kind="module", source=TRITON_KERNEL)
-    kernel = program.get_function(id="kernel", module=module, name="add_one")
-    src = program.upload(id="src", kind="tensor", value=np.arange(N, dtype=np.float32))
-    dst = program.run(id="dst", fn=empty, args=[{"shape": [N], "dtype": "float32"}])
+    operations = program.upload(kind="module", source=OPERATIONS)
+    empty = program.get_function(module=operations, name="empty")
+    assert_close = program.get_function(module=operations, name="assert_close")
+    benchmark = program.get_function(module=operations, name="benchmark")
+    compile_triton = program.get_function(module=operations, name="compile_triton")
+    module = program.upload(kind="module", source=TRITON_KERNEL)
+    kernel = program.get_function(module=module, name="add_one")
+    src = program.upload(kind="tensor", value=np.arange(N, dtype=np.float32))
+    dst = program.run(fn=empty, args=[{"shape": [N], "dtype": "float32"}])
 
     # A Triton kernel computes its grid at launch, so the grid travels as data
     # rather than as a launcher the client writes. Every other `cfg` key is a
     # launch keyword — num_warps, num_stages, a constexpr by name.
     compiled = program.run(
-        id="compiled",
         fn=compile_triton,
         args=[kernel, src, dst, N, 256, {"grid": [1], "num_warps": 4}],
     )
-    program.run(id="invoke", fn=compiled, args=[src, dst, N, 256])
+    program.run(fn=compiled, args=[src, dst, N, 256])
     check_against_cpu_reference(program, dst, assert_close)
     timing = program.run(
-        id="timing",
         fn=benchmark,
         args=[compiled, src, dst, N, 256, {"warmup_ms": 25, "repeat_ms": 100}],
     )
@@ -309,7 +297,7 @@ def triton_program() -> Program:
 
 def main() -> None:
     expected = np.arange(N, dtype=np.float32) + 1.0
-    with Client(os.environ.get("KCORAL_URL", "http://localhost:8000")) as client:
+    with Client(os.environ.get("KCORAL_URL", "http://127.0.0.1:8000")) as client:
         programs = (
             ("TIRx", tirx_program()),
             ("CuTeDSL", cutedsl_program()),

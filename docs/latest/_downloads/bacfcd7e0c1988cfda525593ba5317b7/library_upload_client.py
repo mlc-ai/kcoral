@@ -88,34 +88,34 @@ def build_library(arch: str, directory: str) -> bytes:
 
 def build_program(library: bytes) -> Program:
     program = Program()
-    operations = program.upload(id="operations", kind="module", source=OPERATIONS)
-    empty = program.get_function(id="empty", module=operations, name="empty")
-    randn = program.get_function(id="randn", module=operations, name="randn")
-    assert_close = program.get_function(id="assert_close", module=operations, name="assert_close")
-    benchmark = program.get_function(id="benchmark", module=operations, name="benchmark")
+    operations = program.upload(kind="module", source=OPERATIONS)
+    empty = program.get_function(module=operations, name="empty")
+    randn = program.get_function(module=operations, name="randn")
+    assert_close = program.get_function(module=operations, name="assert_close")
+    benchmark = program.get_function(module=operations, name="benchmark")
     # No compile instruction follows: get_function binds the precompiled callable.
-    module = program.upload(id="kernel_module", kind="library", value=library)
-    kernel = program.get_function(id="kernel", module=module, name="add_one")
-    reference_module = program.upload(id="reference_module", kind="module", source=REFERENCE)
-    reference = program.get_function(id="reference", module=reference_module, name="main")
+    module = program.upload(kind="library", value=library)
+    kernel = program.get_function(module=module, name="add_one")
+    reference_module = program.upload(kind="module", source=REFERENCE)
+    reference = program.get_function(module=reference_module, name="main")
 
-    src = program.run(id="src", fn=randn, args=[{"shape": [N], "dtype": "float32", "seed": 0}])
-    dst = program.run(id="dst", fn=empty, args=[{"shape": [N], "dtype": "float32"}])
-    program.run(id="invoke", fn=kernel, args=[src, dst])
+    src = program.run(fn=randn, args=[{"shape": [N], "dtype": "float32", "seed": 0}])
+    dst = program.run(fn=empty, args=[{"shape": [N], "dtype": "float32"}])
+    program.run(fn=kernel, args=[src, dst])
 
     # Compared on the server against a plain-Python reference, so the output
     # tensor never travels; assert_close stops the program before timing a
     # kernel that is wrong.
-    expected = program.run(id="expected", fn=reference, args=[src])
-    check = program.run(id="check", fn=assert_close, args=[dst, expected])
-    timing = program.run(id="timing", fn=benchmark, args=[kernel, src, dst])
+    expected = program.run(fn=reference, args=[src])
+    check = program.run(fn=assert_close, args=[dst, expected])
+    timing = program.run(fn=benchmark, args=[kernel, src, dst])
     program.return_(key="check", value=check)
     program.return_(key="timing", value=timing)
     return program
 
 
 def main() -> None:
-    with Client(os.environ.get("KCORAL_URL", "http://localhost:8000")) as client:
+    with Client(os.environ.get("KCORAL_URL", "http://127.0.0.1:8000")) as client:
         arch = client.target()["arch"]
         with tempfile.TemporaryDirectory() as directory:
             library = build_library(arch, directory)

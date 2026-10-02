@@ -196,7 +196,6 @@
     <img class="sidebar-logo only-dark" src="../_static/brand/kcoral-logo-dark.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">KCoral documentation</span>
   
 </a>
 <details class="version-switcher">
@@ -226,17 +225,20 @@
 <li class="toctree-l1"><a class="reference internal" href="../getting-started/installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../getting-started/quickstart.html">Your First Program</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<p class="caption" role="heading"><span class="caption-text">Protocol</span></p>
 <ul class="current">
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">KCoral Protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
+<ul>
 <li class="toctree-l1"><a class="reference internal" href="writing-a-program.html">Write a client program</a></li>
 <li class="toctree-l1"><a class="reference internal" href="builtin-cli-tools.html">Builtin CLI Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
 <ul>
@@ -330,7 +332,7 @@ the execution protocol while adding node selection and routing metadata.</p>
 <h3>GET /health<a class="headerlink" href="#get-health" title="Link to this heading">¶</a></h3>
 <p>Read endpoint health, request load, and the compilation environment.</p>
 <div class="highlight-http notranslate"><div class="highlight"><pre><span></span><span class="nf">GET</span> <span class="nn">/health</span> <span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span>
-<span class="na">Host</span><span class="o">:</span> <span class="l">localhost:8000</span>
+<span class="na">Host</span><span class="o">:</span> <span class="l">127.0.0.1:8000</span>
 </pre></div>
 </div>
 <p>Example response from a GPU server with two workers:</p>
@@ -856,11 +858,11 @@ part, exactly as a tensor’s do.</p>
 </table>
 </div>
 <p>Given a library that exports <code class="docutils literal notranslate"><span class="pre">init</span></code> and <code class="docutils literal notranslate"><span class="pre">step</span></code>, the Python client writes:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"kernels"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"library"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">library_bytes</span><span class="p">)</span>
-<span class="n">init</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"init"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"init"</span><span class="p">)</span>
-<span class="n">step</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"step"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"step"</span><span class="p">)</span>
-<span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"initialize"</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="n">init</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">input_tensor</span><span class="p">])</span>
-<span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"invoke"</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="n">step</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">output_tensor</span><span class="p">])</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"library"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">library_bytes</span><span class="p">)</span>
+<span class="n">init</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"init"</span><span class="p">)</span>
+<span class="n">step</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"step"</span><span class="p">)</span>
+<span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">init</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">input_tensor</span><span class="p">])</span>
+<span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">step</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">output_tensor</span><span class="p">])</span>
 </pre></div>
 </div>
 <p>Module and function handles are request-local capabilities and cannot be
@@ -1546,7 +1548,7 @@ The same upload/get_function/run shape supports GPU harnesses and compiler tools
 <td><p><a class="reference internal" href="writing-a-program.html"><span class="std std-doc">Program guide</span></a>; <a class="reference internal" href="../python-api/index.html"><span class="std std-doc">API signatures and errors</span></a></p></td>
 </tr>
 <tr class="row-even"><td><p>Upload files and folders</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">upload_folder</span></code> expands into ordinary file-upload instructions with no new operation. See <a class="reference internal" href="writing-a-program.html#files-used-by-uploaded-scripts"><span class="std std-ref">files used by uploaded scripts</span></a>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">upload_folder</span></code> expands into ordinary file-upload instructions with no new operation. See <a class="reference internal" href="writing-a-program.html#uploading-files-and-folders"><span class="std std-ref">files used by uploaded scripts</span></a>.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Receive files and folders</p></td>
 <td><p>Results decode to <code class="docutils literal notranslate"><span class="pre">ReturnedFile</span></code> and <code class="docutils literal notranslate"><span class="pre">ReturnedFolder</span></code>. See <a class="reference internal" href="writing-a-program.html#returning-files-and-folders"><span class="std std-ref">client usage</span></a>.</p></td>
@@ -1643,7 +1645,7 @@ The same upload/get_function/run shape supports GPU harnesses and compiler tools
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=e35d3959"></script>
+</div><script src="../_static/documentation_options.js?v=aad43eb6"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

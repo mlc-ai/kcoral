@@ -4,13 +4,6 @@ KCoral runs programs on remote GPU workers. Upload code and data,
 call functions, check correctness and return measurements. CPU compilation
 services can build kernels for a separate GPU server.
 
-```{warning}
-KCoral allows clients to execute arbitrary code on its workers. Only allow
-trusted clients to access your KCoral server or Router. Deploy on a trusted,
-isolated network and never expose these endpoints to the public internet.
-Run workers in a sandbox with restricted permissions and access to host resources.
-```
-
 ## Start here
 
 | Your task | Read |
@@ -33,11 +26,18 @@ getting-started/quickstart
 ```
 
 ```{toctree}
-:caption: Client Guide
+:caption: Protocol
 :maxdepth: 1
 :hidden:
 
 client-guide/protocol
+```
+
+```{toctree}
+:caption: Client Guide
+:maxdepth: 1
+:hidden:
+
 client-guide/writing-a-program
 client-guide/builtin-cli-tools
 ```
@@ -48,8 +48,8 @@ client-guide/builtin-cli-tools
 :hidden:
 
 server-guide/launch-the-server
-server-guide/logging
 server-guide/router
+server-guide/logging
 ```
 
 ```{toctree}

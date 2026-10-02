@@ -15,7 +15,7 @@ Read endpoint health, request load, and the compilation environment.
 
 ```http
 GET /health HTTP/1.1
-Host: localhost:8000
+Host: 127.0.0.1:8000
 ```
 
 Example response from a GPU server with two workers:
@@ -344,11 +344,11 @@ Select a named object from an earlier module or library upload.
 Given a library that exports `init` and `step`, the Python client writes:
 
 ```python
-module = program.upload(id="kernels", kind="library", value=library_bytes)
-init = program.get_function(id="init", module=module, name="init")
-step = program.get_function(id="step", module=module, name="step")
-program.run(id="initialize", fn=init, args=[input_tensor])
-program.run(id="invoke", fn=step, args=[input_tensor, output_tensor])
+module = program.upload(kind="library", value=library_bytes)
+init = program.get_function(module=module, name="init")
+step = program.get_function(module=module, name="step")
+program.run(fn=init, args=[input_tensor])
+program.run(fn=step, args=[input_tensor, output_tensor])
 ```
 
 Module and function handles are request-local capabilities and cannot be
@@ -754,5 +754,5 @@ The Python package constructs request parts, hashes and response values for you.
 | --- | --- |
 | Submit a first request | [Quickstart](../getting-started/quickstart.md) |
 | Construct programs and manage clients | [Program guide](writing-a-program.md); [API signatures and errors](../python-api/index.rst) |
-| Upload files and folders | `upload_folder` expands into ordinary file-upload instructions with no new operation. See [files used by uploaded scripts](writing-a-program.md#files-used-by-uploaded-scripts). |
+| Upload files and folders | `upload_folder` expands into ordinary file-upload instructions with no new operation. See [files used by uploaded scripts](writing-a-program.md#uploading-files-and-folders). |
 | Receive files and folders | Results decode to `ReturnedFile` and `ReturnedFolder`. See [client usage](writing-a-program.md#returning-files-and-folders). |

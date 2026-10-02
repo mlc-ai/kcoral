@@ -41,6 +41,13 @@ The two server roles have different requirements:
 This example uploads Python that builds CUDA C through TVM FFI, then uses
 CUPTI to collect GPU activity timestamps.
 
+```{warning}
+KCoral allows clients to execute arbitrary code on its workers. Only allow
+trusted clients to access your KCoral server or Router. Deploy on a trusted,
+isolated network and never expose these endpoints to the public internet.
+Run workers in a sandbox with restricted permissions and access to host resources.
+```
+
 On the compilation host, start a CPU server:
 
 ```bash
@@ -59,18 +66,19 @@ configuration.
 
 ## Run the complete client
 
-From the repository checkout, replace these addresses with your servers:
+From the repository checkout, run the client with both servers on the local
+machine, or replace `127.0.0.1` with each server's reachable address:
 
 ```bash
-KCORAL_CPU_URL=http://compiler.example.com:8000 \
-KCORAL_GPU_URL=http://gpu.example.com:8001 \
+KCORAL_CPU_URL=http://127.0.0.1:8000 \
+KCORAL_GPU_URL=http://127.0.0.1:8001 \
 python examples/cpu_compile_gpu_execute.py
 ```
 
 {download}`Download the complete client <../../examples/cpu_compile_gpu_execute.py>`.
 The downloaded file can be run directly with the same environment variables.
 If both servers run on the client machine, the defaults are
-`http://localhost:8000` for compilation and `http://localhost:8001` for execution.
+`http://127.0.0.1:8000` for compilation and `http://127.0.0.1:8001` for execution.
 
 `KCORAL_CPU_URL` selects the compilation endpoint. To use one GPU server for
 both roles, install the compilation tools there and set both URL variables to
@@ -193,5 +201,5 @@ A failed compilation stops the client before the second submission. A failed
 execution stops it before reporting a successful benchmark. Inspect each
 result's `error` and `request_id` to identify which server and instruction
 failed. Request or transport exceptions are distinct from a `FAILED` result;
-the [failure guide](../client-guide/writing-a-program.md#handling-failures)
+the [result and failure guide](../client-guide/writing-a-program.md#read-results)
 explains how to handle them.

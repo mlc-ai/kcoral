@@ -91,15 +91,12 @@ def compile_cuda_binary(source_path, cfg):
 
 def compile_program(arch: str) -> Program:
     program = Program()
-    operations = program.upload(id="operations", kind="module", source=OPERATIONS)
+    operations = program.upload(kind="module", source=OPERATIONS)
     compile_cuda_binary = program.get_function(
-        id="compile_cuda_binary", module=operations, name="compile_cuda_binary", cpu_only=True
+        module=operations, name="compile_cuda_binary", cpu_only=True
     )
-    source_path = program.upload_file(
-        id="source", blob=CUDA_SOURCE.encode("utf-8"), path="src/add_one.cu"
-    )
+    source_path = program.upload_file(blob=CUDA_SOURCE.encode("utf-8"), path="src/add_one.cu")
     library = program.run(
-        id="library",
         fn=compile_cuda_binary,
         args=[
             source_path,
@@ -117,26 +114,24 @@ def compile_program(arch: str) -> Program:
 
 def benchmark_program(library: bytes) -> Program:
     program = Program()
-    operations = program.upload(id="operations", kind="module", source=OPERATIONS)
-    empty = program.get_function(id="empty", module=operations, name="empty")
-    randn = program.get_function(id="randn", module=operations, name="randn")
-    assert_close = program.get_function(id="assert_close", module=operations, name="assert_close")
-    benchmark = program.get_function(id="benchmark", module=operations, name="benchmark")
-    module = program.upload(id="kernel_module", kind="library", value=library)
-    kernel = program.get_function(id="kernel", module=module, name="add_one")
-    reference_module = program.upload(id="reference_module", kind="module", source=REFERENCE)
-    reference = program.get_function(id="reference", module=reference_module, name="main")
+    operations = program.upload(kind="module", source=OPERATIONS)
+    empty = program.get_function(module=operations, name="empty")
+    randn = program.get_function(module=operations, name="randn")
+    assert_close = program.get_function(module=operations, name="assert_close")
+    benchmark = program.get_function(module=operations, name="benchmark")
+    module = program.upload(kind="library", value=library)
+    kernel = program.get_function(module=module, name="add_one")
+    reference_module = program.upload(kind="module", source=REFERENCE)
+    reference = program.get_function(module=reference_module, name="main")
     src = program.run(
-        id="src",
         fn=randn,
         args=[{"shape": [N], "dtype": "float32", "seed": 0}],
     )
-    dst = program.run(id="dst", fn=empty, args=[{"shape": [N], "dtype": "float32"}])
-    program.run(id="invoke", fn=kernel, args=[src, dst])
-    expected = program.run(id="expected", fn=reference, args=[src])
-    check = program.run(id="check", fn=assert_close, args=[dst, expected])
+    dst = program.run(fn=empty, args=[{"shape": [N], "dtype": "float32"}])
+    program.run(fn=kernel, args=[src, dst])
+    expected = program.run(fn=reference, args=[src])
+    check = program.run(fn=assert_close, args=[dst, expected])
     timing = program.run(
-        id="timing",
         fn=benchmark,
         args=[kernel, src, dst, {"warmup_ms": 25, "repeat_ms": 100}],
     )
@@ -146,8 +141,8 @@ def benchmark_program(library: bytes) -> Program:
 
 
 def main() -> None:
-    cpu_url = os.environ.get("KCORAL_CPU_URL", "http://localhost:8000")
-    gpu_url = os.environ.get("KCORAL_GPU_URL", "http://localhost:8001")
+    cpu_url = os.environ.get("KCORAL_CPU_URL", "http://127.0.0.1:8000")
+    gpu_url = os.environ.get("KCORAL_GPU_URL", "http://127.0.0.1:8001")
     with Client(cpu_url) as cpu_client, Client(gpu_url) as gpu_client:
         arch = gpu_client.target()["arch"]
         compiled = cpu_client.execute(compile_program(arch), timeout_seconds=120)

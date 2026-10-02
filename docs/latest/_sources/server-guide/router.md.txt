@@ -31,6 +31,13 @@ queues and HTTP/2 flow control limit buffering in the tunnel. The Python
 
 ## Build and launch
 
+```{warning}
+KCoral allows clients to execute arbitrary code on its workers. Only allow
+trusted clients to access your KCoral server or Router. Deploy on a trusted,
+isolated network and never expose these endpoints to the public internet.
+Run workers in a sandbox with restricted permissions and access to host resources.
+```
+
 Use Rust 1.87 or newer and Cargo. The build supplies its own
 Protocol Buffers compiler. Build from the repository root:
 
@@ -57,7 +64,7 @@ kcoral server \
 ```
 
 The examples run on one machine. For remote nodes, bind the Router with
-`--host 0.0.0.0` and replace `127.0.0.1` with its reachable address. Give each node
+`--host 0.0.0.0` and replace `127.0.0.1` in the Router URL with its reachable address. Give each node
 a distinct stable `node-id`. The example uses plain HTTP for a controlled
 network; an HTTPS endpoint requires TLS terminated by a compatible proxy.
 The optional token authenticates node streams; it does not provide public

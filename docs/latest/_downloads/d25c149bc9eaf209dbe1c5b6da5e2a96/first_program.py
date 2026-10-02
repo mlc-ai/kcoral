@@ -16,16 +16,16 @@ def add_one(x):
 
 def build_program() -> Program:
     program = Program()
-    module = program.upload(id="module", kind="module", source=SOURCE)
-    add_one = program.get_function(id="add_one", module=module, name="add_one")
-    x = program.upload(id="x", kind="tensor", value=np.arange(4, dtype=np.float32))
-    y = program.run(id="y", fn=add_one, args=[x])
+    module = program.upload(kind="module", source=SOURCE)
+    add_one = program.get_function(module=module, name="add_one")
+    x = program.upload(kind="tensor", value=np.arange(4, dtype=np.float32))
+    y = program.run(fn=add_one, args=[x])
     program.return_(key="output", value=y)
     return program
 
 
 def main() -> None:
-    with Client(os.environ.get("KCORAL_URL", "http://localhost:8000")) as client:
+    with Client(os.environ.get("KCORAL_URL", "http://127.0.0.1:8000")) as client:
         result = client.execute(build_program(), timeout_seconds=30)
     if not result.completed:
         raise SystemExit(f"Program failed: {result.error}")

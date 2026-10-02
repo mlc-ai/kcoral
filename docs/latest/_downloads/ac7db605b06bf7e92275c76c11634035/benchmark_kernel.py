@@ -32,17 +32,17 @@ def evaluate(src):
 
 def build_program() -> Program:
     program = Program()
-    module = program.upload(id="module", kind="module", source=SOURCE)
-    evaluate = program.get_function(id="evaluate", module=module, name="evaluate")
+    module = program.upload(kind="module", source=SOURCE)
+    evaluate = program.get_function(module=module, name="evaluate")
     values = np.arange(256, dtype=np.float32)
-    src = program.upload(id="src", kind="tensor", value=values)
-    report = program.run(id="report", fn=evaluate, args=[src])
+    src = program.upload(kind="tensor", value=values)
+    report = program.run(fn=evaluate, args=[src])
     program.return_(key="report", value=report)
     return program
 
 
 def main() -> None:
-    with Client(os.environ.get("KCORAL_URL", "http://localhost:8000")) as client:
+    with Client(os.environ.get("KCORAL_URL", "http://127.0.0.1:8000")) as client:
         result = client.execute(build_program(), timeout_seconds=120)
     if not result.completed:
         raise SystemExit(f"Benchmark failed: {result.error}")
