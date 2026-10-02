@@ -6,7 +6,10 @@ use serde_json::{json, Value};
 use std::{
     cmp::Ordering,
     collections::{HashMap, VecDeque},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+        Arc, Mutex as StdMutex,
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, Mutex, Notify, Semaphore};
@@ -206,6 +209,9 @@ struct PoolInner {
     state: Mutex<PoolState>,
     notify: Notify,
     queue_slots: Arc<Semaphore>,
+    // Tickets of queued requests in arrival order. Only the front may take a slot.
+    waiters: StdMutex<VecDeque<u64>>,
+    next_ticket: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -229,6 +235,8 @@ impl NodePool {
                     .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
                 state: Mutex::new(PoolState::default()),
                 notify: Notify::new(),
+                waiters: StdMutex::new(VecDeque::new()),
+                next_ticket: AtomicU64::new(0),
             }),
         })
     }
@@ -423,7 +431,20 @@ impl NodePool {
     }
 
     async fn try_acquire(&self, preferred: Option<&str>, request_id: &str) -> Option<SlotGuard> {
+        self.try_acquire_as(preferred, None, request_id).await
+    }
+
+    async fn try_acquire_as(
+        &self,
+        preferred: Option<&str>,
+        ticket: Option<u64>,
+        request_id: &str,
+    ) -> Option<SlotGuard> {
         let mut state = self.inner.state.lock().await;
+        // New arrivals wait behind queued requests, and queued requests go in order.
+        if self.inner.waiters.lock().unwrap().front().copied() != ticket {
+            return None;
+        }
         let now = Instant::now();
         let candidates = state
             .nodes
@@ -474,12 +495,16 @@ impl NodePool {
             .clone()
             .try_acquire_owned()
             .map_err(|_| AcquireError::QueueFull)?;
+        let ticket = QueueTicket::new(self.clone());
         let deadline = tokio::time::Instant::now() + self.inner.config.queue_wait_timeout;
         loop {
             let notified = self.inner.notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if let Some(route) = self.try_acquire(preferred, request_id).await {
+            if let Some(route) = self
+                .try_acquire_as(preferred, Some(ticket.id), request_id)
+                .await
+            {
                 return Ok(route);
             }
             if tokio::time::timeout_at(deadline, notified).await.is_err() {
@@ -506,7 +531,8 @@ impl NodePool {
             node.idle_slots.push_back(slot.slot_id.clone());
         }
         drop(state);
-        self.inner.notify.notify_one();
+        // Wake every waiter so the one at the front of the queue sees the free slot.
+        self.inner.notify.notify_waiters();
     }
 
     pub(super) async fn mark_saturated(&self, node_id: &str) {
@@ -774,6 +800,32 @@ fn apply_failure(config: &RouterConfig, node: &mut Node, error: &str) {
         || matches!(node.status, NodeStatus::Starting | NodeStatus::Recovering)
     {
         node.status = NodeStatus::Unhealthy;
+    }
+}
+
+struct QueueTicket {
+    pool: NodePool,
+    id: u64,
+}
+
+impl QueueTicket {
+    fn new(pool: NodePool) -> Self {
+        let id = pool.inner.next_ticket.fetch_add(1, AtomicOrdering::Relaxed);
+        pool.inner.waiters.lock().unwrap().push_back(id);
+        Self { pool, id }
+    }
+}
+
+impl Drop for QueueTicket {
+    fn drop(&mut self) {
+        // Runs on success, timeout, and cancellation, so a dead waiter never blocks the queue.
+        self.pool
+            .inner
+            .waiters
+            .lock()
+            .unwrap()
+            .retain(|ticket| *ticket != self.id);
+        self.pool.inner.notify.notify_waiters();
     }
 }
 
@@ -1141,6 +1193,41 @@ mod tests {
             Err(AcquireError::TimedOut)
         ));
         assert_eq!(pool.snapshot().await["queue_length"], 0);
+    }
+
+    #[tokio::test]
+    async fn queued_request_is_not_starved_by_later_arrivals() {
+        let mut cfg = config();
+        cfg.queue_wait_timeout = Duration::from_millis(200);
+        let pool = NodePool::new(cfg).unwrap();
+        pool.record_status(None, "control", status("one", true, "cpu"))
+            .await
+            .unwrap();
+        pool.register_slot(slot("one", "only")).await.unwrap();
+
+        let mut holder = pool.acquire(None, "holder").await.unwrap();
+        let queued_pool = pool.clone();
+        let queued = tokio::spawn(async move { queued_pool.acquire(None, "queued").await });
+        while pool.snapshot().await["queue_length"] != 1 {
+            tokio::task::yield_now().await;
+        }
+
+        // Each time the slot frees up, a new request arrives before the queued
+        // request is scheduled. A fair queue hands the slot to the queued request.
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while !queued.is_finished() && Instant::now() < deadline {
+            holder.finish().await;
+            match pool.try_acquire(None, "later").await {
+                Some(next) => holder = next,
+                None => break,
+            }
+            tokio::task::yield_now().await;
+        }
+        let result = queued.await.unwrap();
+        assert!(
+            result.is_ok(),
+            "queued request timed out while later arrivals took the slot"
+        );
     }
 
     #[tokio::test]
