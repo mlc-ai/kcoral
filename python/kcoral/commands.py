@@ -33,9 +33,15 @@ def exec_native_binary(
     search_path = os.pathsep.join([str(Path(sys.executable).parent), os.environ.get("PATH", "")])
     executable = shutil.which(name, path=search_path)
     if executable is None:
+        if sys.platform != "linux":
+            raise SystemExit(
+                f"{name} was not found. Router deployments (`kcoral router` and "
+                "`kcoral server --router`) run only on Linux."
+            )
         raise SystemExit(
-            f"{name} was not found. Build it with `cargo build --release --locked` "
-            "and add target/release to PATH. See the Router deployment guide."
+            f"{name} was not found. Reinstall KCoral with KCORAL_BUILD_RUST=1, or build it "
+            "with `cargo build --release --locked` and add target/release to PATH. See the "
+            "Router deployment guide."
         )
     try:
         os.execve(executable, [executable, *arguments], dict(os.environ) if env is None else env)

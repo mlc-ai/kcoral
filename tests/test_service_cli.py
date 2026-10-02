@@ -212,8 +212,17 @@ def test_native_binary_prefers_current_environment_and_replaces_process(monkeypa
 
 def test_missing_helper_has_installation_instructions(monkeypatch):
     monkeypatch.setattr(commands.shutil, "which", lambda *args, **kwargs: None)
-    with pytest.raises(SystemExit, match="cargo build --release --locked"):
+    monkeypatch.setattr(commands.sys, "platform", "linux")
+    with pytest.raises(SystemExit, match="KCORAL_BUILD_RUST=1") as raised:
         commands.exec_native_binary("kcoral-node", [])
+    assert "cargo build --release --locked" in str(raised.value)
+
+
+def test_missing_helper_outside_linux_says_routers_need_linux(monkeypatch):
+    monkeypatch.setattr(commands.shutil, "which", lambda *args, **kwargs: None)
+    monkeypatch.setattr(commands.sys, "platform", "darwin")
+    with pytest.raises(SystemExit, match="run only on Linux"):
+        commands.exec_native_binary("kcoral-router", [])
 
 
 def _binary_dir():
