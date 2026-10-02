@@ -26,11 +26,11 @@ WORKDIR /workspace/kcoral
 # Install locked third-party dependencies in a layer unaffected by source edits.
 COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-install-project --group gpu --group test
+    uv sync --locked --no-install-project --group server --group test
 
 COPY python ./python
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --group gpu --group test
+    uv sync --locked --group server --group test
 
 ENV KCORAL_SERVER_HOST=0.0.0.0
 

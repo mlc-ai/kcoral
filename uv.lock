@@ -623,9 +623,6 @@ server = [
 ]
 
 [package.dev-dependencies]
-gpu = [
-    { name = "kcoral", extra = ["server"], marker = "sys_platform == 'linux'" },
-]
 server = [
     { name = "kcoral", extra = ["server"], marker = "sys_platform == 'linux'" },
 ]
@@ -653,7 +650,6 @@ requires-dist = [
 provides-extras = ["server"]
 
 [package.metadata.requires-dev]
-gpu = [{ name = "kcoral", extras = ["server"] }]
 server = [{ name = "kcoral", extras = ["server"] }]
 test = [
     { name = "kcoral", extras = ["server"] },

@@ -39,8 +39,6 @@ test = [
   "kcoral[server]", # the suite exercises the server
   "pytest>=8",
 ]
-# Keep existing checkout commands working; runtime requirements live in the extra.
-gpu = ["kcoral[server]"]
 
 [tool.uv]
 environments = ["sys_platform == 'linux'"]
