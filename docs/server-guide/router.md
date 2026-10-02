@@ -1,5 +1,9 @@
 # Launch the router
 
+```{note}
+Routed deployments are currently supported only on Linux.
+```
+
 The Router gives clients a stable address for a changing pool of compute nodes.
 Instead of connecting to individual machines, clients send programs to the
 Router, which selects an available node for each request. You can add capacity,
@@ -11,9 +15,9 @@ machines doing the work.
 
 Install the [KCoral package](../getting-started/installation.md) on the Router
 host and the [server environment](../getting-started/installation.md#install-the-server)
-on each compute node. Use the same KCoral version across the deployment. Prebuilt
-packages include the required Rust binaries. Installing from source with `pip`
-builds them automatically; no separate Cargo command is needed.
+on each compute node. Use the same KCoral version across the deployment.
+Prebuilt packages include the Router and node supervisor; when installing from
+source, build them with `KCORAL_BUILD_RUST=1` (see [Install in editable mode](../getting-started/installation.md#install-in-editable-mode)).
 
 ```{warning}
 KCoral allows clients to execute arbitrary code on its workers. Only allow
