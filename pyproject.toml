@@ -40,9 +40,6 @@ test = [
   "pytest>=8",
 ]
 
-[tool.uv]
-environments = ["sys_platform == 'linux'"]
-
 [tool.setuptools.packages.find]
 where = ["python"]
 include = ["kcoral*"]
