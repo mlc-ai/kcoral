@@ -83,7 +83,7 @@ Program.return_file(key=..., path=...) -> None    # str or Register resolving to
 Program.return_folder(key=..., path=...) -> None  # str or Register resolving to str
 
 Client(base_url, *, headers=None, connect_timeout_seconds=10)
-Client.execute(program, *, timeout_seconds=None, output_limit_bytes=None) -> ProgramResult
+Client.execute(program, *, timeout_seconds=None, output_limit_bytes=None, gpu_count=None) -> ProgramResult
 Client.health() -> dict
 Client.target() -> dict   # e.g. {"arch": "sm_100a"}
 Client.close() -> None
@@ -173,6 +173,17 @@ other JSON values pass as literals.
 the response `results` object. A `return` that already ran keeps its entry
 even if a later instruction fails, so returning early checkpoints partial
 work.
+
+## Multi-GPU programs
+
+Use `Client.execute(program, gpu_count=N)` for 1–8 GPUs on one direct server.
+Upload definitions and files, select an entry point with `get_function`, then
+execute with `run`. Single- and multi-GPU workers share instruction-level leasing:
+`cpu_only` synchronizes and releases the entire set, and later GPU instructions
+reacquire the same devices. The script owns communication and must join GPU
+subprocesses before returning. Spawn workers need an importable `.py` file.
+Do not mark a GPU launcher CPU-only. See the [two single-file examples](../../../docs/client-guide/writing-a-program.md#run-a-multi-gpu-program)
+and [execution protocol](../../../docs/client-guide/protocol.md#multi-gpu-execution).
 
 ## Compilation and measurement helpers
 

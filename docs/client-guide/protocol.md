@@ -98,10 +98,11 @@ and non-finite numbers such as NaN and Infinity.
 
 **Options**
 
-Both `options` fields are optional. Values above either maximum are clamped to it.
+All `options` fields are optional. Timeout and output limits above their maxima are clamped.
 
 | Field | Type | Default | Meaning and limit |
 | --- | --- | --- | --- |
+| `gpu_count` | integer | omitted | Use 1–8 GPUs with instruction-level leasing; omission uses a single GPU |
 | `timeout_seconds` | number | `300` | Worker execution deadline; maximum `900` |
 | `output_limit_bytes` | integer | `1048576` | Maximum bytes returned for each of stdout and stderr; maximum `16777216`; `0` disables capture |
 
@@ -420,6 +421,36 @@ To return a folder whose path is held in an earlier register:
 | Failures | Missing paths, wrong types, invalid runtime paths, read failures, and collection limits fail that return with `serialization`. Failed returns add no result or binary parts; earlier returns survive ordinary instruction failures. |
 | Size limit | Contents are buffered in the response and count against `max_response_bytes` (default 256 MiB). `output_limit_bytes` controls only stdout/stderr. |
 
+## Multi-GPU execution
+
+Set `options.gpu_count` to an integer from 1 through 8 to run the program
+**once** on that many GPUs. `CUDA_VISIBLE_DEVICES` exposes the assigned set as
+logical devices `0` through `gpu_count - 1`; the response's `gpu_ids` reports
+physical devices. The script owns process creation, communication, and
+synchronization. KCoral does not broadcast instructions or create a communication
+group. Registers belong to the request's interpreter.
+
+Single- and multi-GPU programs use the same worker and instruction-level leasing.
+Before a GPU instruction, the worker acquires its complete device set atomically.
+Before `cpu_only` execution it synchronizes all devices and releases the set;
+a later GPU instruction reacquires the **same** devices. Waiting for devices
+does not count against the execution timeout. Releasing a lease permits other
+requests to use the GPUs; it does not move or discard this program's tensors.
+GPU subprocesses must finish before their `run` returns. Do not mark a GPU
+launcher CPU-only.
+
+On timeout or crash, the worker cleans up its process tree before abandoning
+its leases. Unverified cleanup makes the affected devices unavailable. Normal
+interpreter teardown remains within the execution deadline; leftover descendants
+are terminated and fail the request. Shutdown cancels queued allocations and
+drains running requests.
+
+Explicit `gpu_count` requests use a fresh worker with the assigned set;
+omitting the option uses the configured single-GPU workers. This option requires
+Linux and a direct connection to a GPU server; the router does not select by GPU
+count. Counts exceeding server capacity, or requests to a CPU server, fail with
+HTTP 400. See [multi-GPU examples](writing-a-program.md#run-a-multi-gpu-program).
+
 ## Caching
 
 | Property | Memory cache | File cache |
@@ -492,6 +523,8 @@ body described under [Errors](#errors) instead.
 | `elapsed_ms` | number | run | Worker execution and serialization time |
 | `lease_wait_ms` | number | run | Waiting for the GPU another worker held |
 | `lease_held_ms` | number | run | Holding the GPU — the request's GPU time |
+| `gpu_ids` | array of integers | GPU job | Allocated physical devices, in logical-device order |
+| `gpu_count` | integer | GPU job | Number of allocated devices |
 | `results` | object | run | Entries for every `return` that ran; may be empty |
 | `error` | object | `FAILED` | See [Errors](#errors) |
 | `missing_blobs` | array | `CACHE_MISS` | Blob hashes the server does not hold |

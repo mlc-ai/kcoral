@@ -26,8 +26,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .events import EventLogger
-from .lease import GPULeases, NoopLeases, Ticket
-from .worker import Worker, WorkerCrashed, WorkerTimeout
+from .lease import GPULeases, GPUUnavailable, NoopLeases, Ticket
+from .worker import (
+    Worker,
+    WorkerCleanupError,
+    WorkerCrashed,
+    WorkerTimeout,
+)
 
 
 class IdleWorkers:
@@ -122,6 +127,7 @@ class SubmitOutcome:
     worker_id: str = ""
     finish_reason: str = "completed"
     interfered_request_id: str | None = None  # who held the GPU when a cpu_only call touched it
+    gpu_ids: tuple[int, ...] = ()
 
 
 class WorkerPool:
@@ -147,6 +153,8 @@ class WorkerPool:
             raise ValueError("a worker pool cannot mix CPU and GPU workers")
         if not gpus and cpu_workers is None:
             raise ValueError("a GPU worker pool needs at least one GPU")
+        self._factory = runtime_factory
+        self._termination_grace_seconds = termination_grace_seconds
         self._events = events or EventLogger(None)
         capture_dir = self._events.subdir("output")
         # (device, index) pairs: the index names a worker within its device, so a
@@ -162,6 +170,7 @@ class WorkerPool:
         self._shutdown_lock = threading.Lock()
         self._shutdown_done = False
         self._workers = []
+        self._transient_workers: set[Worker] = set()
         try:
             for device, index in devices:
                 self._workers.append(
@@ -195,6 +204,9 @@ class WorkerPool:
         worker_wait_timeout: float = 0.0,
         request_id: str | None = None,
     ) -> SubmitOutcome:
+        gpu_count = program.options.get("gpu_count")
+        if gpu_count is not None and not 1 <= gpu_count <= min(8, len(self._gpus)):
+            raise ValueError("gpu_count exceeds this GPU server's configured capacity")
         with self._condition:
             if self._closing.is_set():
                 raise PoolBusy("server is shutting down")
@@ -208,19 +220,60 @@ class WorkerPool:
                 self._idle.release(worker)
                 raise PoolBusy("server is shutting down", queue_ms=queue_ms)
             self._active += 1
-        self._events.emit(
-            "request_routed",
-            request_id=request_id,
-            worker_id=worker.worker_id,
-            gpu_id=worker.gpu_id,
-            generation=worker.generation,
-            pid=worker.pid,
-            queue_ms=queue_ms,
-        )
         run_started = time.monotonic()
         retire_reason = None
+        cleanup_failed = False
+        slot = worker
+        gpu_ids = ()
+        initial_wait_ms = initial_held_ms = 0.0
         worker.request_id = request_id
         try:
+            if gpu_count is not None:
+                allocation = self._leases.acquire_count(gpu_count, slot, cancelled=self._closing)
+                if allocation is None:
+                    raise PoolBusy("server is shutting down", queue_ms)
+                gpu_ids, initial_wait_ms = allocation
+                initialized_at = time.monotonic()
+                try:
+                    if self._closing.is_set():
+                        raise PoolBusy("server is shutting down", queue_ms)
+                    worker = Worker(
+                        gpu_ids,
+                        self._factory,
+                        spawn_timeout=min(60, timeout),
+                        max_requests=1,
+                        termination_grace_seconds=self._termination_grace_seconds,
+                        events=self._events,
+                        capture_dir=slot._capture_dir,
+                        sandbox=slot._sandbox_mode,
+                        sandbox_readonly_paths=slot._sandbox_readonly_paths,
+                        start=False,
+                    )
+                    with self._condition:
+                        self._transient_workers.add(worker)
+                        if self._closing.is_set():
+                            worker.begin_shutdown()
+                    worker._spawn()
+                    worker.request_id = request_id
+                except WorkerCleanupError:
+                    self._leases.quarantine(gpu_ids)
+                    raise
+                finally:
+                    initial_held_ms = (time.monotonic() - initialized_at) * 1000
+                    self._leases.release_many(gpu_ids, slot)
+                timeout -= initial_held_ms / 1000
+                if timeout <= 0:
+                    raise WorkerTimeout("worker initialization exceeded the execution timeout")
+            self._events.emit(
+                "request_routed",
+                request_id=request_id,
+                worker_id=worker.worker_id,
+                gpu_id=worker.gpu_id,
+                gpu_ids=list(worker.gpu_ids),
+                generation=worker.generation,
+                pid=worker.pid,
+                queue_ms=queue_ms,
+            )
             result = worker.run(program, timeout, self._leases)
             retire_reason = result.retire_reason
             return SubmitOutcome(
@@ -228,36 +281,64 @@ class WorkerPool:
                 worker.gpu_id,
                 queue_ms,
                 (time.monotonic() - run_started) * 1000,
-                result.lease_wait_ms,
-                result.lease_held_ms,
+                initial_wait_ms + result.lease_wait_ms,
+                initial_held_ms + result.lease_held_ms,
                 worker.worker_id,
                 result.finish_reason,
                 self._interfered_request(worker, result.execution, request_id),
+                gpu_ids,
             )
+        except WorkerCleanupError:
+            cleanup_failed = True
+            self._leases.quarantine(gpu_ids or worker.gpu_ids)
+            self.begin_shutdown()
+            raise
+        except GPUUnavailable as exc:
+            raise PoolBusy(str(exc), queue_ms) from exc
         except (WorkerTimeout, WorkerCrashed) as exc:
             exc.worker_id = worker.worker_id
             exc.gpu_id = worker.gpu_id
+            exc.gpu_ids = gpu_ids
+            exc.lease_wait_ms = initial_wait_ms + getattr(exc, "lease_wait_ms", 0.0)
+            exc.lease_held_ms = initial_held_ms + getattr(exc, "lease_held_ms", 0.0)
             exc.queue_ms = queue_ms
             exc.elapsed_ms = (time.monotonic() - run_started) * 1000
             raise
         finally:
-            self._leases.abandon(worker.gpu_id, worker)  # no-op unless it still holds
-            worker.request_id = None
             try:
-                self._release_or_replace(worker, retire_reason)
+                if worker is not slot:
+                    if not cleanup_failed:
+                        worker._kill_with_gpu_lease(self._leases)
+                    worker.close()
+                    with self._condition:
+                        self._transient_workers.discard(worker)
+            except WorkerCleanupError:
+                self._leases.quarantine(worker.gpu_ids)
+                self.begin_shutdown()
+                raise
             finally:
-                with self._condition:
-                    self._active -= 1
-                    if self._closing.is_set():
-                        self._events.emit("shutdown_waiting", remaining=self._active)
-                    self._condition.notify_all()
+                self._leases.abandon(worker._lease_key, worker)
+                worker.request_id = slot.request_id = None
+                try:
+                    if worker is slot:
+                        self._release_or_replace(slot, retire_reason)
+                    else:
+                        self._idle.release(slot)
+                finally:
+                    with self._condition:
+                        self._active -= 1
+                        if self._closing.is_set():
+                            self._events.emit("shutdown_waiting", remaining=self._active)
+                        self._condition.notify_all()
 
     def _interfered_request(self, worker: Worker, execution, request_id: str | None) -> str | None:
         """The request holding the GPU when this one's ``cpu_only`` call touched it."""
         error = getattr(execution, "error", None)
         if not isinstance(error, dict) or error.get("kind") != "gpu_access":
             return None
-        holder = self._leases.request_at(worker.gpu_id, error.pop("detected_at_ns"))
+        detected_at = error.pop("detected_at_ns")
+        holders = {self._leases.request_at(gpu, detected_at) for gpu in worker.gpu_ids}
+        holder = holders.pop() if len(holders) == 1 else None
         return None if holder == request_id else holder  # its own release may reach us late
 
     def _release_or_replace(self, worker: Worker, retire_reason: str | None) -> None:
@@ -291,6 +372,9 @@ class WorkerPool:
                 return
             worker.replace(self._leases, reason)
         except Exception as exc:
+            if isinstance(exc, WorkerCleanupError):
+                self._leases.quarantine(worker.gpu_ids)
+                self.begin_shutdown()
             if self._closing.is_set():
                 return
             # A respawn that failed leaves a dead worker; the next run revives
@@ -393,7 +477,7 @@ class WorkerPool:
                 return
             self._closing.set()
             self._idle.close()
-            for worker in self._workers:
+            for worker in [*self._workers, *self._transient_workers]:
                 worker.begin_shutdown()
             self._events.emit("shutdown_started", remaining=self._active)
 
@@ -411,5 +495,8 @@ class WorkerPool:
                 thread.join()
             for worker in self._workers:
                 worker.close()
+            for worker in list(self._transient_workers):
+                worker.close()
+                self._transient_workers.remove(worker)
             self._shutdown_done = True
             self._events.emit("shutdown_complete")

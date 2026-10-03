@@ -187,16 +187,19 @@ class GPURuntime:
 
         # Do not hide a poisoned context. The engine preserves the request's
         # instruction error while the parent replaces this worker process.
-        torch.cuda.synchronize()
+        for device in range(torch.cuda.device_count()):
+            torch.cuda.synchronize(device)
 
     def prepare_to_release_gpu(self) -> None:
         """Release unused allocator cache so peers need not wait for final cleanup."""
         import torch
 
         self.synchronize()
-        if torch.cuda.memory_reserved() > torch.cuda.memory_allocated():
-            torch.cuda.empty_cache()
-            self.synchronize()
+        for device in range(torch.cuda.device_count()):
+            with torch.cuda.device(device):
+                if torch.cuda.memory_reserved() > torch.cuda.memory_allocated():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize(device)
 
     def take_last_error(self) -> str | None:
         """Consume CUDA's thread-local last error, if one is pending.
@@ -226,8 +229,10 @@ class GPURuntime:
             gc.collect()
         # CUDA errors are sticky within a process. Surface one so the parent can
         # replace this worker instead of returning its context to the pool.
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
+        self.synchronize()
+        for device in range(torch.cuda.device_count()):
+            with torch.cuda.device(device):
+                torch.cuda.empty_cache()
         if self._cupti_guard_used:
             # Unsubscribe stops callbacks but leaves CUPTI helper threads alive.
             # Finalize only after GPU work is drained.

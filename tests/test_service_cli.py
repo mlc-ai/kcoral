@@ -428,18 +428,30 @@ def test_public_server_runs_directly_or_supervises_a_routed_node(tmp_path, route
             _wait(recovered)
             assert "restarting KCoral Server" in server_log.read_text()
         else:
-            # CPU workers are children of the serving Python process itself.
+            # Each worker has a Python supervisor that is a direct child of
+            # the serving process; standalone mode adds no routed-node launcher.
             identity = Program()
             module = identity.upload(
                 id="identity",
                 kind="module",
-                source="import os\ndef parent():\n    return os.getppid()\n",
+                source="""
+import os
+from pathlib import Path
+
+def parent():
+    supervisor = os.getppid()
+    status = Path(f"/proc/{supervisor}/status").read_text().splitlines()
+    serving = next(line.split()[1] for line in status if line.startswith("PPid:"))
+    return [supervisor, int(serving)]
+""",
             )
             fn = identity.get_function(id="parent", module=module, name="parent")
             result = identity.run(id="pid", fn=fn)
             identity.return_(key="pid", value=result)
             with Client(url) as client:
-                assert client.execute(identity).results["pid"] == server.pid
+                supervisor, serving = client.execute(identity).results["pid"]
+            assert supervisor != server.pid
+            assert serving == server.pid
             assert "KCoral Server child" not in server_log.read_text()
         # A normal stop must finish accepted work even when it takes longer
         # than the grace period used for unhealthy-service restarts.

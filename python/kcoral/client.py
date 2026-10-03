@@ -431,6 +431,7 @@ class ProgramResult:
     stdout_truncated: bool
     stderr_truncated: bool
     error: dict[str, Any] | None = None
+    gpu_ids: tuple[int, ...] = ()
 
     @property
     def completed(self) -> bool:
@@ -521,11 +522,15 @@ class Client:
         program: Program,
         *,
         timeout_seconds: float | None = None,
+        gpu_count: int | None = None,
         output_limit_bytes: int | None = None,
     ) -> ProgramResult:
         """Submit a program and decode the values it explicitly returns.
 
         :param program: Program built with the client-side :class:`Program`.
+        :param gpu_count: Run once on 1-8 GPUs. CPU-only calls release the complete
+            set after synchronization; later GPU instructions reacquire it.
+            Omit to use the configured single-GPU workers.
         :param timeout_seconds: Requested execution limit in seconds; ``None``
             uses the server default. The server clamps it to its configured maximum.
         :param output_limit_bytes: Requested captured output limit per stream;
@@ -545,6 +550,14 @@ class Client:
         if not isinstance(program, Program):
             raise TypeError("execute expects a Program")
         options: dict[str, Any] = {}
+        if gpu_count is not None:
+            if (
+                isinstance(gpu_count, bool)
+                or not isinstance(gpu_count, int)
+                or not 1 <= gpu_count <= 8
+            ):
+                raise ValueError("gpu_count must be an integer between 1 and 8")
+            options["gpu_count"] = gpu_count
         if timeout_seconds is not None:
             options["timeout_seconds"] = timeout_seconds
         if output_limit_bytes is not None:
@@ -874,6 +887,22 @@ def _parse_program_result(body: dict[str, Any], binary_parts: dict[str, bytes]) 
         if not isinstance(stdout_truncated, bool) or not isinstance(stderr_truncated, bool):
             raise ValueError("output truncation flags must be booleans")
 
+        if ("gpu_ids" in body) != ("gpu_count" in body):
+            raise ValueError("gpu_ids and gpu_count must be reported together")
+        gpu_ids = body.get("gpu_ids", [])
+        if not isinstance(gpu_ids, list) or any(
+            isinstance(gpu, bool) or not isinstance(gpu, int) or gpu < 0 for gpu in gpu_ids
+        ):
+            raise ValueError("gpu_ids must be a list of device indices")
+        if len(set(gpu_ids)) != len(gpu_ids) or len(gpu_ids) > 8:
+            raise ValueError("gpu_ids must contain at most eight distinct devices")
+        if "gpu_count" in body and (
+            isinstance(body["gpu_count"], bool)
+            or not isinstance(body["gpu_count"], int)
+            or body["gpu_count"] != len(gpu_ids)
+            or not gpu_ids
+        ):
+            raise ValueError("gpu_count must match gpu_ids")
         used_parts: set[str] = set()
         # A FAILED program still reports every return that ran before the failure.
         encoded_results = body["results"]
@@ -911,6 +940,7 @@ def _parse_program_result(body: dict[str, Any], binary_parts: dict[str, bytes]) 
         stdout_truncated=stdout_truncated,
         stderr_truncated=stderr_truncated,
         error=error,
+        gpu_ids=tuple(gpu_ids),
     )
 
 
