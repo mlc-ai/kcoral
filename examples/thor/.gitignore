@@ -1,0 +1,3 @@
+# Agent workspace and benchmark output are per-run artifacts.
+work/
+results/

@@ -1,0 +1,4 @@
+{"definition":"thor_fp16_gemm","solution":null,"workload":{"uuid":"m2048-n2048-k2048","axes":{"M":2048,"N":2048,"K":2048},"inputs":{"A":{"type":"random"},"B":{"type":"random"}}},"evaluation":null}
+{"definition":"thor_fp16_gemm","solution":null,"workload":{"uuid":"m4096-n4096-k4096","axes":{"M":4096,"N":4096,"K":4096},"inputs":{"A":{"type":"random"},"B":{"type":"random"}}},"evaluation":null}
+{"definition":"thor_fp16_gemm","solution":null,"workload":{"uuid":"m2048-n11008-k4096","axes":{"M":2048,"N":11008,"K":4096},"inputs":{"A":{"type":"random"},"B":{"type":"random"}}},"evaluation":null}
+{"definition":"thor_fp16_gemm","solution":null,"workload":{"uuid":"m2048-n4096-k11008","axes":{"M":2048,"N":4096,"K":11008},"inputs":{"A":{"type":"random"},"B":{"type":"random"}}},"evaluation":null}
