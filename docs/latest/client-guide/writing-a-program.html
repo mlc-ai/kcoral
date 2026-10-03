@@ -3,7 +3,7 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Builtin CLI Tools" href="builtin-cli-tools.html"><link rel="prev" title="KCoral Protocol" href="protocol.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Builtin CLI Tools" href="builtin-cli-tools.html"><link rel="prev" title="Remote functions" href="remote-functions.html">
         <link rel="canonical" href="https://kcoral.mlc.ai/docs/latest/client-guide/writing-a-program.html">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-light.png" as="image">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-dark.png" as="image">
@@ -231,6 +231,7 @@
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
 <ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="remote-functions.html">Remote functions</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Write a client program</a></li>
 <li class="toctree-l1"><a class="reference internal" href="builtin-cli-tools.html">Builtin CLI Tools</a></li>
 </ul>
@@ -323,6 +324,19 @@ to run, and the results to return. You build the program locally, send it to the
 server, and receive the results after the server executes its instructions in
 order. The <a class="reference internal" href="../getting-started/quickstart.html"><span class="std std-doc">first GPU program</span></a> walks through
 this workflow with a complete runnable example.</p>
+<section id="preparation">
+<h2>Preparation<a class="headerlink" href="#preparation" title="Link to this heading">¶</a></h2>
+<p>Before submitting a program, <a class="reference internal" href="../getting-started/installation.html#install-the-server"><span class="std std-ref">install the server</span></a>
+on a Linux machine with an NVIDIA GPU and a compatible driver, then start it:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>server<span class="w"> </span>--device<span class="w"> </span>gpu<span class="w"> </span>--gpus<span class="w"> </span><span class="m">0</span><span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+</pre></div>
+</div>
+<p>Wait for <code class="docutils literal notranslate"><span class="pre">Application</span> <span class="pre">startup</span> <span class="pre">complete.</span></code> and leave the server running on a
+trusted network accessible only to trusted clients. When connecting from
+another machine, replace <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code> in the examples below with the server’s
+reachable hostname or IP address. For details, see
+<a class="reference internal" href="../server-guide/launch-the-server.html"><span class="std std-doc">Launch the server</span></a>.</p>
+</section>
 <section id="build-programs-with-instructions">
 <h2>Build programs with instructions<a class="headerlink" href="#build-programs-with-instructions" title="Link to this heading">¶</a></h2>
 <p>A program is a sequence of instructions that one worker on the server executes
@@ -477,39 +491,6 @@ These metrics can help distinguish a busy server or GPU from a slow program.
 They describe the request as a whole; use the measurements from your benchmark
 harness or profiler to assess the kernel’s execution time.</p>
 </section>
-<section id="call-remote-functions">
-<h3>Call remote functions<a class="headerlink" href="#call-remote-functions" title="Link to this heading">¶</a></h3>
-<p>KCoral also provides <code class="docutils literal notranslate"><span class="pre">&#64;client.function()</span></code> to run a Python function on the server
-without building a program by hand. In this example, <code class="docutils literal notranslate"><span class="pre">gpu_sum.remote(4)</span></code> creates
-the values 0 through 3 on the server’s GPU, adds them, and returns <code class="docutils literal notranslate"><span class="pre">6</span></code>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">kcoral</span><span class="w"> </span><span class="kn">import</span> <span class="n">Client</span>
-
-<span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="s2">"http://127.0.0.1:8000"</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
-
-    <span class="nd">@client</span><span class="o">.</span><span class="n">function</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">gpu_sum</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
-        <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
-
-        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
-
-    <span class="nb">print</span><span class="p">(</span><span class="n">gpu_sum</span><span class="o">.</span><span class="n">remote</span><span class="p">(</span><span class="mi">4</span><span class="p">))</span>  <span class="c1"># 6</span>
-</pre></div>
-</div>
-<p>The decorated function must be self-contained. When writing one:</p>
-<ul class="simple">
-<li><p>Define it in a Python file so the client can read its source.</p></li>
-<li><p>Import dependencies inside the function and install them on the server.</p></li>
-<li><p>Pass inputs as arguments; the function cannot use variables from the surrounding
-scope or global variables defined outside it.</p></li>
-<li><p>Use <code class="docutils literal notranslate"><span class="pre">.remote()</span></code> to run it on the server and receive its return value. An ordinary
-call such as <code class="docutils literal notranslate"><span class="pre">gpu_sum(4)</span></code> runs locally.</p></li>
-</ul>
-<p>Each remote call is an independent request. <code class="docutils literal notranslate"><span class="pre">.remote()</span></code> raises an exception if
-the remote execution fails. See the <a class="reference internal" href="../python-api/index.html"><span class="std std-doc">Python API</span></a> for
-supported argument types, restrictions, and other ways to invoke the function.
-For a complete example that uploads a tensor, adds one on the GPU, and returns a
-NumPy array, <a class="reference download internal" download="" href="../_downloads/b9a1f3d3b6e2589d5eb247ee57f32d4a/remote_function.py"><code class="xref download docutils literal notranslate"><span class="pre">download</span> <span class="pre">remote_function.py</span></code></a>.</p>
-</section>
 </section>
 <section id="work-with-tensors-and-files">
 <h2>Work with tensors and files<a class="headerlink" href="#work-with-tensors-and-files" title="Link to this heading">¶</a></h2>
@@ -652,14 +633,14 @@ method signatures or the underlying request and response formats.</p></li>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="protocol.html">
+          <a class="prev-page" href="remote-functions.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">KCoral Protocol</div>
+                <div class="title">Remote functions</div>
                 
               </div>
             </a>
@@ -691,11 +672,11 @@ method signatures or the underlying request and response formats.</p></li>
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">Write a client program</a><ul>
+<li><a class="reference internal" href="#preparation">Preparation</a></li>
 <li><a class="reference internal" href="#build-programs-with-instructions">Build programs with instructions</a></li>
 <li><a class="reference internal" href="#create-a-client-and-submit-programs">Create a client and submit programs</a><ul>
 <li><a class="reference internal" href="#submit-a-simple-program">Submit a simple program</a></li>
 <li><a class="reference internal" href="#read-results">Read results</a></li>
-<li><a class="reference internal" href="#call-remote-functions">Call remote functions</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#work-with-tensors-and-files">Work with tensors and files</a><ul>
@@ -716,7 +697,7 @@ method signatures or the underlying request and response formats.</p></li>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=8837ea72"></script>
+</div><script src="../_static/documentation_options.js?v=03e946e1"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

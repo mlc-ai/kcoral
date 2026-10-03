@@ -3,7 +3,7 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Write a client program" href="writing-a-program.html"><link rel="prev" title="Your First Program" href="../getting-started/quickstart.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Remote functions" href="remote-functions.html"><link rel="prev" title="Your First Program" href="../getting-started/quickstart.html">
         <link rel="canonical" href="https://kcoral.mlc.ai/docs/latest/client-guide/protocol.html">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-light.png" as="image">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-dark.png" as="image">
@@ -231,6 +231,7 @@
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
 <ul>
+<li class="toctree-l1"><a class="reference internal" href="remote-functions.html">Remote functions</a></li>
 <li class="toctree-l1"><a class="reference internal" href="writing-a-program.html">Write a client program</a></li>
 <li class="toctree-l1"><a class="reference internal" href="builtin-cli-tools.html">Builtin CLI Tools</a></li>
 </ul>
@@ -323,90 +324,6 @@ This page describes a direct server. The <a class="reference internal" href="../
 the execution protocol while adding node selection and routing metadata.</p>
 <section id="endpoints">
 <h2>Endpoints<a class="headerlink" href="#endpoints" title="Link to this heading">¶</a></h2>
-<section id="get-health">
-<h3>GET /health<a class="headerlink" href="#get-health" title="Link to this heading">¶</a></h3>
-<p>Read endpoint health, request load, and the compilation environment.</p>
-<div class="highlight-http notranslate"><div class="highlight"><pre><span></span><span class="nf">GET</span> <span class="nn">/health</span> <span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span>
-<span class="na">Host</span><span class="o">:</span> <span class="l">127.0.0.1:8000</span>
-</pre></div>
-</div>
-<p>Example response from a GPU server with two workers:</p>
-<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ok"</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">"instance_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"09dc4eaa-a8b1-46cf-b5fb-a3448dcd7ca6"</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">"started_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-29T18:42:11.019012Z"</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">"gpu_count"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">"load"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">"request_capacity"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">"requests_in_progress"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">"requests_waiting"</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span>
-<span class="w">  </span><span class="p">},</span>
-<span class="w">  </span><span class="nt">"target"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"arch"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sm_100a"</span><span class="p">},</span>
-<span class="w">  </span><span class="nt">"versions"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"torch"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2.14.0+cu132"</span><span class="p">,</span><span class="w"> </span><span class="nt">"cuda"</span><span class="p">:</span><span class="w"> </span><span class="s2">"13.2"</span><span class="p">,</span><span class="w"> </span><span class="nt">"tvm_ffi"</span><span class="p">:</span><span class="w"> </span><span class="s2">"0.1.13.post2"</span><span class="p">}</span>
-<span class="p">}</span>
-</pre></div>
-</div>
-<p>Version strings above are illustrative; use the values returned by your server.</p>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Field</p></th>
-<th class="head"><p>Type</p></th>
-<th class="head"><p>Meaning</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">status</span></code></p></td>
-<td><p>string</p></td>
-<td><p>Direct server: <code class="docutils literal notranslate"><span class="pre">ok</span></code> when the handler responds. Router: <code class="docutils literal notranslate"><span class="pre">ok</span></code> when a ready node has connected execution resources, otherwise <code class="docutils literal notranslate"><span class="pre">unavailable</span></code> with HTTP 503</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">instance_id</span></code></p></td>
-<td><p>string</p></td>
-<td><p>Changes on each endpoint restart</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">started_at</span></code></p></td>
-<td><p>string</p></td>
-<td><p>Endpoint startup time in UTC (RFC 3339)</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">gpu_count</span></code></p></td>
-<td><p>integer or null</p></td>
-<td><p>Configured GPUs; <code class="docutils literal notranslate"><span class="pre">0</span></code> on CPU servers; <code class="docutils literal notranslate"><span class="pre">null</span></code> on routers</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">load.request_capacity</span></code></p></td>
-<td><p>integer</p></td>
-<td><p>Serviceable request capacity, occupied and free</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">load.requests_in_progress</span></code></p></td>
-<td><p>integer</p></td>
-<td><p>Assigned requests, including compilation, GPU waiting, and cleanup</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">load.requests_waiting</span></code></p></td>
-<td><p>integer</p></td>
-<td><p>Requests awaiting assignment at this endpoint</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">target</span></code></p></td>
-<td><p>object</p></td>
-<td><p>Compilation target, including <code class="docutils literal notranslate"><span class="pre">arch</span></code> on a GPU server; empty on a CPU server</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">versions</span></code></p></td>
-<td><p>object</p></td>
-<td><p>Runtime and toolchain version strings</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>Direct-server capacity counts workers, excluding background replacements, and
-becomes zero during shutdown. Router capacity counts execution connections on
-eligible nodes; its request counts cover submissions through that router.</p>
-<p>Counts can change before submission. During recovery or cleanup, in-progress
-requests may exceed capacity. Assigned requests can wait for GPU access even
-when <code class="docutils literal notranslate"><span class="pre">requests_waiting</span></code> is zero.</p>
-<p>On the router, <code class="docutils literal notranslate"><span class="pre">instance_id</span></code> and <code class="docutils literal notranslate"><span class="pre">started_at</span></code> describe the router process.
-SIGTERM or Ctrl+C starts graceful shutdown.</p>
-<p>A CPU compilation server has an empty compilation target. Read the target from
-the GPU server and supply it when compiling on a CPU server. Workers on one GPU
-server must agree on the target; the server rejects a mixed-target pool.</p>
-</section>
 <section id="post-execute">
 <h3>POST /execute<a class="headerlink" href="#post-execute" title="Link to this heading">¶</a></h3>
 <p>Submit one program. The request body uses <code class="docutils literal notranslate"><span class="pre">multipart/form-data</span></code> with a JSON
@@ -508,6 +425,90 @@ and non-finite numbers such as NaN and Infinity.</p>
 </table>
 </div>
 <p>See <a class="reference internal" href="#response">Response</a> for HTTP statuses, result fields, and value encodings.</p>
+</section>
+<section id="get-health">
+<h3>GET /health<a class="headerlink" href="#get-health" title="Link to this heading">¶</a></h3>
+<p>Read endpoint health, request load, and the compilation environment.</p>
+<div class="highlight-http notranslate"><div class="highlight"><pre><span></span><span class="nf">GET</span> <span class="nn">/health</span> <span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span>
+<span class="na">Host</span><span class="o">:</span> <span class="l">127.0.0.1:8000</span>
+</pre></div>
+</div>
+<p>Example response from a GPU server with two workers:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ok"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"instance_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"09dc4eaa-a8b1-46cf-b5fb-a3448dcd7ca6"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"started_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-29T18:42:11.019012Z"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"gpu_count"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"load"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"request_capacity"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"requests_in_progress"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"requests_waiting"</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"target"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"arch"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sm_100a"</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"versions"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"torch"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2.14.0+cu132"</span><span class="p">,</span><span class="w"> </span><span class="nt">"cuda"</span><span class="p">:</span><span class="w"> </span><span class="s2">"13.2"</span><span class="p">,</span><span class="w"> </span><span class="nt">"tvm_ffi"</span><span class="p">:</span><span class="w"> </span><span class="s2">"0.1.13.post2"</span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Version strings above are illustrative; use the values returned by your server.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Field</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Meaning</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">status</span></code></p></td>
+<td><p>string</p></td>
+<td><p>Direct server: <code class="docutils literal notranslate"><span class="pre">ok</span></code> when the handler responds. Router: <code class="docutils literal notranslate"><span class="pre">ok</span></code> when a ready node has connected execution resources, otherwise <code class="docutils literal notranslate"><span class="pre">unavailable</span></code> with HTTP 503</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">instance_id</span></code></p></td>
+<td><p>string</p></td>
+<td><p>Changes on each endpoint restart</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">started_at</span></code></p></td>
+<td><p>string</p></td>
+<td><p>Endpoint startup time in UTC (RFC 3339)</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">gpu_count</span></code></p></td>
+<td><p>integer or null</p></td>
+<td><p>Configured GPUs; <code class="docutils literal notranslate"><span class="pre">0</span></code> on CPU servers; <code class="docutils literal notranslate"><span class="pre">null</span></code> on routers</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">load.request_capacity</span></code></p></td>
+<td><p>integer</p></td>
+<td><p>Serviceable request capacity, occupied and free</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">load.requests_in_progress</span></code></p></td>
+<td><p>integer</p></td>
+<td><p>Assigned requests, including compilation, GPU waiting, and cleanup</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">load.requests_waiting</span></code></p></td>
+<td><p>integer</p></td>
+<td><p>Requests awaiting assignment at this endpoint</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">target</span></code></p></td>
+<td><p>object</p></td>
+<td><p>Compilation target, including <code class="docutils literal notranslate"><span class="pre">arch</span></code> on a GPU server; empty on a CPU server</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">versions</span></code></p></td>
+<td><p>object</p></td>
+<td><p>Runtime and toolchain version strings</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Direct-server capacity counts workers, excluding background replacements, and
+becomes zero during shutdown. Router capacity counts execution connections on
+eligible nodes; its request counts cover submissions through that router.</p>
+<p>Counts can change before submission. During recovery or cleanup, in-progress
+requests may exceed capacity. Assigned requests can wait for GPU access even
+when <code class="docutils literal notranslate"><span class="pre">requests_waiting</span></code> is zero.</p>
+<p>On the router, <code class="docutils literal notranslate"><span class="pre">instance_id</span></code> and <code class="docutils literal notranslate"><span class="pre">started_at</span></code> describe the router process.
+SIGTERM or Ctrl+C starts graceful shutdown.</p>
+<p>A CPU compilation server has an empty compilation target. Read the target from
+the GPU server and supply it when compiling on a CPU server. Workers on one GPU
+server must agree on the target; the server rejects a mixed-target pool.</p>
 </section>
 </section>
 <section id="operations">
@@ -1020,8 +1021,8 @@ instruction fails.</p>
 </div>
 </section>
 </section>
-<section id="caching">
-<h2>Caching<a class="headerlink" href="#caching" title="Link to this heading">¶</a></h2>
+<section id="upload-caching">
+<h2>Upload Caching<a class="headerlink" href="#upload-caching" title="Link to this heading">¶</a></h2>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -1045,7 +1046,7 @@ instruction fails.</p>
 </tr>
 <tr class="row-odd"><td><p>Default budget</p></td>
 <td><p>16 GiB</p></td>
-<td><p>16384 MiB (16 GiB)</p></td>
+<td><p>16 GiB</p></td>
 </tr>
 <tr class="row-even"><td><p>Budget setting</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">cache_capacity_bytes</span></code> / <code class="docutils literal notranslate"><span class="pre">--cache-capacity-bytes</span></code></p></td>
@@ -1535,12 +1536,12 @@ The same upload/get_function/run shape supports GPU harnesses and compiler tools
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="writing-a-program.html">
+          <a class="next-page" href="remote-functions.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">Write a client program</div>
+                <div class="title">Remote functions</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
@@ -1584,8 +1585,8 @@ The same upload/get_function/run shape supports GPU harnesses and compiler tools
             <ul>
 <li><a class="reference internal" href="#">KCoral Protocol</a><ul>
 <li><a class="reference internal" href="#endpoints">Endpoints</a><ul>
-<li><a class="reference internal" href="#get-health">GET /health</a></li>
 <li><a class="reference internal" href="#post-execute">POST /execute</a></li>
+<li><a class="reference internal" href="#get-health">GET /health</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#operations">Operations</a><ul>
@@ -1598,7 +1599,7 @@ The same upload/get_function/run shape supports GPU harnesses and compiler tools
 <li><a class="reference internal" href="#return">return</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#caching">Caching</a></li>
+<li><a class="reference internal" href="#upload-caching">Upload Caching</a></li>
 <li><a class="reference internal" href="#response">Response</a><ul>
 <li><a class="reference internal" href="#value-encoding">Value encoding</a></li>
 <li><a class="reference internal" href="#errors">Errors</a></li>
@@ -1616,7 +1617,7 @@ The same upload/get_function/run shape supports GPU harnesses and compiler tools
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=8837ea72"></script>
+</div><script src="../_static/documentation_options.js?v=03e946e1"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

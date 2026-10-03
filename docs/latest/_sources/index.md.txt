@@ -9,6 +9,7 @@ services can build kernels for a separate GPU server.
 | Your task | Read |
 | --- | --- |
 | Run your first GPU program | [Installation](getting-started/installation.md) and [Your First Program](getting-started/quickstart.md) |
+| Run a Python function with a decorator | [Remote functions](client-guide/remote-functions.md) |
 | Write a client program | [Write a client program](client-guide/writing-a-program.md), [KCoral Protocol](client-guide/protocol.md) |
 | Run Python, checks, profilers, or shell commands | [Builtin CLI Tools](client-guide/builtin-cli-tools.md) |
 | Operate a service | [Launch the server](server-guide/launch-the-server.md), [Logging](server-guide/logging.md) and [Launch the router](server-guide/router.md) |
@@ -38,6 +39,7 @@ client-guide/protocol
 :maxdepth: 1
 :hidden:
 
+client-guide/remote-functions
 client-guide/writing-a-program
 client-guide/builtin-cli-tools
 ```

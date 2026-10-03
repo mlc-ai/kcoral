@@ -3,13 +3,13 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="KCoral Protocol" href="../client-guide/protocol.html"><link rel="prev" title="Installation" href="installation.html">
-        <link rel="canonical" href="https://kcoral.mlc.ai/docs/latest/getting-started/quickstart.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Write a client program" href="writing-a-program.html"><link rel="prev" title="KCoral Protocol" href="protocol.html">
+        <link rel="canonical" href="https://kcoral.mlc.ai/docs/latest/client-guide/remote-functions.html">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-light.png" as="image">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-dark.png" as="image">
 
     <link rel="shortcut icon" href="../_static/kcoral-icon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Your First Program - KCoral documentation</title>
+        <title>Remote functions - KCoral documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -221,19 +221,19 @@
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
   <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
-<ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Your First Program</a></li>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../getting-started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting-started/quickstart.html">Your First Program</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Protocol</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../client-guide/protocol.html">KCoral Protocol</a></li>
+<li class="toctree-l1"><a class="reference internal" href="protocol.html">KCoral Protocol</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Client Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../client-guide/remote-functions.html">Remote functions</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../client-guide/writing-a-program.html">Write a client program</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../client-guide/builtin-cli-tools.html">Builtin CLI Tools</a></li>
+<ul class="current">
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Remote functions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="writing-a-program.html">Write a client program</a></li>
+<li class="toctree-l1"><a class="reference internal" href="builtin-cli-tools.html">Builtin CLI Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
@@ -294,12 +294,12 @@
 
 
 <div class="view-this-page">
-  <a class="muted-link" href="https://github.com/mlc-ai/kcoral/blob/main/docs/getting-started/quickstart.md?plain=true" title="View this page">
+  <a class="muted-link" href="https://github.com/mlc-ai/kcoral/blob/main/docs/client-guide/remote-functions.md?plain=true" title="View this page">
     <svg><use href="#svg-eye"></use></svg>
     <span class="visually-hidden">View this page</span>
   </a>
 </div><div class="edit-this-page">
-  <a class="muted-link" href="https://github.com/mlc-ai/kcoral/edit/main/docs/getting-started/quickstart.md" rel="edit" title="Edit this page">
+  <a class="muted-link" href="https://github.com/mlc-ai/kcoral/edit/main/docs/client-guide/remote-functions.md" rel="edit" title="Edit this page">
     <svg><use href="#svg-pencil"></use></svg>
     <span class="visually-hidden">Edit this page</span>
   </a>
@@ -316,123 +316,63 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="your-first-program">
-<h1>Your First Program<a class="headerlink" href="#your-first-program" title="Link to this heading">¶</a></h1>
-<p>Start a KCoral server, then submit a program that adds one to a four-element
-tensor on its GPU and returns the result.</p>
-<section id="required-hardware">
-<h2>Required hardware<a class="headerlink" href="#required-hardware" title="Link to this heading">¶</a></h2>
-<p>You need one Linux machine with an NVIDIA GPU and a compatible driver. Follow
-<a class="reference internal" href="installation.html#install-the-server"><span class="std std-ref">Install the server</span></a> and check the
-<a class="reference internal" href="installation.html#server-system-requirements"><span class="std std-ref">system requirements</span></a>; the server
-installation also includes the client. The example uses PyTorch and does not
-compile a custom kernel.</p>
-<p>The steps below run the server and client on that same machine, in two
-terminals. A CPU compilation server cannot run this program: the uploaded
-tensor requires GPU support, and the function also checks that it is on a GPU
-before doing arithmetic. Activate the same Python environment in both terminals.</p>
-</section>
-<section id="launch-the-server">
-<h2>Launch the server<a class="headerlink" href="#launch-the-server" title="Link to this heading">¶</a></h2>
-<div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>KCoral allows clients to execute arbitrary code on its workers. Only allow
-trusted clients to access your KCoral server or Router. Deploy on a trusted,
-isolated network and never expose these endpoints to the public internet.
-Run workers in a sandbox with restricted permissions and access to host resources.</p>
-</div>
-<p>In the first terminal, start one worker on GPU 0:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>server<span class="w"> </span>--device<span class="w"> </span>gpu<span class="w"> </span>--gpus<span class="w"> </span><span class="m">0</span><span class="w"> </span>--workers-per-gpu<span class="w"> </span><span class="m">1</span><span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+          <section id="remote-functions">
+<h1>Remote functions<a class="headerlink" href="#remote-functions" title="Link to this heading">¶</a></h1>
+<p>The function decorator is the simplest way to use KCoral. Add
+<code class="docutils literal notranslate"><span class="pre">&#64;client.function()</span></code> to a Python function, then call <code class="docutils literal notranslate"><span class="pre">.remote()</span></code> to run it on
+the server and receive its return value. KCoral builds and submits the program
+for you.</p>
+<section id="start-the-remote-server">
+<h2>Start the remote server<a class="headerlink" href="#start-the-remote-server" title="Link to this heading">¶</a></h2>
+<p>On a Linux machine with an NVIDIA GPU and a compatible driver, install and
+start the server:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'kcoral[server]'</span>
+kcoral<span class="w"> </span>server<span class="w"> </span>--device<span class="w"> </span>gpu<span class="w"> </span>--gpus<span class="w"> </span><span class="m">0</span><span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 </pre></div>
 </div>
-<p>GPU 0 is the first GPU listed by <code class="docutils literal notranslate"><span class="pre">nvidia-smi</span></code>. Wait for server startup to finish
-and leave this terminal running. The client will connect to
-<code class="docutils literal notranslate"><span class="pre">http://127.0.0.1:8000</span></code>.</p>
+<p>Wait for <code class="docutils literal notranslate"><span class="pre">Application</span> <span class="pre">startup</span> <span class="pre">complete.</span></code> and leave this terminal running.
+<code class="docutils literal notranslate"><span class="pre">--host</span> <span class="pre">0.0.0.0</span></code> lets clients connect from other machines. Run the server on a
+trusted network accessible only to trusted clients. See the
+<a class="reference internal" href="../getting-started/installation.html#server-system-requirements"><span class="std std-ref">system requirements</span></a>
+and <a class="reference internal" href="../server-guide/launch-the-server.html"><span class="std std-doc">server guide</span></a> for setup details.</p>
 </section>
-<section id="submit-the-program">
-<h2>Submit the program<a class="headerlink" href="#submit-the-program" title="Link to this heading">¶</a></h2>
-<p>In a second terminal, save the following complete program as <code class="docutils literal notranslate"><span class="pre">first_program.py</span></code>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="sd">"""Upload a tensor, add one on the GPU, and return the result."""</span>
+<section id="call-a-remote-function">
+<h2>Call a remote function<a class="headerlink" href="#call-a-remote-function" title="Link to this heading">¶</a></h2>
+<p>On the client machine, <a class="reference internal" href="../getting-started/installation.html#install-the-client"><span class="std std-ref">install the client</span></a>
+and save this as <code class="docutils literal notranslate"><span class="pre">remote_sum.py</span></code>. Replace <code class="docutils literal notranslate"><span class="pre">server</span></code> in the URL with the GPU
+machine’s hostname or IP address:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">kcoral</span><span class="w"> </span><span class="kn">import</span> <span class="n">Client</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="s2">"http://server:8000"</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+    <span class="nd">@client</span><span class="o">.</span><span class="n">function</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">gpu_sum</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+        <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">kcoral</span><span class="w"> </span><span class="kn">import</span> <span class="n">Client</span><span class="p">,</span> <span class="n">Program</span>
+        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
 
-<span class="n">SOURCE</span> <span class="o">=</span> <span class="s2">"""</span>
-<span class="s2">def add_one(x):</span>
-<span class="s2">    if not x.is_cuda:</span>
-<span class="s2">        raise RuntimeError("This program requires a GPU tensor")</span>
-<span class="s2">    return x + 1</span>
-<span class="s2">"""</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">build_program</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Program</span><span class="p">:</span>
-    <span class="n">program</span> <span class="o">=</span> <span class="n">Program</span><span class="p">()</span>
-    <span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">SOURCE</span><span class="p">)</span>
-    <span class="n">add_one</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"add_one"</span><span class="p">)</span>
-    <span class="n">x</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"tensor"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
-    <span class="n">y</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">add_one</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">x</span><span class="p">])</span>
-    <span class="n">program</span><span class="o">.</span><span class="n">return_</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="s2">"output"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">y</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">program</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"KCORAL_URL"</span><span class="p">,</span> <span class="s2">"http://127.0.0.1:8000"</span><span class="p">))</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
-        <span class="n">result</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">build_program</span><span class="p">(),</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">result</span><span class="o">.</span><span class="n">completed</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">SystemExit</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Program failed: </span><span class="si">{</span><span class="n">result</span><span class="o">.</span><span class="n">error</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    <span class="n">np</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_array_equal</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">results</span><span class="p">[</span><span class="s2">"output"</span><span class="p">],</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
-    <span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">status</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">results</span><span class="p">[</span><span class="s2">"output"</span><span class="p">])</span>
-
-
-<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
-    <span class="n">main</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">gpu_sum</span><span class="o">.</span><span class="n">remote</span><span class="p">(</span><span class="mi">4</span><span class="p">))</span>  <span class="c1"># 6</span>
 </pre></div>
 </div>
-<p>You can also <a class="reference download internal" download="" href="../_downloads/d25c149bc9eaf209dbe1c5b6da5e2a96/first_program.py"><code class="xref download docutils literal notranslate"><span class="pre">download</span> <span class="pre">first_program.py</span></code></a>.
-Run it from the directory where you saved it:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">KCORAL_URL</span><span class="o">=</span>http://127.0.0.1:8000<span class="w"> </span>python<span class="w"> </span>first_program.py
-</pre></div>
-</div>
-<p>Expected output:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>COMPLETED
-[1. 2. 3. 4.]
-</pre></div>
-</div>
-<p>The program checks that the request completed and that the returned array has
-the expected values. When you finish, press <code class="docutils literal notranslate"><span class="pre">Ctrl+C</span></code> in the server terminal to
-stop it.</p>
-<section id="use-a-remote-server">
-<h3>Use a remote server<a class="headerlink" href="#use-a-remote-server" title="Link to this heading">¶</a></h3>
-<p>To submit from another machine, start the server with <code class="docutils literal notranslate"><span class="pre">--host</span> <span class="pre">0.0.0.0</span></code> so it
-listens beyond the local machine. Install the
-<a class="reference internal" href="installation.html#install-the-client"><span class="std std-ref">client</span></a> on the submitting machine, save the same
-program there, and set <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</span></code> to the server’s reachable address on port
-8000. The client machine does not need a GPU.
-See <a class="reference internal" href="../server-guide/launch-the-server.html"><span class="std std-doc">Launch the server</span></a> for more configuration.</p>
-</section>
-</section>
-<section id="how-it-works">
-<h2>How it works<a class="headerlink" href="#how-it-works" title="Link to this heading">¶</a></h2>
-<p>The <code class="docutils literal notranslate"><span class="pre">Program</span></code> calls describe the work; <code class="docutils literal notranslate"><span class="pre">client.execute()</span></code> submits it. The server
-then executes the instructions in order:</p>
-<ol class="arabic simple">
-<li><p>Load the uploaded source defining <code class="docutils literal notranslate"><span class="pre">add_one</span></code>.</p></li>
-<li><p>Select that function from the module.</p></li>
-<li><p>Transfer the uploaded NumPy input to the GPU.</p></li>
-<li><p>Call <code class="docutils literal notranslate"><span class="pre">add_one</span></code> with that tensor.</p></li>
-<li><p>Return the selected output. The client decodes it as a CPU NumPy array and
-checks the values.</p></li>
-</ol>
-<p>The example also checks <code class="docutils literal notranslate"><span class="pre">result.completed</span></code> before reading the output. Instruction
-failures are returned as data in <code class="docutils literal notranslate"><span class="pre">result.error</span></code>; connection failures and request
-errors raise the exceptions documented in the <a class="reference internal" href="../python-api/index.html#python-errors"><span class="std std-ref">Python API</span></a>.</p>
-<p>Continue to <a class="reference internal" href="../client-guide/writing-a-program.html"><span class="std std-doc">Write a client program</span></a> for
-building programs and reading results, or <a class="reference internal" href="../tutorials/benchmark-kernel.html"><span class="std std-doc">Benchmark a Kernel with KCoral</span></a>
-to compile a custom kernel, check correctness and measure its execution.</p>
+<p>Run <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">remote_sum.py</span></code> on the client. The server creates the values 0
+through 3 on its GPU and returns their sum, <code class="docutils literal notranslate"><span class="pre">6</span></code>.
+<code class="docutils literal notranslate"><span class="pre">timeout=30</span></code> sets the server execution limit in seconds.</p>
+<ul class="simple">
+<li><p>Define the function in a Python file so KCoral can read its source.</p></li>
+<li><p>Import dependencies inside the function and install them on the server.</p></li>
+<li><p>Pass inputs as arguments; surrounding variables and external globals are
+not captured. Keep the client open while making remote calls.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">.remote()</span></code> runs on the server; an ordinary call such as <code class="docutils literal notranslate"><span class="pre">gpu_sum(4)</span></code> runs
+locally. Each remote call is an independent request.</p></li>
+</ul>
+<p>Arguments can be JSON values, bytes, NumPy arrays, or DLPack-compatible tensors.
+Pass bytes and tensors as whole arguments. Returned tensors become local NumPy
+arrays. <code class="docutils literal notranslate"><span class="pre">.remote()</span></code> raises an exception if execution fails; use <code class="docutils literal notranslate"><span class="pre">.execute()</span></code>
+to receive the full <code class="docutils literal notranslate"><span class="pre">ProgramResult</span></code>, including captured output and error details.</p>
+<p>See the <a class="reference internal" href="../python-api/index.html"><span class="std std-doc">Python API</span></a> for details, or
+<a class="reference download internal" download="" href="../_downloads/b9a1f3d3b6e2589d5eb247ee57f32d4a/remote_function.py"><code class="xref download docutils literal notranslate"><span class="pre">download</span> <span class="pre">a</span> <span class="pre">tensor</span> <span class="pre">example</span></code></a>.
+For more control over individual instructions, see
+<a class="reference internal" href="writing-a-program.html"><span class="std std-doc">Write a client program</span></a>.</p>
 </section>
 </section>
 
@@ -441,23 +381,23 @@ to compile a custom kernel, check correctness and measure its execution.</p>
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="../client-guide/protocol.html">
+          <a class="next-page" href="writing-a-program.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">KCoral Protocol</div>
+                <div class="title">Write a client program</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="installation.html">
+          <a class="prev-page" href="protocol.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">Installation</div>
+                <div class="title">KCoral Protocol</div>
                 
               </div>
             </a>
@@ -488,14 +428,9 @@ to compile a custom kernel, check correctness and measure its execution.</p>
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">Your First Program</a><ul>
-<li><a class="reference internal" href="#required-hardware">Required hardware</a></li>
-<li><a class="reference internal" href="#launch-the-server">Launch the server</a></li>
-<li><a class="reference internal" href="#submit-the-program">Submit the program</a><ul>
-<li><a class="reference internal" href="#use-a-remote-server">Use a remote server</a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#how-it-works">How it works</a></li>
+<li><a class="reference internal" href="#">Remote functions</a><ul>
+<li><a class="reference internal" href="#start-the-remote-server">Start the remote server</a></li>
+<li><a class="reference internal" href="#call-a-remote-function">Call a remote function</a></li>
 </ul>
 </li>
 </ul>

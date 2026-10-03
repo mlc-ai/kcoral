@@ -7,6 +7,50 @@ the execution protocol while adding node selection and routing metadata.
 
 ## Endpoints
 
+### POST /execute
+
+Submit one program. The request body uses `multipart/form-data` with a JSON
+`program` part and optional binary data parts. The request has no query fields.
+
+See the [complete example](#example) below. The Router uses the same program
+and response format.
+
+| Header | Behavior |
+| --- | --- |
+| `X-Request-ID` | Identifies each HTTP attempt and matches the result/error `request_id` and server events. The Router generates a UUID before admission and forwards it to Python. A direct Python request may supply exactly one canonical lowercase UUID; absent, duplicate, or invalid IDs are replaced. Cache-miss retries get separate IDs. |
+| `X-KCoral-Node` | Identifies the node selected by the Router. Send it back as a cache-retry preference; a missing or unavailable preference falls back to another eligible node. |
+
+| Part | Content type | Required | Meaning |
+| --- | --- | --- | --- |
+| `program` | `application/json` | yes | The program object below |
+| `blob:<sha256>` | `application/octet-stream` | when not cached | Raw tensor, byte, file or library content referenced by an upload |
+
+SHA-256 is the content hash used to identify binary data. `<sha256>` is its
+lowercase 64-character hexadecimal digest over the raw bytes.
+
+| Program field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `instructions` | array | yes | Nonempty list of operations executed in order |
+| `options` | object | no | Execution timeout and captured output limits; see [Options](#options) |
+
+Each supplied binary part must be referenced by an upload. The server rejects
+duplicate or malformed part names, wrong content types and hashes that do not
+match the supplied bytes. JSON objects reject duplicate keys, unknown fields,
+and non-finite numbers such as NaN and Infinity.
+
+(options)=
+
+**Options**
+
+Both `options` fields are optional. Values above either maximum are clamped to it.
+
+| Field | Type | Default | Meaning and limit |
+| --- | --- | --- | --- |
+| `timeout_seconds` | number | `300` | Worker execution deadline; maximum `900` |
+| `output_limit_bytes` | integer | `1048576` | Maximum bytes returned for each of stdout and stderr; maximum `16777216`; `0` disables capture |
+
+See [Response](#response) for HTTP statuses, result fields, and value encodings.
+
 ### GET /health
 
 Read endpoint health, request load, and the compilation environment.
@@ -62,50 +106,6 @@ SIGTERM or Ctrl+C starts graceful shutdown.
 A CPU compilation server has an empty compilation target. Read the target from
 the GPU server and supply it when compiling on a CPU server. Workers on one GPU
 server must agree on the target; the server rejects a mixed-target pool.
-
-### POST /execute
-
-Submit one program. The request body uses `multipart/form-data` with a JSON
-`program` part and optional binary data parts. The request has no query fields.
-
-See the [complete example](#example) below. The Router uses the same program
-and response format.
-
-| Header | Behavior |
-| --- | --- |
-| `X-Request-ID` | Identifies each HTTP attempt and matches the result/error `request_id` and server events. The Router generates a UUID before admission and forwards it to Python. A direct Python request may supply exactly one canonical lowercase UUID; absent, duplicate, or invalid IDs are replaced. Cache-miss retries get separate IDs. |
-| `X-KCoral-Node` | Identifies the node selected by the Router. Send it back as a cache-retry preference; a missing or unavailable preference falls back to another eligible node. |
-
-| Part | Content type | Required | Meaning |
-| --- | --- | --- | --- |
-| `program` | `application/json` | yes | The program object below |
-| `blob:<sha256>` | `application/octet-stream` | when not cached | Raw tensor, byte, file or library content referenced by an upload |
-
-SHA-256 is the content hash used to identify binary data. `<sha256>` is its
-lowercase 64-character hexadecimal digest over the raw bytes.
-
-| Program field | Type | Required | Meaning |
-| --- | --- | --- | --- |
-| `instructions` | array | yes | Nonempty list of operations executed in order |
-| `options` | object | no | Execution timeout and captured output limits; see [Options](#options) |
-
-Each supplied binary part must be referenced by an upload. The server rejects
-duplicate or malformed part names, wrong content types and hashes that do not
-match the supplied bytes. JSON objects reject duplicate keys, unknown fields,
-and non-finite numbers such as NaN and Infinity.
-
-(options)=
-
-**Options**
-
-Both `options` fields are optional. Values above either maximum are clamped to it.
-
-| Field | Type | Default | Meaning and limit |
-| --- | --- | --- | --- |
-| `timeout_seconds` | number | `300` | Worker execution deadline; maximum `900` |
-| `output_limit_bytes` | integer | `1048576` | Maximum bytes returned for each of stdout and stderr; maximum `16777216`; `0` disables capture |
-
-See [Response](#response) for HTTP statuses, result fields, and value encodings.
 
 ## Operations
 
@@ -420,14 +420,14 @@ To return a folder whose path is held in an earlier register:
 | Failures | Missing paths, wrong types, invalid runtime paths, read failures, and collection limits fail that return with `serialization`. Failed returns add no result or binary parts; earlier returns survive ordinary instruction failures. |
 | Size limit | Contents are buffered in the response and count against `max_response_bytes` (default 256 MiB). `output_limit_bytes` controls only stdout/stderr. |
 
-## Caching
+## Upload Caching
 
 | Property | Memory cache | File cache |
 | --- | --- | --- |
 | Upload kinds | `tensor`, `bytes`, `library` | `file` |
 | Storage | Python server process | Persistent disk cache |
 | Key | SHA-256 of raw content | SHA-256 of raw content |
-| Default budget | 16 GiB | 16384 MiB (16 GiB) |
+| Default budget | 16 GiB | 16 GiB |
 | Budget setting | `cache_capacity_bytes` / `--cache-capacity-bytes` | `disk_cache_capacity_mbytes` / `--disk-cache-capacity-mbytes` |
 | Retention | Less recently used, unpinned entries may be evicted. Objects larger than one quarter of the budget are not retained by default. | Entries may be evicted, unavailable, or too large to retain. |
 | Active requests | Referenced cached bytes are pinned while the request executes. | Requests retain their resolved bytes; eviction does not invalidate an admitted request. |

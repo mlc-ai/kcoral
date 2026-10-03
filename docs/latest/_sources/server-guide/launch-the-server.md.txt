@@ -291,7 +291,7 @@ Both caches store uploaded bytes, not execution state: each request creates
 its own tensors, loads its libraries, and materializes its files. Changes made
 during execution do not change the cached uploads.
 
-See [protocol caching](../client-guide/protocol.md#caching) for
+See [upload caching](../client-guide/protocol.md#upload-caching) for
 cache lookup and retry behavior, and
 [file uploads](../client-guide/writing-a-program.md#upload-files-and-folders)
 for working with request files.

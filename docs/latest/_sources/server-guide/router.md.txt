@@ -11,6 +11,8 @@ replace a machine, or take a node offline without changing the address clients
 use. This separates the lifetime of the client endpoint from that of the GPU
 machines doing the work.
 
+![KCoral routed deployment architecture](../_static/router-architecture.png)
+
 ## Start a Router and a node
 
 Install the [KCoral package](../getting-started/installation.md) on the Router
