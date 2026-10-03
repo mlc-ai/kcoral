@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  build-linux:
     name: Linux ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
@@ -53,7 +53,7 @@ jobs:
           CIBW_BEFORE_ALL_LINUX: >-
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh &&
             sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain 1.87.0
-          CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
+          CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH" KCORAL_BUILD_RUST=1'
           CIBW_TEST_COMMAND: kcoral router --help && kcoral-node --help
         with:
           output-dir: wheelhouse
@@ -61,6 +61,38 @@ jobs:
         run: uv tool run twine check --strict wheelhouse/*.whl
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: kcoral-wheels-linux-${{ matrix.arch }}
+          name: kcoral-dist-linux-${{ matrix.arch }}
           path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  build-pure:
+    name: Pure wheel and sdist
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Build the sdist and a wheel without the Rust programs
+        env:
+          KCORAL_BUILD_RUST: '0'
+        run: uv build --out-dir dist
+      - name: Check the wheel is pure
+        run: |
+          wheel=$(ls dist/*-py3-none-any.whl)
+          if unzip -l "$wheel" | grep -E 'kcoral-(router|node)$'; then exit 1; fi
+      - name: Check metadata
+        run: uv tool run twine check --strict dist/*.whl dist/*.tar.gz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kcoral-dist-pure
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
           if-no-files-found: error
