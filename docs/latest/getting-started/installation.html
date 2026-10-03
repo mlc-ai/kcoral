@@ -329,8 +329,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 <p>Run the installation commands below with this environment active.</p>
 <section id="method-1-install-a-prebuilt-package">
 <h2>Method 1: Install a prebuilt package<a class="headerlink" href="#method-1-install-a-prebuilt-package" title="Link to this heading">¶</a></h2>
-<p>Prebuilt wheels are available on <a class="reference external" href="https://pypi.org/project/kcoral/">PyPI</a>.
-They support Linux on x86-64 and AArch64 with glibc 2.28 or newer.</p>
+<p>Prebuilt wheels are available on <a class="reference external" href="https://pypi.org/project/kcoral/">PyPI</a>.</p>
 <section id="install-the-client">
 <h3>Install the client<a class="headerlink" href="#install-the-client" title="Link to this heading">¶</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>kcoral
@@ -344,7 +343,8 @@ They support Linux on x86-64 and AArch64 with glibc 2.28 or newer.</p>
 </section>
 <section id="install-the-server">
 <h3>Install the server<a class="headerlink" href="#install-the-server" title="Link to this heading">¶</a></h3>
-<p>Install the <code class="docutils literal notranslate"><span class="pre">server</span></code> extra:</p>
+<p>The server requires Linux on x86-64 or AArch64 with glibc 2.28 or newer.
+Install the <code class="docutils literal notranslate"><span class="pre">server</span></code> extra:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'kcoral[server]'</span>
 </pre></div>
 </div>
@@ -357,10 +357,6 @@ They support Linux on x86-64 and AArch64 with glibc 2.28 or newer.</p>
 <p>Use a source installation to modify KCoral or install a specific revision.</p>
 <section id="get-the-source">
 <h3>Get the source<a class="headerlink" href="#get-the-source" title="Link to this heading">¶</a></h3>
-<p>Install Git, Rust 1.87 or newer with Cargo, and a C/C++ build toolchain.
-The package build compiles the Rust router and node supervisor, including when
-installing only the client dependencies. The <code class="docutils literal notranslate"><span class="pre">pip</span></code> commands below build and
-install both binaries automatically; a separate <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">build</span></code> is not needed.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/mlc-ai/kcoral.git
 <span class="nb">cd</span><span class="w"> </span>kcoral
 </pre></div>
@@ -375,6 +371,13 @@ install both binaries automatically; a separate <code class="docutils literal no
 </div>
 <p>To include the server dependencies, use:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s1">'.[server]'</span>
+</pre></div>
+</div>
+<p>These builds are pure Python. A <a class="reference internal" href="../server-guide/router.html"><span class="std std-doc">Router</span></a> deployment
+also needs the Rust router and node supervisor, which run on Linux. Install Rust
+1.87 or newer with Cargo and a C/C++ build toolchain, then build them into the
+package:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">KCORAL_BUILD_RUST</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s1">'.[server]'</span>
 </pre></div>
 </div>
 </section>
@@ -509,7 +512,7 @@ server-side compilation.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=adebac25"></script>
+</div><script src="../_static/documentation_options.js?v=f12bd5a0"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

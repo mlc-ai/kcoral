@@ -17,7 +17,6 @@ Run the installation commands below with this environment active.
 ## Method 1: Install a prebuilt package
 
 Prebuilt wheels are available on [PyPI](https://pypi.org/project/kcoral/).
-They support Linux on x86-64 and AArch64 with glibc 2.28 or newer.
 
 ### Install the client
 
@@ -35,6 +34,7 @@ python -c "from kcoral import Client, Program; print('KCoral client is ready')"
 
 ### Install the server
 
+The server requires Linux on x86-64 or AArch64 with glibc 2.28 or newer.
 Install the `server` extra:
 
 ```bash
@@ -49,11 +49,6 @@ The `server` extra supports both GPU execution and CPU compilation. See
 Use a source installation to modify KCoral or install a specific revision.
 
 ### Get the source
-
-Install Git, Rust 1.87 or newer with Cargo, and a C/C++ build toolchain.
-The package build compiles the Rust router and node supervisor, including when
-installing only the client dependencies. The `pip` commands below build and
-install both binaries automatically; a separate `cargo build` is not needed.
 
 ```bash
 git clone https://github.com/mlc-ai/kcoral.git
@@ -74,6 +69,15 @@ To include the server dependencies, use:
 
 ```bash
 python -m pip install -e '.[server]'
+```
+
+These builds are pure Python. A [Router](../server-guide/router.md) deployment
+also needs the Rust router and node supervisor, which run on Linux. Install Rust
+1.87 or newer with Cargo and a C/C++ build toolchain, then build them into the
+package:
+
+```bash
+KCORAL_BUILD_RUST=1 python -m pip install -e '.[server]'
 ```
 
 ## Server system requirements
