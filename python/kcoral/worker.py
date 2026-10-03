@@ -25,13 +25,14 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from multiprocessing.connection import wait
 from pathlib import Path
 
 from . import nvml
 from . import sandbox as sandboxing
 from .engine import execute, read_captured_output
 from .events import EventLogger
-from .lease import GPULeases, LeaseClient, NoopLease, NoopLeases
+from .lease import GPULeases, GPUUnavailable, LeaseClient, NoopLease, NoopLeases
 
 _WORKER_PIPE_FAILURES = (EOFError, ConnectionResetError, BrokenPipeError, OSError)
 
@@ -72,6 +73,7 @@ def worker_main(
     max_requests: int,
     capture_dir: str | None = None,
     isolated: bool = False,
+    supervision=None,
 ) -> None:
     """Child entry point. Binds the assigned GPUs, then serves programs.
 
@@ -170,13 +172,20 @@ def worker_main(
             except Exception as exc:
                 sandbox_cleanup_error = f"{type(exc).__name__}: {exc}"
         requests_served += 1
+        if supervision is not None:
+            # Only the supervisor can see descendants adopted after their
+            # launcher exited. Keep the lease until it has checked that tree.
+            supervision.send("check_children")
+            has_children = supervision.recv()
+        else:
+            has_children = bool(_children(os.getpid()))
         # None means this worker can serve another program.
         retire_reason: str | None = None
         if sandbox_cleanup_error is not None:
             retire_reason = "sandbox_cleanup"
         elif cleanup_error is not None:
             retire_reason = "poisoned_context"
-        elif (max_requests and requests_served >= max_requests) or _children(os.getpid()):
+        elif (max_requests and requests_served >= max_requests) or has_children:
             # A fresh process gives every request the same context and allocator
             # state, even where native code left no detectable sticky error.
             retire_reason = "request_limit"
@@ -241,6 +250,7 @@ class Worker:
         capture_dir: str | None = None,
         sandbox: str = "bubblewrap",
         sandbox_readonly_paths: tuple[Path, ...] = (),
+        start: bool = True,
     ) -> None:
         if isinstance(gpu_id, tuple) and sys.platform != "linux":
             raise ValueError("explicit GPU sets require Linux process supervision")
@@ -271,7 +281,10 @@ class Worker:
         if sandbox not in ("none", "bubblewrap"):
             raise ValueError(f"unknown worker sandbox: {sandbox!r}")
         self._ctx = mp.get_context("spawn")  # 'spawn' — 'fork' is unsafe with CUDA
-        self._spawn()
+        # Pools register transient workers before spawning, so even a failed
+        # initialization remains reachable for shutdown cleanup.
+        if start:
+            self._spawn()
 
     @property
     def gpu_ids(self) -> tuple[int, ...]:
@@ -497,17 +510,16 @@ class Worker:
                     if cleanup_error := message.get("__sandbox_cleanup_error__"):
                         self._log_failure("sandbox_cleanup", RuntimeError(cleanup_error))
                     outcome = message["__outcome__"]
-                    if (
-                        message["__retire_reason__"] is not None
-                        and getattr(self, "_control", None) is not None
-                    ):
+                    if message["__retire_reason__"] is not None:
                         # An outcome precedes Python/CUDA finalizers. Keep them within
                         # the execution deadline and wait for the complete process tree.
                         status = self._wait_for_exit(max(0, remaining))
                         if status is None:
                             self._abandon_and_respawn(leases, "timeout")
                             raise WorkerTimeout("worker teardown exceeded the execution timeout")
-                        if status["orphaned"] and outcome.status == "COMPLETED":
+                        if (
+                            status["orphaned"] or status["exitcode"] != 0
+                        ) and outcome.status == "COMPLETED":
                             outcome.status = "FAILED"
                             instruction = (
                                 program.instructions[instruction_index]
@@ -517,7 +529,9 @@ class Worker:
                             outcome.error = {
                                 "kind": "runtime",
                                 "message": (
-                                    "program left background processes running; "
+                                    f"worker exited with code {status['exitcode']} during teardown"
+                                    if status["exitcode"] != 0
+                                    else "program left background processes running; "
                                     "they were terminated"
                                 ),
                                 "instruction_index": instruction_index,
@@ -621,9 +635,16 @@ class Worker:
                 leases.acquire(self._lease_key, self)
                 try:
                     self._initialize_process()
+                except WorkerCleanupError:
+                    # A background replacement does not pass through submit's
+                    # error handler. Quarantine before release can wake waiters.
+                    leases.quarantine(self.gpu_ids)
+                    raise
                 finally:
                     leases.release(self._lease_key, self)
         except Exception as exc:
+            if isinstance(exc, WorkerCleanupError):
+                leases.quarantine(self.gpu_ids)
             if getattr(self, "_closing", None) is not None and self._closing.is_set():
                 return
             self._log_failure("respawn", exc)
@@ -635,9 +656,20 @@ class Worker:
         if self.gpu_id is None or process is None or not process.is_alive():
             self._kill()
             return 0.0, 0.0
-        wait_ms = leases.acquire(self._lease_key, self)
+        try:
+            wait_ms = leases.acquire(self._lease_key, self)
+        except GPUUnavailable:
+            # A different request may quarantine a device during our CPU phase.
+            # No new job may use any part of this tree's allocation while it is
+            # forcibly drained, even though a normal lease is no longer possible.
+            leases.quarantine(self.gpu_ids)
+            wait_ms = 0.0
         started = time.monotonic()
-        self._kill()
+        try:
+            self._kill()
+        except WorkerCleanupError:
+            leases.quarantine(self.gpu_ids)
+            raise
         held_ms = (time.monotonic() - started) * 1000
         leases.release(self._lease_key, self)
         return wait_ms, held_ms
@@ -651,6 +683,14 @@ class Worker:
             self._closing.set()
 
     def _wait_for_exit(self, timeout=None):
+        if self._control is None:
+            # Bubblewrap's PID namespace owns the entire tree. Its exit is the
+            # cleanup acknowledgement, and its status includes interpreter exit.
+            self._proc.join(timeout=timeout)
+            if self._proc.is_alive():
+                return None
+            self._exit_status = {"exitcode": self._proc.exitcode, "orphaned": False}
+            return self._exit_status
         deadline = None if timeout is None else time.monotonic() + timeout
         while self._exit_status is None:
             try:
@@ -862,18 +902,36 @@ def _supervise_worker(control, conn, device, factory, max_requests, capture_dir,
     if linux and ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
         control.send({"error": "cannot supervise worker descendants"})
         return
+    inspection, child_inspection = mp.get_context("spawn").Pipe()
     runner = mp.get_context("spawn").Process(
-        target=worker_main, args=(device, conn, factory, max_requests, capture_dir)
+        target=worker_main,
+        args=(device, conn, factory, max_requests, capture_dir, False, child_inspection),
     )
     runner.start()
+    child_inspection.close()
     conn.close()
     terminating = False
+    inspecting = True
     try:
         control.send({"pid": runner.pid})
         while runner.is_alive():
-            if control.poll(0.02):
+            ready = wait([control, inspection] if inspecting else [control], timeout=0.02)
+            if control in ready:
                 terminating = True
                 break  # terminate or parent disconnected
+            if inspection in ready:
+                try:
+                    inspection.recv()
+                    # Read the interpreter first, then adopted children. This
+                    # order also catches a launcher exiting during inspection.
+                    has_children = bool(
+                        _children(runner.pid) or (_children(os.getpid()) - {runner.pid})
+                    )
+                    inspection.send(has_children)
+                except _WORKER_PIPE_FAILURES:
+                    # The interpreter may be in finalizers after closing this
+                    # pipe; keep waiting for its normal exit or termination.
+                    inspecting = False
             runner.join(timeout=0)
         if linux:
             if not terminating:
@@ -889,6 +947,7 @@ def _supervise_worker(control, conn, device, factory, max_requests, capture_dir,
         elif runner.is_alive():
             _terminate_process_tree(runner, grace)
         control.close()
+        inspection.close()
 
 
 def _sandbox_main() -> None:

@@ -13,11 +13,11 @@ from fastapi.testclient import TestClient
 from kcoral import Program
 from kcoral.app import create_app
 from kcoral.config import ServerConfig
-from kcoral.lease import GPULeases
+from kcoral.lease import GPULeases, GPUUnavailable, NoopLeases
 from kcoral.pool import PoolBusy, WorkerPool
 from kcoral.schemas import parse_program
 from kcoral.testing import fake_runtime_factory
-from kcoral.worker import WorkerCrashed, WorkerTimeout
+from kcoral.worker import Worker, WorkerCleanupError, WorkerCrashed, WorkerTimeout
 
 
 def wait_for(predicate, timeout=10):
@@ -170,24 +170,112 @@ def main():
     assert marker.exists(), "the adopted descendant must exit naturally before completion"
 
 
-def test_interpreter_finalizers_use_the_execution_deadline(pool, tmp_path):
+@pytest.mark.parametrize("sandbox", ["none", "bubblewrap"])
+@pytest.mark.parametrize("ending", ["normal", "crash", "timeout"])
+@pytest.mark.parametrize("gpus", [None, (0, 2)])
+def test_interpreter_finalizers_use_the_execution_deadline(
+    tmp_path, sandbox, ending, gpus, monkeypatch
+):
+    if sandbox == "bubblewrap":
+        import shutil
+
+        if not shutil.which("bwrap"):
+            pytest.skip("bubblewrap is not installed")
+    monkeypatch.setattr("kcoral.worker.nvml.device_uuid", lambda _: None)
+    worker = Worker(gpus, fake_runtime_factory, sandbox=sandbox, termination_grace_seconds=0.1)
+    leases = NoopLeases() if gpus is None else GPULeases(list(gpus))
     marker = tmp_path / "interpreter-exited"
+    observed = []
+    if worker._sandbox is not None:
+        from kcoral import sandbox as sandboxing
+
+        marker = Path(sandboxing.WORKSPACE) / "interpreter-exited"
+        sandbox_instance = worker._sandbox
+        original_close = sandbox_instance.close
+
+        def close():
+            observed.append((sandbox_instance.workspace / marker.name).exists())
+            if gpus is not None:
+                assert all(leases._holder[gpu] is worker for gpu in gpus)
+            original_close()
+
+        monkeypatch.setattr(sandbox_instance, "close", close)
+    finalizer_ending = {
+        "normal": f"Path({str(marker)!r}).touch()",
+        "crash": "os._exit(17)",
+        "timeout": "time.sleep(30)",
+    }[ending]
     program = build(f"""
 def main():
     import atexit
     def finish():
-        import time
+        import os, time
         from pathlib import Path
         time.sleep(0.5)
-        Path({str(marker)!r}).touch()
+        {finalizer_ending}
     atexit.register(finish)
     return 42
 """)
-    # The pool's 0.1-second termination grace must not kill a healthy interpreter
+    # The 0.1-second termination grace must not kill a healthy interpreter
     # that is still inside its 10-second execution deadline.
-    result = pool.submit(program, timeout=10)
-    assert result.execution.status == "COMPLETED", result.execution.error
-    assert marker.exists()
+    try:
+        if ending == "timeout":
+            with pytest.raises(WorkerTimeout):
+                worker.run(program, timeout=1, leases=leases)
+        else:
+            result = worker.run(program, timeout=10, leases=leases)
+            if ending == "crash":
+                assert result.execution.status == "FAILED"
+                assert "17" in result.execution.error["message"]
+            else:
+                assert result.execution.status == "COMPLETED", result.execution.error
+                assert observed == [True] if sandbox == "bubblewrap" else marker.exists()
+        if gpus is not None:
+            assert all(leases._holder[gpu] is None for gpu in gpus)
+    finally:
+        worker.close()
+
+
+@pytest.mark.parametrize("max_requests", [0, 2])
+def test_reused_worker_reaps_adopted_descendants(pool, tmp_path, monkeypatch, max_requests):
+    marker = tmp_path / "adopted.pid"
+    child = "import time; time.sleep(60)"
+    launcher = (
+        "import subprocess, sys; from pathlib import Path; "
+        f"p = subprocess.Popen([sys.executable, '-c', {child!r}], start_new_session=True); "
+        f"Path({str(marker)!r}).write_text(str(p.pid))"
+    )
+    # Exercise both unlimited reuse and retirement after a later request.
+    for worker in pool._workers:
+        worker._max_requests = max_requests
+        worker.replace(pool._leases, "request_limit")
+    program = build(
+        f"""
+def main():
+    import subprocess, sys
+    subprocess.run([sys.executable, '-c', {launcher!r}], check=True)
+    return 42
+""",
+        count=None,
+    )
+    original_release = pool._leases.release
+    live_at_release = []
+
+    def release(gpus, holder):
+        if marker.exists():
+            live_at_release.append(Path(f"/proc/{marker.read_text()}").exists())
+        original_release(gpus, holder)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(pool._leases, "release", release)
+            result = pool.submit(program, timeout=10)
+        assert result.execution.status == "FAILED"
+        assert "background processes" in result.execution.error["message"]
+        assert not Path(f"/proc/{marker.read_text()}").exists()
+        assert live_at_release and not any(live_at_release)
+    finally:
+        pool.shutdown()
 
 
 def test_group_wait_never_partially_claims_and_does_not_starve():
@@ -319,3 +407,86 @@ def test_unverified_cleanup_quarantines_the_allocation(pool, monkeypatch):
     assert pool.closing
     with pytest.raises(PoolBusy):
         pool.submit(build("def main(): return 1"), 5)
+
+
+def test_quarantine_during_cpu_phase_reaps_transient_worker(pool, tmp_path, monkeypatch):
+    from kcoral.schemas import GetFunction, Ref, Run
+
+    marker, resume = tmp_path / "cpu-phase", tmp_path / "resume"
+    workers = []
+    original_run = Worker.run
+
+    def run(worker, *args):
+        workers.append(worker)
+        return original_run(worker, *args)
+
+    monkeypatch.setattr(Worker, "run", run)
+    program = build("""
+def main():
+    return 1
+
+def cpu_phase(marker, resume):
+    import time
+    from pathlib import Path
+    Path(marker).touch()
+    while not Path(resume).exists():
+        time.sleep(0.01)
+""")
+    program.instructions.extend(
+        [
+            GetFunction("cpu", Ref("module"), "cpu_phase", cpu_only=True),
+            Run("paused", Ref("cpu"), [str(marker), str(resume)]),
+            Run("resumed", Ref("fn"), []),
+        ]
+    )
+    try:
+        with ThreadPoolExecutor(1) as executor:
+            pending = executor.submit(pool.submit, program, 10)
+            try:
+                wait_for(marker.exists)
+                pool._leases.quarantine((workers[0].gpu_ids[0],))
+            finally:
+                resume.touch()
+            with pytest.raises(PoolBusy):
+                pending.result(timeout=10)
+        assert not workers[0]._proc.is_alive()
+        assert pool.active_requests == 0
+        for gpu in workers[0].gpu_ids:
+            with pytest.raises(GPUUnavailable):
+                pool._leases.acquire(gpu, "next")
+    finally:
+        for worker in workers:
+            worker.close()
+
+
+@pytest.mark.parametrize("phase", ["initialization", "execution"])
+def test_unconfirmed_transient_cleanup_is_retried_at_shutdown(pool, monkeypatch, phase):
+    workers = []
+    original_kill = Worker._kill
+    original_initialize = Worker._initialize_process
+
+    def initialize(worker):
+        original_initialize(worker)
+        if phase == "initialization" and len(worker.gpu_ids) > 1:
+            raise WorkerCrashed("initialization failed")
+
+    def kill(worker):
+        if len(worker.gpu_ids) > 1:
+            workers.append(worker)
+            raise WorkerCleanupError("cleanup acknowledgement unavailable")
+        original_kill(worker)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Worker, "_kill", kill)
+        patch.setattr(Worker, "_initialize_process", initialize)
+        with pytest.raises(WorkerCleanupError):
+            pool.submit(build("def main(): return 1"), 5)
+    try:
+        assert workers
+        assert workers[0] in pool._transient_workers
+        pool.shutdown()
+        assert not workers[0]._proc.is_alive()
+        assert not pool._transient_workers
+    finally:
+        for worker in workers:
+            worker.close()

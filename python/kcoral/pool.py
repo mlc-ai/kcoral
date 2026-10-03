@@ -170,6 +170,7 @@ class WorkerPool:
         self._shutdown_lock = threading.Lock()
         self._shutdown_done = False
         self._workers = []
+        self._transient_workers: set[Worker] = set()
         try:
             for device, index in devices:
                 self._workers.append(
@@ -246,7 +247,13 @@ class WorkerPool:
                         capture_dir=slot._capture_dir,
                         sandbox=slot._sandbox_mode,
                         sandbox_readonly_paths=slot._sandbox_readonly_paths,
+                        start=False,
                     )
+                    with self._condition:
+                        self._transient_workers.add(worker)
+                        if self._closing.is_set():
+                            worker.begin_shutdown()
+                    worker._spawn()
                     worker.request_id = request_id
                 except WorkerCleanupError:
                     self._leases.quarantine(gpu_ids)
@@ -303,6 +310,8 @@ class WorkerPool:
                     if not cleanup_failed:
                         worker._kill_with_gpu_lease(self._leases)
                     worker.close()
+                    with self._condition:
+                        self._transient_workers.discard(worker)
             except WorkerCleanupError:
                 self._leases.quarantine(worker.gpu_ids)
                 self.begin_shutdown()
@@ -363,6 +372,9 @@ class WorkerPool:
                 return
             worker.replace(self._leases, reason)
         except Exception as exc:
+            if isinstance(exc, WorkerCleanupError):
+                self._leases.quarantine(worker.gpu_ids)
+                self.begin_shutdown()
             if self._closing.is_set():
                 return
             # A respawn that failed leaves a dead worker; the next run revives
@@ -465,7 +477,7 @@ class WorkerPool:
                 return
             self._closing.set()
             self._idle.close()
-            for worker in self._workers:
+            for worker in [*self._workers, *self._transient_workers]:
                 worker.begin_shutdown()
             self._events.emit("shutdown_started", remaining=self._active)
 
@@ -483,5 +495,8 @@ class WorkerPool:
                 thread.join()
             for worker in self._workers:
                 worker.close()
+            for worker in list(self._transient_workers):
+                worker.close()
+                self._transient_workers.remove(worker)
             self._shutdown_done = True
             self._events.emit("shutdown_complete")
