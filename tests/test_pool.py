@@ -6,11 +6,11 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from support.programs import harness_call
 
-from kcoral.lease import GPULeases
+from kcoral.lease import GPULeases, GPUUnavailable
 from kcoral.pool import PoolBusy, WorkerPool
 from kcoral.schemas import GetFunction, Program, Ref, Return, Run, Upload
 from kcoral.testing import fake_runtime_factory
-from kcoral.worker import Worker, WorkerCrashed, WorkerTimeout, worker_main
+from kcoral.worker import Worker, WorkerCleanupError, WorkerCrashed, WorkerTimeout, worker_main
 
 
 def prog(*instrs):
@@ -315,6 +315,51 @@ def test_replacement_releases_gpu_when_respawn_fails():
         worker._abandon_and_respawn(leases, "request_limit")
 
     assert leases.depth(0) == 0
+
+
+@pytest.mark.parametrize("gpus", [(0,), (0, 2)])
+def test_replacement_quarantines_before_releasing_unconfirmed_initialization(gpus):
+    worker = object.__new__(Worker)
+    worker.gpu_id = gpus[0]
+    worker._gpu_ids = gpus
+    leases = GPULeases(list(gpus))
+    worker._kill = lambda: None
+    worker._start_process = lambda: None
+
+    def fail_initialize():
+        assert all(leases._holder[gpu] is worker for gpu in gpus)
+        raise WorkerCleanupError("initialization cleanup was not confirmed")
+
+    worker._initialize_process = fail_initialize
+    with pytest.raises(WorkerCleanupError):
+        worker.replace(leases, "request_limit")
+    for gpu in gpus:
+        with pytest.raises(GPUUnavailable):
+            leases.acquire(gpu, "next")
+        assert leases._holder[gpu] is worker
+
+
+def test_background_replacement_closes_pool_on_unconfirmed_cleanup(pool, monkeypatch):
+    worker = pool._idle.acquire(0)
+    original_initialize = worker._initialize_process
+
+    def initialize():
+        original_initialize()
+        raise WorkerCleanupError("initialization cleanup was not confirmed")
+
+    monkeypatch.setattr(worker, "_initialize_process", initialize)
+    pool._release_or_replace(worker, "request_limit")
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with pool._replacing_lock:
+            if not pool._replacing:
+                break
+        time.sleep(0.01)
+    assert pool.closing
+    with pytest.raises(GPUUnavailable):
+        pool._leases.acquire(0, "next")
+    with pytest.raises(PoolBusy):
+        pool.submit(successful_program(), timeout=5)
 
 
 def test_replacement_does_not_claim_gpu_when_preparation_fails():
@@ -658,10 +703,16 @@ def test_parent_waits_for_retiring_process_exit_before_releasing_gpu(tmp_path):
     worker = object.__new__(Worker)
     worker.gpu_id = 0
     worker._conn = Connection()
-    worker._kill = lambda: observed.append(leases.held)
+
+    def wait_for_exit(timeout):
+        observed.append(("wait", leases.held))
+        return {"exitcode": 0, "orphaned": False}
+
+    worker._wait_for_exit = wait_for_exit
+    worker._kill = lambda: observed.append(("kill", leases.held))
     result = worker._run_in_workspace(None, 10, leases, str(tmp_path))
     assert result.retire_reason == reason
-    assert observed == [True]
+    assert observed == [("wait", True), ("kill", True)]
     assert not leases.held
 
 
