@@ -237,7 +237,7 @@
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Launch the router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
@@ -245,10 +245,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/benchmark-kernel.html">Benchmark a Kernel with KCoral</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/remote-compilation.html">Remote Compilation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/agent-integration.html">Agent Integration Guide</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Development Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../development-guide/build-the-docs.html">Build the Docs</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
@@ -319,8 +315,7 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <p><a id="instruction-protocol"></a></p>
-<section id="kcoral-protocol">
+          <section id="kcoral-protocol">
 <h1>KCoral Protocol<a class="headerlink" href="#kcoral-protocol" title="Link to this heading">¶</a></h1>
 <p>KCoral exposes two client HTTP endpoints. A program is an ordered list of
 instructions, executed in one request with no persistent session handles.
@@ -435,8 +430,6 @@ and response format.</p>
 </tbody>
 </table>
 </div>
-<p><a id="request-envelope"></a></p>
-<p><a id="request-fields"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -558,7 +551,6 @@ unlisted fields are rejected.</p>
 <span class="p">}</span>
 </pre></div>
 </div>
-<p><a id="fields"></a></p>
 <p>Each field is required for the listed kinds.</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
@@ -604,7 +596,6 @@ unlisted fields are rejected.</p>
 </tbody>
 </table>
 </div>
-<p><a id="details"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -631,9 +622,6 @@ unlisted fields are rejected.</p>
 </tbody>
 </table>
 </div>
-<p><a id="cuda-c-modules"></a>
-<a id="cutedsl-modules"></a>
-<a id="triton-modules"></a></p>
 <p>For modules, <code class="docutils literal notranslate"><span class="pre">get_function</span></code> selects an object from the executed Python namespace.
 The object need not be directly callable: a compiler tool may consume it first.
 Upload CUDA source as a <code class="docutils literal notranslate"><span class="pre">file</span></code> and pass its path and export names to your compiler.
@@ -739,10 +727,8 @@ the exported function name and naming the target explicitly let a client build w
 of its own:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">tvm.script</span><span class="w"> </span><span class="kn">import</span> <span class="n">tirx</span> <span class="k">as</span> <span class="n">T</span>
 
-
 <span class="nd">@T</span><span class="o">.</span><span class="n">prim_func</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">add_one</span><span class="p">(</span><span class="n">A</span><span class="p">:</span> <span class="n">T</span><span class="o">.</span><span class="n">Buffer</span><span class="p">((</span><span class="mi">256</span><span class="p">,),</span> <span class="s2">"float32"</span><span class="p">),</span> <span class="n">B</span><span class="p">:</span> <span class="n">T</span><span class="o">.</span><span class="n">Buffer</span><span class="p">((</span><span class="mi">256</span><span class="p">,),</span> <span class="s2">"float32"</span><span class="p">)):</span> <span class="o">...</span>  <span class="c1"># kernel body</span>
-
 
 <span class="n">target</span> <span class="o">=</span> <span class="n">tvm</span><span class="o">.</span><span class="n">target</span><span class="o">.</span><span class="n">Target</span><span class="p">({</span><span class="s2">"kind"</span><span class="p">:</span> <span class="s2">"cuda"</span><span class="p">,</span> <span class="s2">"arch"</span><span class="p">:</span> <span class="s2">"sm_100a"</span><span class="p">})</span>
 <span class="k">with</span> <span class="n">target</span><span class="p">:</span>  <span class="c1"># the tirx pipeline reads the arch from Target.current()</span>
@@ -786,7 +772,6 @@ part, exactly as a tensor’s do.</p>
 <span class="p">]</span>
 </pre></div>
 </div>
-<p><a id="get_function"></a></p>
 </section>
 </section>
 <section id="get-function">
@@ -800,7 +785,6 @@ part, exactly as a tensor’s do.</p>
 <span class="p">}</span>
 </pre></div>
 </div>
-<p><a id="id1"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -839,7 +823,6 @@ part, exactly as a tensor’s do.</p>
 </tbody>
 </table>
 </div>
-<p><a id="id2"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -885,7 +868,6 @@ earlier instructions.</p>
 <span class="p">}</span>
 </pre></div>
 </div>
-<p><a id="id3"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -919,7 +901,6 @@ earlier instructions.</p>
 </tbody>
 </table>
 </div>
-<p><a id="id4"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -957,7 +938,6 @@ checks and measurement. A callable returned by a <code class="docutils literal n
 <span class="p">}</span>
 </pre></div>
 </div>
-<p><a id="id5"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -996,13 +976,11 @@ checks and measurement. A callable returned by a <code class="docutils literal n
 </tbody>
 </table>
 </div>
-<p><a id="id6"></a></p>
 <p><code class="docutils literal notranslate"><span class="pre">return</span></code> has no <code class="docutils literal notranslate"><span class="pre">id</span></code> and creates no handle. Instructions run in the order given
 and a <code class="docutils literal notranslate"><span class="pre">return</span></code> may appear anywhere after the instruction it references, so a
 program can interleave returns with the uploads and runs that follow them. A
 <code class="docutils literal notranslate"><span class="pre">return</span></code> that has already run contributes its entry to <code class="docutils literal notranslate"><span class="pre">results</span></code> even if a later
 instruction fails.</p>
-<p><a id="file-and-folder-selection"></a></p>
 <p><strong>File and folder returns</strong></p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"return"</span><span class="p">,</span><span class="w"> </span><span class="nt">"key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"report"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"file"</span><span class="p">,</span><span class="w"> </span><span class="nt">"path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"outputs/report.txt"</span><span class="p">}</span>
 </pre></div>
@@ -1044,9 +1022,6 @@ instruction fails.</p>
 </section>
 <section id="caching">
 <h2>Caching<a class="headerlink" href="#caching" title="Link to this heading">¶</a></h2>
-<p><a id="blob-cache"></a>
-<a id="memory-cache"></a>
-<a id="file-cache"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -1121,7 +1096,6 @@ A hit in one category does not generally guarantee a hit in the other.</p>
 </section>
 <section id="response">
 <h2>Response<a class="headerlink" href="#response" title="Link to this heading">¶</a></h2>
-<p><a id="response-fields"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -1170,8 +1144,6 @@ A hit in one category does not generally guarantee a hit in the other.</p>
 </tbody>
 </table>
 </div>
-<p><a id="fields-1"></a></p>
-<p><a id="id7"></a></p>
 <p>A 200 response carries the fields below. A non-200 carries the smaller error
 body described under <a class="reference internal" href="#errors">Errors</a> instead.</p>
 <div class="table-wrapper colwidths-auto docutils container">
@@ -1531,7 +1503,6 @@ timings, or captured output.</p>
 </div>
 <p>This program uploads its own harness and returns <code class="docutils literal notranslate"><span class="pre">42</span></code>; it needs no binary parts.
 The same upload/get_function/run shape supports GPU harnesses and compiler tools.</p>
-<p><a id="python-client"></a></p>
 <p>The Python package constructs request parts, hashes and response values for you.</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
@@ -1548,10 +1519,10 @@ The same upload/get_function/run shape supports GPU harnesses and compiler tools
 <td><p><a class="reference internal" href="writing-a-program.html"><span class="std std-doc">Program guide</span></a>; <a class="reference internal" href="../python-api/index.html"><span class="std std-doc">API signatures and errors</span></a></p></td>
 </tr>
 <tr class="row-even"><td><p>Upload files and folders</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">upload_folder</span></code> expands into ordinary file-upload instructions with no new operation. See <a class="reference internal" href="writing-a-program.html#uploading-files-and-folders"><span class="std std-ref">files used by uploaded scripts</span></a>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">upload_folder</span></code> expands into ordinary file-upload instructions with no new operation. See <a class="reference internal" href="writing-a-program.html#upload-files-and-folders"><span class="std std-ref">files used by uploaded scripts</span></a>.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Receive files and folders</p></td>
-<td><p>Results decode to <code class="docutils literal notranslate"><span class="pre">ReturnedFile</span></code> and <code class="docutils literal notranslate"><span class="pre">ReturnedFolder</span></code>. See <a class="reference internal" href="writing-a-program.html#returning-files-and-folders"><span class="std std-ref">client usage</span></a>.</p></td>
+<td><p>Results decode to <code class="docutils literal notranslate"><span class="pre">ReturnedFile</span></code> and <code class="docutils literal notranslate"><span class="pre">ReturnedFolder</span></code>. See <a class="reference internal" href="writing-a-program.html#return-files-and-folders"><span class="std std-ref">client usage</span></a>.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1645,7 +1616,7 @@ The same upload/get_function/run shape supports GPU harnesses and compiler tools
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=37f9d0c5"></script>
+</div><script src="../_static/documentation_options.js?v=adebac25"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

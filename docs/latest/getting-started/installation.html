@@ -237,7 +237,7 @@
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Launch the router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
@@ -245,10 +245,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/benchmark-kernel.html">Benchmark a Kernel with KCoral</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/remote-compilation.html">Remote Compilation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/agent-integration.html">Agent Integration Guide</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Development Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../development-guide/build-the-docs.html">Build the Docs</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
@@ -335,7 +331,6 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 <h2>Method 1: Install a prebuilt package<a class="headerlink" href="#method-1-install-a-prebuilt-package" title="Link to this heading">¶</a></h2>
 <p>Prebuilt wheels are available on <a class="reference external" href="https://pypi.org/project/kcoral/">PyPI</a>.
 They support Linux on x86-64 and AArch64 with glibc 2.28 or newer.</p>
-<p><a id="the-client"></a></p>
 <section id="install-the-client">
 <h3>Install the client<a class="headerlink" href="#install-the-client" title="Link to this heading">¶</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>kcoral
@@ -346,13 +341,10 @@ They support Linux on x86-64 and AArch64 with glibc 2.28 or newer.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"from kcoral import Client, Program; print('KCoral client is ready')"</span>
 </pre></div>
 </div>
-<p><a id="the-server"></a></p>
 </section>
 <section id="install-the-server">
 <h3>Install the server<a class="headerlink" href="#install-the-server" title="Link to this heading">¶</a></h3>
 <p>Install the <code class="docutils literal notranslate"><span class="pre">server</span></code> extra:</p>
-<p><a id="front-end-engine-and-client"></a>
-<a id="install-the-server-with-pip"></a></p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'kcoral[server]'</span>
 </pre></div>
 </div>
@@ -367,7 +359,8 @@ They support Linux on x86-64 and AArch64 with glibc 2.28 or newer.</p>
 <h3>Get the source<a class="headerlink" href="#get-the-source" title="Link to this heading">¶</a></h3>
 <p>Install Git, Rust 1.87 or newer with Cargo, and a C/C++ build toolchain.
 The package build compiles the Rust router and node supervisor, including when
-installing only the client dependencies.</p>
+installing only the client dependencies. The <code class="docutils literal notranslate"><span class="pre">pip</span></code> commands below build and
+install both binaries automatically; a separate <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">build</span></code> is not needed.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/mlc-ai/kcoral.git
 <span class="nb">cd</span><span class="w"> </span>kcoral
 </pre></div>
@@ -387,11 +380,9 @@ installing only the client dependencies.</p>
 </section>
 </section>
 <section id="server-system-requirements">
-<span id="cpu-compilation-server"></span><span id="gpu-server"></span><h2>Server system requirements<a class="headerlink" href="#server-system-requirements" title="Link to this heading">¶</a></h2>
+<h2>Server system requirements<a class="headerlink" href="#server-system-requirements" title="Link to this heading">¶</a></h2>
 <p>The server runs on Linux. Its Python dependencies are installed by the <code class="docutils literal notranslate"><span class="pre">server</span></code>
 extra; the GPU driver and system tools below must be installed separately.</p>
-<p><a id="running-gpu-programs"></a>
-<a id="running-cpu-compilation-workers"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -426,6 +417,19 @@ server’s startup check cannot launch bubblewrap, it warns and runs without
 filesystem isolation; see the isolation guide above for configuration.</p>
 <p>For deployment, see <a class="reference internal" href="../server-guide/launch-the-server.html"><span class="std std-doc">Launch the server</span></a>
 and <a class="reference internal" href="../tutorials/remote-compilation.html"><span class="std std-doc">Remote Compilation</span></a>.</p>
+</section>
+<section id="prepare-for-local-compilation-optional">
+<h2>Prepare for local compilation (optional)<a class="headerlink" href="#prepare-for-local-compilation-optional" title="Link to this heading">¶</a></h2>
+<p>If you want to compile CUDA C libraries on the client, as in the
+<a class="reference internal" href="../tutorials/benchmark-kernel.html#on-the-client"><span class="std std-ref">benchmark tutorial</span></a>, install
+the CUDA toolkit and a compatible C++ compiler on that machine. Add TVM FFI
+and its C++ build dependencies to the active client environment:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'apache-tvm-ffi[cpp]&gt;=0.1.14.post0'</span>
+</pre></div>
+</div>
+<p>These additional dependencies are needed only when compiling locally. The
+KCoral <code class="docutils literal notranslate"><span class="pre">server</span></code> extra already includes the TVM FFI build dependencies for
+server-side compilation.</p>
 </section>
 </section>
 
@@ -493,6 +497,7 @@ and <a class="reference internal" href="../tutorials/remote-compilation.html"><s
 </ul>
 </li>
 <li><a class="reference internal" href="#server-system-requirements">Server system requirements</a></li>
+<li><a class="reference internal" href="#prepare-for-local-compilation-optional">Prepare for local compilation (optional)</a></li>
 </ul>
 </li>
 </ul>
@@ -504,7 +509,7 @@ and <a class="reference internal" href="../tutorials/remote-compilation.html"><s
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=37f9d0c5"></script>
+</div><script src="../_static/documentation_options.js?v=adebac25"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

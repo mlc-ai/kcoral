@@ -3,7 +3,7 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Benchmark a Kernel with KCoral" href="../tutorials/benchmark-kernel.html"><link rel="prev" title="Router" href="router.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Benchmark a Kernel with KCoral" href="../tutorials/benchmark-kernel.html"><link rel="prev" title="Launch the router" href="router.html">
         <link rel="canonical" href="https://kcoral.mlc.ai/docs/latest/server-guide/logging.html">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-light.png" as="image">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-dark.png" as="image">
@@ -182,7 +182,7 @@
           <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
         </button>
       </div>
-      <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
         <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
       </label>
     </div>
@@ -237,7 +237,7 @@
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="router.html">Launch the router</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
@@ -245,10 +245,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/benchmark-kernel.html">Benchmark a Kernel with KCoral</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/remote-compilation.html">Remote Compilation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/agent-integration.html">Agent Integration Guide</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Development Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../development-guide/build-the-docs.html">Build the Docs</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
@@ -314,107 +310,183 @@
               <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
             </button>
           </div>
-          <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
             <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <p><a id="logs"></a></p>
-<section id="logging">
+          <section id="logging">
 <h1>Logging<a class="headerlink" href="#logging" title="Link to this heading">¶</a></h1>
-<p>Each run appends to <code class="docutils literal notranslate"><span class="pre">&lt;log-dir&gt;/runs/&lt;timestamp&gt;/events.jsonl</span></code>, one JSON object
-per line, mirrored to stderr and never capped or rotated. Only the front-end
-writes it, so one file holds a request’s whole history: <code class="docutils literal notranslate"><span class="pre">request_received</span></code>,
-<code class="docutils literal notranslate"><span class="pre">request_accepted</span></code> with the shape of the workload, <code class="docutils literal notranslate"><span class="pre">request_routed</span></code> with the
-worker that took it, and <code class="docutils literal notranslate"><span class="pre">request_finished</span></code>. One that never comes back stops
-after the record naming its worker.</p>
-<p><code class="docutils literal notranslate"><span class="pre">sandbox_disabled</span></code> records why the startup check disabled isolation, at <code class="docutils literal notranslate"><span class="pre">WARNING</span></code>.
-<code class="docutils literal notranslate"><span class="pre">pool_ready.sandbox</span></code> reports the active mode: <code class="docutils literal notranslate"><span class="pre">bubblewrap</span></code> or <code class="docutils literal notranslate"><span class="pre">none</span></code>.</p>
-<p><code class="docutils literal notranslate"><span class="pre">request_finished</span></code> carries a <code class="docutils literal notranslate"><span class="pre">finish_reason</span></code> describing the request outcome.</p>
+<p>When a request fails, runs slowly, or causes a worker to restart, the server logs
+help you follow what happened. KCoral records request progress and worker events
+in one log for each server run. You can use a request ID to trace one submission,
+or a worker ID to investigate repeated problems on the same worker.</p>
+<section id="find-and-configure-the-logs">
+<h2>Find and configure the logs<a class="headerlink" href="#find-and-configure-the-logs" title="Link to this heading">¶</a></h2>
+<p>By default, <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">server</span></code> writes to
+<code class="docutils literal notranslate"><span class="pre">logs/runs/&lt;timestamp&gt;/events.jsonl</span></code>. Each server start creates a new run
+directory, and each line in the file is a JSON object with <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>, <code class="docutils literal notranslate"><span class="pre">level</span></code>,
+<code class="docutils literal notranslate"><span class="pre">event</span></code>, and fields specific to that event. The <code class="docutils literal notranslate"><span class="pre">server_started</span></code> event identifies
+the run directory and records the server configuration.</p>
+<p>The server also prints a shorter text version to standard error. This console
+view omits bulky fields such as tracebacks and runtime versions and truncates
+long field values; use the JSON log for the full record. KCoral does not rotate
+or cap these log files.</p>
+<p>Use <code class="docutils literal notranslate"><span class="pre">--log-dir</span></code> to choose the directory, <code class="docutils literal notranslate"><span class="pre">--no-log-console</span></code> to turn off console
+events, and <code class="docutils literal notranslate"><span class="pre">--no-log-programs</span></code> to stop saving program JSON alongside the log.
+<code class="docutils literal notranslate"><span class="pre">--log-dir</span> <span class="pre">''</span></code> disables file logging while leaving console events enabled.
+See <a class="reference internal" href="launch-the-server.html#logs"><span class="std std-ref">logging configuration</span></a> for defaults and
+environment settings.</p>
+<p>These JSON logs come from the Python server, including when it runs behind a
+Router. The Router and its node supervisors write their own text logs to the
+console. Use the request ID to correlate Router and server events.</p>
+</section>
+<section id="follow-a-request">
+<h2>Follow a request<a class="headerlink" href="#follow-a-request" title="Link to this heading">¶</a></h2>
+<p>A typical request produces four events:</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
-<tr class="row-odd"><th class="head"><p><code class="docutils literal notranslate"><span class="pre">finish_reason</span></code></p></th>
-<th class="head"><p>what happened</p></th>
+<tr class="row-odd"><th class="head"><p>Event</p></th>
+<th class="head"><p>What it tells you</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">completed</span></code></p></td>
-<td><p>the program ran to the end</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">request_received</span></code></p></td>
+<td><p>The request arrived; includes <code class="docutils literal notranslate"><span class="pre">request_id</span></code>, client address, and declared content length</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">program_failed</span></code></p></td>
-<td><p>the program raised; <code class="docutils literal notranslate"><span class="pre">error_kind</span></code> and <code class="docutils literal notranslate"><span class="pre">instruction_index</span></code> say where</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">request_accepted</span></code></p></td>
+<td><p>The program passed validation; includes the timeout, request size, instruction and upload counts, and saved program filename when available</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">timeout</span></code></p></td>
-<td><p>no answer inside <code class="docutils literal notranslate"><span class="pre">timeout_seconds</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">request_routed</span></code></p></td>
+<td><p>A worker was assigned; includes <code class="docutils literal notranslate"><span class="pre">worker_id</span></code>, <code class="docutils literal notranslate"><span class="pre">gpu_id</span></code>, <code class="docutils literal notranslate"><span class="pre">generation</span></code>, <code class="docutils literal notranslate"><span class="pre">pid</span></code>, and <code class="docutils literal notranslate"><span class="pre">queue_ms</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">crashed</span></code></p></td>
-<td><p>the process exited mid-request; <code class="docutils literal notranslate"><span class="pre">exitcode</span></code> says how</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">no_worker</span></code></p></td>
-<td><p>saturated, nothing ran</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">rejected</span></code></p></td>
-<td><p>the request was rejected</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">cache_miss</span></code></p></td>
-<td><p>required blobs were missing</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">server_error</span></code></p></td>
-<td><p>the server failed to handle the request</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">request_finished</span></code></p></td>
+<td><p>The request ended; includes the HTTP status, <code class="docutils literal notranslate"><span class="pre">finish_reason</span></code>, and available execution or error details</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">worker_retired</span></code> carries a <code class="docutils literal notranslate"><span class="pre">reason</span></code> describing why the worker is being replaced.</p>
+<p>A rejected request or cache miss finishes before worker assignment, so it does
+not produce every event in this sequence. Cache retries are separate HTTP
+requests and have separate request IDs.</p>
+<p>On completed or failed executions, <code class="docutils literal notranslate"><span class="pre">request_finished</span></code> includes program <code class="docutils literal notranslate"><span class="pre">status</span></code>,
+<code class="docutils literal notranslate"><span class="pre">response_bytes</span></code>, and timing fields: <code class="docutils literal notranslate"><span class="pre">queue_ms</span></code>, <code class="docutils literal notranslate"><span class="pre">elapsed_ms</span></code>, <code class="docutils literal notranslate"><span class="pre">lease_wait_ms</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">lease_held_ms</span></code>. Error details, when available, include <code class="docutils literal notranslate"><span class="pre">error_kind</span></code>,
+<code class="docutils literal notranslate"><span class="pre">error_message</span></code>, <code class="docutils literal notranslate"><span class="pre">instruction_index</span></code>, <code class="docutils literal notranslate"><span class="pre">instruction_op</span></code>, and <code class="docutils literal notranslate"><span class="pre">instruction_id</span></code>.
+Crashes can also include <code class="docutils literal notranslate"><span class="pre">exitcode</span></code>; crashes and timeouts can include captured
+worker output in <code class="docutils literal notranslate"><span class="pre">output_tail</span></code>. Fields depend on how far the request progressed.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">finish_reason</span></code> explains the outcome:</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
-<tr class="row-odd"><th class="head"><p><code class="docutils literal notranslate"><span class="pre">reason</span></code></p></th>
-<th class="head"><p>what happened</p></th>
-<th class="head"><p>level</p></th>
+<tr class="row-odd"><th class="head"><p><code class="docutils literal notranslate"><span class="pre">finish_reason</span></code></p></th>
+<th class="head"><p>Meaning</p></th>
+<th class="head"><p>Level</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">request_limit</span></code></p></td>
-<td><p>the worker reached <code class="docutils literal notranslate"><span class="pre">--max-requests-per-worker</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">completed</span></code></p></td>
+<td><p>The program ran to completion</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">INFO</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">poisoned_context</span></code></p></td>
-<td><p>runtime cleanup failed</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">program_failed</span></code></p></td>
+<td><p>An instruction failed; error fields describe the failure</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">INFO</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">timeout</span></code></p></td>
+<td><p>The request exceeded its execution budget</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">WARNING</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">sandbox_cleanup</span></code></p></td>
-<td><p>sandbox resources survived the request or workspace cleanup failed</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">crashed</span></code></p></td>
+<td><p>The worker crashed while handling the request</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ERROR</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">no_worker</span></code></p></td>
+<td><p>No worker became available, or the pool was shutting down; nothing ran</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">WARNING</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">timeout</span></code></p></td>
-<td><p>the worker exceeded the execution timeout</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">rejected</span></code></p></td>
+<td><p>The request was rejected before execution</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">WARNING</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">crashed</span></code></p></td>
-<td><p>the worker crashed or could not execute a program</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">cache_miss</span></code></p></td>
+<td><p>Required uploaded content was missing from the cache</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">INFO</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">server_error</span></code></p></td>
+<td><p>The server could not handle the request or produce its response</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">ERROR</span></code></p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>The pool makes a replacement worker available once it is ready.</p>
-<p>A failing program is the client’s kernel and stays <code class="docutils literal notranslate"><span class="pre">INFO</span></code>; only what the server
-itself did wrong reaches <code class="docutils literal notranslate"><span class="pre">ERROR</span></code>. A <code class="docutils literal notranslate"><span class="pre">cpu_only</span></code> function caught touching the GPU
-is a <code class="docutils literal notranslate"><span class="pre">gpu_access_violation</span></code> record at <code class="docutils literal notranslate"><span class="pre">WARNING</span></code>.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>jq<span class="w"> </span>-c<span class="w"> </span><span class="s1">'select(.level == "ERROR")'</span><span class="w"> </span>logs/runs/*/events.jsonl
-jq<span class="w"> </span>-c<span class="w"> </span><span class="s1">'select(.request_id == "&lt;id&gt;")'</span><span class="w"> </span>logs/runs/*/events.jsonl<span class="w">   </span><span class="c1"># one request end to end</span>
-jq<span class="w"> </span>-c<span class="w"> </span><span class="s1">'select(.worker_id == "gpu0/w3")'</span><span class="w"> </span>logs/runs/*/events.jsonl<span class="w"> </span><span class="c1"># one worker's history</span>
-</pre></div>
+<p>An ordinary program failure is logged at <code class="docutils literal notranslate"><span class="pre">INFO</span></code>, while a worker crash is
+<code class="docutils literal notranslate"><span class="pre">ERROR</span></code> even if client code caused it. A function declared <code class="docutils literal notranslate"><span class="pre">cpu_only=True</span></code> that
+is caught accessing the GPU also produces a <code class="docutils literal notranslate"><span class="pre">gpu_access_violation</span></code> event at
+<code class="docutils literal notranslate"><span class="pre">WARNING</span></code>.</p>
+<p>To follow one request, search the log for the <code class="docutils literal notranslate"><span class="pre">request_id</span></code> returned to the
+client. To investigate a worker, search for its <code class="docutils literal notranslate"><span class="pre">worker_id</span></code>, such as <code class="docutils literal notranslate"><span class="pre">gpu0/w3</span></code>.</p>
+</section>
+<section id="diagnose-startup-and-worker-replacement">
+<h2>Diagnose startup and worker replacement<a class="headerlink" href="#diagnose-startup-and-worker-replacement" title="Link to this heading">¶</a></h2>
+<p>During startup, <code class="docutils literal notranslate"><span class="pre">pool_ready</span></code> reports the worker count, target, runtime versions,
+and active sandbox mode (<code class="docutils literal notranslate"><span class="pre">bubblewrap</span></code> or <code class="docutils literal notranslate"><span class="pre">none</span></code>). A <code class="docutils literal notranslate"><span class="pre">sandbox_disabled</span></code> warning
+explains why the isolation startup check failed. If the server cannot start,
+look for <code class="docutils literal notranslate"><span class="pre">server_start_failed</span></code>; worker initialization failures also produce
+<code class="docutils literal notranslate"><span class="pre">worker_failed</span></code> with a <code class="docutils literal notranslate"><span class="pre">phase</span></code> and error description.</p>
+<p>A <code class="docutils literal notranslate"><span class="pre">worker_id</span></code>, such as <code class="docutils literal notranslate"><span class="pre">gpu0/w3</span></code> or <code class="docutils literal notranslate"><span class="pre">cpu/w0</span></code>, identifies a position in the pool.
+It stays the same when the process is replaced; <code class="docutils literal notranslate"><span class="pre">generation</span></code> and <code class="docutils literal notranslate"><span class="pre">pid</span></code>
+distinguish the processes that occupy it. <code class="docutils literal notranslate"><span class="pre">worker_retired</span></code> records why a process
+is being replaced:</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p><code class="docutils literal notranslate"><span class="pre">reason</span></code></p></th>
+<th class="head"><p>Meaning</p></th>
+<th class="head"><p>Level</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">request_limit</span></code></p></td>
+<td><p>The worker reached <code class="docutils literal notranslate"><span class="pre">--max-requests-per-worker</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">INFO</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">poisoned_context</span></code></p></td>
+<td><p>Runtime cleanup failed</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">WARNING</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">sandbox_cleanup</span></code></p></td>
+<td><p>Resources survived the request or workspace cleanup failed</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">WARNING</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">timeout</span></code></p></td>
+<td><p>The worker exceeded the execution timeout</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">WARNING</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">crashed</span></code></p></td>
+<td><p>The worker crashed or could not execute a program</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ERROR</span></code></p></td>
+</tr>
+</tbody>
+</table>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">worker_id</span></code> names a seat on a GPU and outlives the processes that fill it, which
-<code class="docutils literal notranslate"><span class="pre">generation</span></code> and <code class="docutils literal notranslate"><span class="pre">pid</span></code> identify; the <code class="docutils literal notranslate"><span class="pre">worker_*</span></code> records cover what happens
-between requests. A killed worker’s output reaches <code class="docutils literal notranslate"><span class="pre">request_finished</span></code> as
-<code class="docutils literal notranslate"><span class="pre">output_tail</span></code>.</p>
-<p>Each program’s JSON is kept beside the log as <code class="docutils literal notranslate"><span class="pre">programs/&lt;request-id&gt;.json</span></code>, so a
-failed request names the kernel that failed. Blob uploads travel by hash, so this
-costs a few KB per request; <code class="docutils literal notranslate"><span class="pre">--no-log-programs</span></code> turns it off.</p>
+<p>A replacement produces <code class="docutils literal notranslate"><span class="pre">worker_ready</span></code> once initialized. If replacement fails,
+look for <code class="docutils literal notranslate"><span class="pre">worker_failed</span></code> or <code class="docutils literal notranslate"><span class="pre">worker_replace_failed</span></code>, both at <code class="docutils literal notranslate"><span class="pre">ERROR</span></code>. During
+shutdown, <code class="docutils literal notranslate"><span class="pre">shutdown_started</span></code>, <code class="docutils literal notranslate"><span class="pre">shutdown_waiting</span></code>, and <code class="docutils literal notranslate"><span class="pre">shutdown_complete</span></code> show
+the pool’s progress; <code class="docutils literal notranslate"><span class="pre">server_stopped</span></code> records the end of the server lifecycle.</p>
+</section>
+<section id="inspect-a-saved-program">
+<h2>Inspect a saved program<a class="headerlink" href="#inspect-a-saved-program" title="Link to this heading">¶</a></h2>
+<p>By default, accepted programs are saved as
+<code class="docutils literal notranslate"><span class="pre">programs/&lt;request-id&gt;.json</span></code> inside the run directory. The <code class="docutils literal notranslate"><span class="pre">program</span></code> field in
+<code class="docutils literal notranslate"><span class="pre">request_accepted</span></code> gives the filename when the save succeeds. Open it to inspect
+the instructions and inline source associated with a request.</p>
+<p>These files contain the submitted program JSON, including inline module source,
+but not binary upload contents: those are referenced by hash. Their size depends
+on the program, and they do not by themselves contain everything needed to
+replay it. Use <code class="docutils literal notranslate"><span class="pre">--no-log-programs</span></code> to disable this recording.</p>
+</section>
 </section>
 
         </article>
@@ -438,7 +510,7 @@ costs a few KB per request; <code class="docutils literal notranslate"><span cla
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">Router</div>
+                <div class="title">Launch the router</div>
                 
               </div>
             </a>
@@ -457,13 +529,35 @@ costs a few KB per request; <code class="docutils literal notranslate"><span cla
         
       </footer>
     </div>
-    <aside class="toc-drawer no-toc">
+    <aside class="toc-drawer">
       
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Logging</a><ul>
+<li><a class="reference internal" href="#find-and-configure-the-logs">Find and configure the logs</a></li>
+<li><a class="reference internal" href="#follow-a-request">Follow a request</a></li>
+<li><a class="reference internal" href="#diagnose-startup-and-worker-replacement">Diagnose startup and worker replacement</a></li>
+<li><a class="reference internal" href="#inspect-a-saved-program">Inspect a saved program</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
       
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=37f9d0c5"></script>
+</div><script src="../_static/documentation_options.js?v=adebac25"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

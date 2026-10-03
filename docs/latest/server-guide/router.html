@@ -9,7 +9,7 @@
         <link rel="prefetch" href="../_static/brand/kcoral-logo-dark.png" as="image">
 
     <link rel="shortcut icon" href="../_static/kcoral-icon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Router - KCoral documentation</title>
+        <title>Launch the router - KCoral documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -237,7 +237,7 @@
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Router</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Launch the router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
@@ -245,10 +245,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/benchmark-kernel.html">Benchmark a Kernel with KCoral</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/remote-compilation.html">Remote Compilation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/agent-integration.html">Agent Integration Guide</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Development Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../development-guide/build-the-docs.html">Build the Docs</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
@@ -319,53 +315,21 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="router">
-<h1>Router<a class="headerlink" href="#router" title="Link to this heading">¶</a></h1>
-<p>A Router gives clients one server address and selects an available compute
-node for each request. A node supervisor starts, checks and restarts its local
-Python server. The supervisor and Python server initiate their connections to
-the Router, so compute nodes do not need to accept inbound network connections.</p>
-<p>Install the client and Python server from the same revision as the Rust
-binaries so their internal protocols match.</p>
-<section id="components-and-connections">
-<h2>Components and connections<a class="headerlink" href="#components-and-connections" title="Link to this heading">¶</a></h2>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Component</p></th>
-<th class="head"><p>Where it runs</p></th>
-<th class="head"><p>Responsibility</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">router</span></code></p></td>
-<td><p>A host reachable by clients and nodes</p></td>
-<td><p>Accept HTTP requests, manage a bounded wait queue and select nodes</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">server</span> <span class="pre">--router</span> <span class="pre">...</span></code></p></td>
-<td><p>Each compute node</p></td>
-<td><p>Supervise one Python server process tree and report its health</p></td>
-</tr>
-<tr class="row-even"><td><p>Python server</p></td>
-<td><p>Each compute node</p></td>
-<td><p>Execute programs with the existing worker pool</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>Clients connect over HTTP. Nodes connect to the Router over gRPC streams,
-using Protocol Buffers over HTTP/2.</p>
-<p>The node manager opens <code class="docutils literal notranslate"><span class="pre">ConnectSupervisor</span></code>, a stream of health, instance and
-capacity reports. The Python server opens one <code class="docutils literal notranslate"><span class="pre">ConnectSlot</span></code> stream per local
-worker. A slot is one connection able to carry one execution at a time. Both
-connections originate on the node; the Router sends work over these existing
-streams. The node manager never handles execution bodies.</p>
-<p>Request and response bytes travel in frames of at most 256 KiB. Small bounded
-queues and HTTP/2 flow control limit buffering in the tunnel. The Python
-<code class="docutils literal notranslate"><span class="pre">/execute</span></code> implementation still assembles the complete request before parsing it.</p>
-</section>
-<section id="build-and-launch">
-<h2>Build and launch<a class="headerlink" href="#build-and-launch" title="Link to this heading">¶</a></h2>
+          <section id="launch-the-router">
+<h1>Launch the router<a class="headerlink" href="#launch-the-router" title="Link to this heading">¶</a></h1>
+<p>The Router gives clients a stable address for a changing pool of compute nodes.
+Instead of connecting to individual machines, clients send programs to the
+Router, which selects an available node for each request. You can add capacity,
+replace a machine, or take a node offline without changing the address clients
+use. This separates the lifetime of the client endpoint from that of the GPU
+machines doing the work.</p>
+<section id="start-a-router-and-a-node">
+<h2>Start a Router and a node<a class="headerlink" href="#start-a-router-and-a-node" title="Link to this heading">¶</a></h2>
+<p>Install the <a class="reference internal" href="../getting-started/installation.html"><span class="std std-doc">KCoral package</span></a> on the Router
+host and the <a class="reference internal" href="../getting-started/installation.html#install-the-server"><span class="std std-ref">server environment</span></a>
+on each compute node. Use the same KCoral version across the deployment. Prebuilt
+packages include the required Rust binaries. Installing from source with <code class="docutils literal notranslate"><span class="pre">pip</span></code>
+builds them automatically; no separate Cargo command is needed.</p>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
 <p>KCoral allows clients to execute arbitrary code on its workers. Only allow
@@ -373,68 +337,136 @@ trusted clients to access your KCoral server or Router. Deploy on a trusted,
 isolated network and never expose these endpoints to the public internet.
 Run workers in a sandbox with restricted permissions and access to host resources.</p>
 </div>
-<p>Use Rust 1.87 or newer and Cargo. The build supplies its own
-Protocol Buffers compiler. Build from the repository root:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--locked
-<span class="nb">export</span><span class="w"> </span><span class="nv">PATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">/target/release:</span><span class="nv">$PATH</span><span class="s2">"</span>
+<p>To try a routed deployment on one GPU machine, start the Router in one terminal:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>router<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">9000</span>
 </pre></div>
 </div>
-<p>Install the <a class="reference internal" href="../getting-started/installation.html"><span class="std std-doc">Python package</span></a> on the Router host
-and the worker environment on each compute node. Start the Router:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">KCORAL_NODE_TOKEN</span><span class="o">=</span><span class="s1">'&lt;shared-node-token&gt;'</span>
-kcoral<span class="w"> </span>router<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">9000</span>
+<p>In a second terminal, start a node:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>server<span class="w"> </span>--router<span class="w"> </span>http://127.0.0.1:9000<span class="w"> </span>--node-id<span class="w"> </span>gpu-a
 </pre></div>
 </div>
-<p>On the same machine, start a node with the same token and a stable <code class="docutils literal notranslate"><span class="pre">node-id</span></code>:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">KCORAL_NODE_TOKEN</span><span class="o">=</span><span class="s1">'&lt;shared-node-token&gt;'</span>
-kcoral<span class="w"> </span>server<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--router<span class="w"> </span>http://127.0.0.1:9000<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--node-id<span class="w"> </span>gpu-a
+<p>The Router listens on port <code class="docutils literal notranslate"><span class="pre">9000</span></code>. The second command starts a supervisor and
+its local KCoral server on GPU <code class="docutils literal notranslate"><span class="pre">0</span></code> by default. The node
+registers as <code class="docutils literal notranslate"><span class="pre">gpu-a</span></code> and becomes available once its server is healthy and ready
+to receive work. The Router itself does not execute programs or need a GPU.</p>
+<p>Check the deployment through the Router’s address:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>http://127.0.0.1:9000/health
 </pre></div>
 </div>
-<p>The examples run on one machine. For remote nodes, bind the Router with
-<code class="docutils literal notranslate"><span class="pre">--host</span> <span class="pre">0.0.0.0</span></code> and replace <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code> in the Router URL with its reachable address. Give each node
-a distinct stable <code class="docutils literal notranslate"><span class="pre">node-id</span></code>. The example uses plain HTTP for a controlled
-network; an HTTPS endpoint requires TLS terminated by a compatible proxy.
-The optional token authenticates node streams; it does not provide public
-client authorization or encryption.</p>
-<p>With <code class="docutils literal notranslate"><span class="pre">--router</span></code>, <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">server</span></code> starts a supervisor (the node manager) that
-manages the Python server using the current Python environment. Its health-check address follows
-<code class="docutils literal notranslate"><span class="pre">--host</span></code> and <code class="docutils literal notranslate"><span class="pre">--port</span></code>; the Router does not connect to that address.
-Without <code class="docutils literal notranslate"><span class="pre">--router</span></code>, the Python server runs directly.</p>
-<p>Pass server options directly:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>server<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--router<span class="w"> </span>http://127.0.0.1:9000<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--node-id<span class="w"> </span>gpu-a<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--gpus<span class="w"> </span><span class="m">0</span><span class="w"> </span>--log-dir<span class="w"> </span>/var/log/kcoral
-</pre></div>
+<p>Once the node is ready, the Router’s <code class="docutils literal notranslate"><span class="pre">/health</span></code> response reports
+<code class="docutils literal notranslate"><span class="pre">&quot;status&quot;:</span> <span class="pre">&quot;ok&quot;</span></code>, the pool’s GPU target, and its combined request capacity.
+Clients use <code class="docutils literal notranslate"><span class="pre">http://127.0.0.1:9000</span></code> as their
+server URL, with the same <code class="docutils literal notranslate"><span class="pre">Client</span></code> and <code class="docutils literal notranslate"><span class="pre">Program</span></code> API used for a standalone
+server. See <a class="reference internal" href="../client-guide/writing-a-program.html"><span class="std std-doc">Writing a program</span></a> for
+submitting a request.</p>
+<section id="how-the-components-work-together">
+<h3>How the components work together<a class="headerlink" href="#how-the-components-work-together" title="Link to this heading">¶</a></h3>
+<p>The two commands above start three components: the Router, a supervisor, and
+the KCoral server that the supervisor manages. The machine running that server
+is a compute node; in this example, it is registered as <code class="docutils literal notranslate"><span class="pre">gpu-a</span></code>.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Component</p></th>
+<th class="head"><p>Role</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Router</p></td>
+<td><p>Accepts client requests, selects a healthy node with capacity, and forwards programs and results</p></td>
+</tr>
+<tr class="row-odd"><td><p>Supervisor</p></td>
+<td><p>Starts the node’s KCoral server, reports its health and capacity, and restarts it if it fails</p></td>
+</tr>
+<tr class="row-even"><td><p>KCoral server</p></td>
+<td><p>Executes programs in its worker pool, just as in a standalone deployment</p></td>
+</tr>
+</tbody>
+</table>
 </div>
-<p>The manager requires Linux 5.3 or newer, access to <code class="docutils literal notranslate"><span class="pre">/proc</span></code>, and permission to
-signal its child processes. Run the Router
-and node managers under your service manager so those processes are also
-restarted if they fail.</p>
-<p>Clients continue using <code class="docutils literal notranslate"><span class="pre">Client</span></code>, <code class="docutils literal notranslate"><span class="pre">Program</span></code>, <code class="docutils literal notranslate"><span class="pre">POST</span> <span class="pre">/execute</span></code> and <code class="docutils literal notranslate"><span class="pre">GET</span> <span class="pre">/health</span></code>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">kcoral</span><span class="w"> </span><span class="kn">import</span> <span class="n">Client</span>
-
-<span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="s2">"http://127.0.0.1:9000"</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="n">client</span><span class="o">.</span><span class="n">target</span><span class="p">())</span>
-    <span class="c1"># client.execute(program) uses the same program format as a direct server.</span>
-</pre></div>
-</div>
+<p><code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">server</span> <span class="pre">--router</span> <span class="pre">...</span></code> starts the supervisor automatically. The supervisor
+manages the server’s lifetime; programs and results pass between the Router
+and the server directly.</p>
 </section>
-<section id="capacity-and-health">
-<h2>Capacity and health<a class="headerlink" href="#capacity-and-health" title="Link to this heading">¶</a></h2>
-<p>A node needs a healthy supervisor report and an idle slot for the same Python
-server instance before it can receive work. All eligible nodes must match the
-Router’s target and runtime-version baseline. A Python restart invalidates slots
-from the previous instance. Disconnected nodes without active requests expire
-after the retention interval; once all records expire, the next healthy node
-establishes a new compatibility baseline.</p>
-<p>When choosing between nodes, the Router compares reported busy workers with
-its own active requests and divides the larger number by worker capacity. It
-samples two candidates and chooses the lower load, breaking ties toward the
-least recently selected node. Python’s worker pool remains the final capacity
-boundary.</p>
+<section id="common-settings">
+<h3>Common settings<a class="headerlink" href="#common-settings" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Router <code class="docutils literal notranslate"><span class="pre">--host</span> <span class="pre">127.0.0.1</span></code> and <code class="docutils literal notranslate"><span class="pre">--port</span> <span class="pre">9000</span></code> default to local access on port
+<code class="docutils literal notranslate"><span class="pre">9000</span></code>. Use <code class="docutils literal notranslate"><span class="pre">--host</span> <span class="pre">0.0.0.0</span></code> to accept connections over a trusted network.</p></li>
+<li><p>On the server, <code class="docutils literal notranslate"><span class="pre">--router</span></code> specifies which Router to join, and <code class="docutils literal notranslate"><span class="pre">--node-id</span></code>
+identifies the node. Give each node a distinct identifier and keep it stable
+across restarts.</p></li>
+<li><p>The Router can require a shared token before allowing nodes to join. This
+check is optional and disabled by default, so nodes can connect without a
+token. To enable it, set the <code class="docutils literal notranslate"><span class="pre">KCORAL_NODE_TOKEN</span></code> environment variable to the
+same value on the Router and each node before launching them, or pass <code class="docutils literal notranslate"><span class="pre">--node-token</span></code> on both commands. The Router then
+rejects node connections with a missing or incorrect token. This check does
+not authenticate clients or encrypt traffic.</p></li>
+</ul>
+<p>To use separate machines, start the Router with <code class="docutils literal notranslate"><span class="pre">--host</span> <span class="pre">0.0.0.0</span></code> on a host
+reachable over your trusted network. Replace <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code> in node and client URLs
+with that host’s address, and give each node a distinct <code class="docutils literal notranslate"><span class="pre">--node-id</span></code>. Nodes can
+join and leave while clients continue using the same Router address.</p>
+<p>Nodes sharing a Router must have matching GPU targets and runtime versions;
+incompatible nodes cannot receive work. Use separate Routers for different GPU
+architectures or runtime environments.</p>
+</section>
+</section>
+<section id="recover-from-failures-and-stop-nodes">
+<h2>Recover from failures and stop nodes<a class="headerlink" href="#recover-from-failures-and-stop-nodes" title="Link to this heading">¶</a></h2>
+<p>A routed deployment can keep serving requests when a node becomes unavailable,
+as long as other compatible nodes have capacity. The supervisor monitors its
+local server and restarts it if it fails or stops responding. If the node loses
+its Router connection, it attempts to reconnect while continuing to monitor
+the server.</p>
+<p>Requests already running on a failed node may be interrupted. What clients see
+depends on whether the request had started:</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Situation</p></th>
+<th class="head"><p>Client-visible behavior</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>The queue is full or the wait for capacity expires</p></td>
+<td><p>HTTP 503; the request has not been sent to a node and can be retried</p></td>
+</tr>
+<tr class="row-odd"><td><p>A connection to a node fails after work may have started</p></td>
+<td><p>HTTP 502; execution may have occurred, so the Router does not automatically retry the request</p></td>
+</tr>
+<tr class="row-even"><td><p>The client disconnects</p></td>
+<td><p>Work may still be running on the node; disconnecting does not guarantee that it stops</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>To stop a node you launched in a terminal, press <strong>Ctrl+C</strong> in that terminal.
+The node stops accepting new work and waits for active requests to finish before
+exiting. A background node can be stopped the same way with a SIGTERM signal,
+for example <code class="docutils literal notranslate"><span class="pre">kill</span> <span class="pre">&lt;pid&gt;</span></code>, where <code class="docutils literal notranslate"><span class="pre">&lt;pid&gt;</span></code> is the process ID of <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">server</span></code>.
+If you use a tool such as systemd to run the node as a background service, allow
+enough time in its stop timeout for your longest requests to finish. Forcing
+the process to stop before then can interrupt those requests.</p>
+<p>Recovery from an unresponsive server is different: the supervisor cannot wait
+indefinitely for its requests to finish. It asks the server to stop, then forces
+it to exit if necessary so a replacement can restore the node’s capacity. The
+<a class="reference internal" href="#node-connection-and-supervisor-options">supervisor options</a> control this wait
+and the health checks.</p>
+<p>As described in the <a class="reference internal" href="launch-the-server.html#cache"><span class="std std-ref">server cache configuration</span></a>,
+each server keeps its own upload caches. A request sent to a different node may
+need to transfer the same content again, and restarting a server clears its
+memory cache.</p>
+<p>Router and supervisor logs go to the console. Use the request ID to follow a
+request across Router events and the <a class="reference internal" href="logging.html"><span class="std std-doc">server logs</span></a> when diagnosing
+a failure.</p>
+</section>
+<section id="configuration">
+<h2>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">¶</a></h2>
+<section id="router-options">
+<h3>Router options<a class="headerlink" href="#router-options" title="Link to this heading">¶</a></h3>
+<p>These options apply to <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">router</span></code>. Use <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">router</span> <span class="pre">--help</span></code> to list them.
+For the token, an explicit <code class="docutils literal notranslate"><span class="pre">--node-token</span></code> overrides <code class="docutils literal notranslate"><span class="pre">KCORAL_NODE_TOKEN</span></code>.</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -477,97 +509,102 @@ boundary.</p>
 <td><p>Retention of disconnected, unused node records</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--max-request-bytes</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">268435456</span></code></p></td>
-<td><p>Maximum accepted request body size</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">268435456</span></code> (256 MiB)</p></td>
+<td><p>Maximum accepted request body size, in bytes</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--node-token</span></code></p></td>
+<td><p>No token, or <code class="docutils literal notranslate"><span class="pre">KCORAL_NODE_TOKEN</span></code></p></td>
+<td><p>Authenticate node connections</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>The Router uses the <a class="reference internal" href="../client-guide/protocol.html#get-health"><span class="std std-ref">health schema</span></a>,
-with router-local request counts.</p>
-<p>The supervisor polls loopback-only <code class="docutils literal notranslate"><span class="pre">/internal/worker-status</span></code> and forwards worker
-occupancy and environment information to the router. Node eligibility follows
-these states:</p>
+</section>
+<section id="node-connection-and-supervisor-options">
+<h3>Node connection and supervisor options<a class="headerlink" href="#node-connection-and-supervisor-options" title="Link to this heading">¶</a></h3>
+<p>These options apply to nodes launched with <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">server</span></code>. For execution and
+worker settings, see the <a class="reference internal" href="launch-the-server.html#configuration"><span class="std std-ref">server configuration</span></a>.
+Explicit command-line options take precedence over environment variables.</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
-<tr class="row-odd"><th class="head"><p>Node status</p></th>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Environment variable</p></th>
 <th class="head"><p>Meaning</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">starting</span></code></p></td>
-<td><p>A node is registered but has not established healthy service</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--router</span></code></p></td>
+<td><p>Disabled</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">KCORAL_ROUTER_ENDPOINT</span></code></p></td>
+<td><p>Router HTTP(S) origin</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ready</span></code></p></td>
-<td><p>Health and compatibility allow admission, subject to capacity</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--node-id</span></code></p></td>
+<td><p>Unset; required with <code class="docutils literal notranslate"><span class="pre">--router</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">KCORAL_NODE_ID</span></code></p></td>
+<td><p>Stable identifier for this node</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">recovering</span></code></p></td>
-<td><p>Successful observations are accumulating after a failure</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">incompatible</span></code></p></td>
-<td><p>Target or runtime versions differ from the Router baseline</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">unhealthy</span></code></p></td>
-<td><p>Health observations failed or became stale</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--node-token</span></code></p></td>
+<td><p>No token</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">KCORAL_NODE_TOKEN</span></code></p></td>
+<td><p>Bearer token for node connections</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>Start with one Router. With multiple replicas, direct each node’s supervisor
-stream and all of its slots to the same replica. Otherwise a replica may see
-health without the corresponding execution connections.</p>
-</section>
-<section id="cache-negotiation-and-failures">
-<h2>Cache negotiation and failures<a class="headerlink" href="#cache-negotiation-and-failures" title="Link to this heading">¶</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">X-KCoral-Node</span></code> identifies the selected node. The client sends it back
-as a preference during cache-miss retries. If the node or Python instance
-changes, the client may need to resend bytes. Memory caches are instance-local;
-persistent file caches follow their configured storage lifetime.</p>
-<p>The Router creates a fresh <code class="docutils literal notranslate"><span class="pre">X-Request-ID</span></code> for every HTTP attempt, including
-rejections, and propagates it through Router and Python logs. Cache negotiation
-may therefore produce several request identifiers for one <code class="docutils literal notranslate"><span class="pre">Client.execute()</span></code>.
-Router and node-manager logs are plain text without terminal color codes; the
-Router’s <code class="docutils literal notranslate"><span class="pre">request_finished</span></code> record can be correlated with Python’s JSON events
-using <code class="docutils literal notranslate"><span class="pre">request_id</span></code>.</p>
+<p>The following advanced options control the supervisor’s health checks and
+restart behavior. They require <code class="docutils literal notranslate"><span class="pre">--router</span></code> and are omitted from
+<code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">server</span> <span class="pre">--help</span></code>.</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
-<tr class="row-odd"><th class="head"><p>Failure</p></th>
-<th class="head"><p>Client-visible behavior</p></th>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Meaning</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>Queue full or no capacity before timeout</p></td>
-<td><p>HTTP 503 before node selection; retrying is safe</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--health-interval-seconds</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2</span></code></p></td>
+<td><p>Interval between health probes and between control heartbeats</p></td>
 </tr>
-<tr class="row-odd"><td><p>Tunnel fails after work may have reached a node</p></td>
-<td><p>HTTP 502 with an unknown execution outcome; the Router does not replay the program</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--health-timeout-seconds</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
+<td><p>Timeout for each local health probe</p></td>
 </tr>
-<tr class="row-even"><td><p>Client disconnects</p></td>
-<td><p>Router capacity is released and the slot is discarded; this does not prove GPU computation has stopped</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--failure-threshold</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">3</span></code></p></td>
+<td><p>Consecutive failed health probes before restarting the server</p></td>
 </tr>
-<tr class="row-odd"><td><p>Router connection fails</p></td>
-<td><p>Node connections reconnect; local server health checks and restart decisions continue independently</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--startup-grace-seconds</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">30</span></code></p></td>
+<td><p>Initial period during which failed health probes do not trigger a restart</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--stable-reset-seconds</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
+<td><p>Healthy running time before resetting restart backoff</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--termination-grace-seconds</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
+<td><p>Grace period before force-killing an unhealthy server during restart; normal shutdown waits for requests to finish</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--restart-min-delay-seconds</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
+<td><p>Initial restart backoff</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--restart-max-delay-seconds</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">30</span></code></p></td>
+<td><p>Maximum restart backoff before jitter</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--restart-jitter</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0.2</span></code></p></td>
+<td><p>Random variation in restart delay, as a fraction; accepted range <code class="docutils literal notranslate"><span class="pre">0</span></code>–<code class="docutils literal notranslate"><span class="pre">0.5</span></code></p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>The node manager checks local health every 2 seconds by default, with a 1-second
-probe timeout, 3-failure threshold and 30-second startup grace. Restart delays
-grow from 1 to 30 seconds with jitter, and reset after 60 seconds of stable running.</p>
-<p>To stop a node, send SIGTERM to the <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">server</span></code> process.
-It withdraws healthy status and signals the Python child. Idle slots close and
-active requests finish before the child exits. Normal shutdown waits for that
-exit without imposing an additional timeout.</p>
-<p>When restarting an unhealthy server, <code class="docutils literal notranslate"><span class="pre">--termination-grace-seconds</span></code> (default 5)
-limits the wait after SIGTERM before forced cleanup. The node manager removes
-descendant processes before starting the replacement Python server.</p>
-<p>External shutdown deadlines can still interrupt work. Configure the service
-manager’s stop timeout, such as systemd’s <code class="docutils literal notranslate"><span class="pre">TimeoutStopSec</span></code>, to allow the desired
-request completion. The service manager must also clean up the entire process
-tree if the node manager itself dies.</p>
-<p>Implementation reference: <a class="reference external" href="https://github.com/mlc-ai/kcoral/tree/main/rust/kcoral">Router source and package guide</a>.</p>
+</section>
 </section>
 </section>
 
@@ -623,11 +660,18 @@ tree if the node manager itself dies.</p>
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">Router</a><ul>
-<li><a class="reference internal" href="#components-and-connections">Components and connections</a></li>
-<li><a class="reference internal" href="#build-and-launch">Build and launch</a></li>
-<li><a class="reference internal" href="#capacity-and-health">Capacity and health</a></li>
-<li><a class="reference internal" href="#cache-negotiation-and-failures">Cache negotiation and failures</a></li>
+<li><a class="reference internal" href="#">Launch the router</a><ul>
+<li><a class="reference internal" href="#start-a-router-and-a-node">Start a Router and a node</a><ul>
+<li><a class="reference internal" href="#how-the-components-work-together">How the components work together</a></li>
+<li><a class="reference internal" href="#common-settings">Common settings</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#recover-from-failures-and-stop-nodes">Recover from failures and stop nodes</a></li>
+<li><a class="reference internal" href="#configuration">Configuration</a><ul>
+<li><a class="reference internal" href="#router-options">Router options</a></li>
+<li><a class="reference internal" href="#node-connection-and-supervisor-options">Node connection and supervisor options</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -639,7 +683,7 @@ tree if the node manager itself dies.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=37f9d0c5"></script>
+</div><script src="../_static/documentation_options.js?v=adebac25"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

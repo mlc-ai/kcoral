@@ -1,105 +1,91 @@
 # Agent Integration Guide
 
-A coding agent can write KCoral programs using the repository's `kcoral-client`
-skill.
+A coding agent can use KCoral to test generated kernels on a remote GPU and
+use the results to guide its next revision. To make that loop useful, the agent
+needs both the programming interface and a clear definition of success. This
+tutorial shows how to provide that context, ask for a runnable experiment, and
+review the results before iterating.
 
-## Give the agent the skill
+## Provide the KCoral skill
 
-This repository exposes the skill at `.agents/skills/kcoral-client/SKILL.md`.
-That directory links to `.claude/skills/kcoral-client`, the underlying source.
-An agent that supports repository skills can discover it there. For another
-agent, explicitly provide the file as task context or put it in that agent's
-supported skill location. Merely mentioning the skill name does not guarantee
-that an agent has read it.
-
-```bash
-cat .agents/skills/kcoral-client/SKILL.md
-```
+Start by giving the agent the `kcoral-client` skill, which explains how to
+construct and submit programs. In a repository checkout, ask the agent to read
+`.agents/skills/kcoral-client/SKILL.md`. If you are working outside the repository,
+download the skill and provide it as task context or install it in your agent's
+supported skill location.
 
 {download}`Download the skill <../../.claude/skills/kcoral-client/SKILL.md>`.
 
-Give the agent access to the same revision of the skill, the
-[KCoral Protocol](../client-guide/protocol.md) and
-[Write a client program](../client-guide/writing-a-program.md). The protocol is the authority for field
-validation when a summary and the protocol disagree. The Python API supplies
-the actual method signatures.
+The agent can also refer to [Write a client program](../client-guide/writing-a-program.md)
+and the [Python API](../python-api/index.rst) for examples and method details.
+Use documentation that matches the installed KCoral version.
 
-## State a concrete task
+## Define the experiment
 
-Provide the server address, kernel source or function to implement, tensor
-shapes and types, correctness tolerance, and the outputs you want. Say whether
-compilation should happen on the GPU server, on a separate CPU server, or locally.
+The agent needs enough information to build an experiment whose results you
+can assess. Provide the server address, kernel source or function to implement,
+tensor shapes and types, correctness tolerance, and the outputs you want. Say
+whether compilation should happen on the GPU server, on a separate CPU server,
+or locally.
 
 For example, give the agent this prompt from the repository checkout:
 
 ```text
 Read .agents/skills/kcoral-client/SKILL.md before writing the client.
-Use docs/client-guide/protocol.md for field validation. Upload your own Python harness
-for compilation, allocation, correctness checks, and measurement.
 
-Write a runnable Python client for the KCoral server at http://127.0.0.1:8000.
+Write and run a Python client for the KCoral server at http://127.0.0.1:8000.
 Implement add-one for 4096 float32 elements using CUDA C. Compile on the
-GPU server, create or upload input tensors, compare the output with a Python
-reference, and benchmark only after correctness passes. Return the correctness
-report and all timing statistics. Handle FAILED outcomes separately from
-request/transport exceptions. Keep the program in a file that can be rerun.
+GPU server, compare the output with a Python reference using rtol=1e-2 and
+atol=1e-3, and benchmark only after correctness passes. Return the correctness
+report and timing statistics. Report any failure instead of a successful timing.
+Keep the program in a file that can be rerun.
 
 Use the supplied server; do not launch another server or change its configuration.
 Report the exact command, target architecture, runtime versions and results.
 ```
 
-Replace the task's workload and endpoint with yours. Supply any required files
-and their expected relative paths. If the agent may execute submissions, make
-that scope explicit; otherwise ask it to produce the program for review.
+Replace the workload, tolerances, and endpoint with yours. Supply any required
+input files. The example authorizes the agent to run the experiment; if you want
+to review the program first, ask it to write the client without submitting it.
 
-## Have the agent build a program
+## Guide the agent through the workflow
 
-The skill guides the agent through this sequence:
+With the task and interface established, the agent can turn the experiment into
+a program. Ask it to check the server's GPU architecture and installed tools,
+then prepare the inputs, compile the kernel, check its output, and measure it
+only after correctness passes.
 
-1. Inspect [`Client.health()`](../client-guide/protocol.md#get-health) and, when
-   compiling a library, the GPU server's `Client.target()` so it uses an available
-   toolchain and the right architecture.
-2. Upload the module and use `get_function()` to select the kernel or launcher.
-3. Allocate device inputs in uploaded Python, or upload data whose exact values
-   matter. Use `upload_file()` or `upload_folder()` for scripts that read files.
-4. Compile with an uploaded harness, or upload a prebuilt library.
-5. Run the kernel and compare it against a reference with your harness’s assertions.
-6. Run your measurement harness only after the comparison succeeds.
-7. Add `return_()` instructions for the correctness and timing reports, then
-   submit with `Client.execute()` and inspect the outcome.
-
-The [benchmark tutorial](benchmark-kernel.md) explains compilation and GPU
-lease handling. Use the Python client to construct multipart requests: the client handles hashing, missing-blob negotiation and
-decoding tensor results.
+The [benchmark tutorial](benchmark-kernel.md) walks through this flow. If the
+agent needs to compile on a separate CPU server, point it to
+[Remote Compilation](remote-compilation.md). For profiling or running an existing
+script, the [builtin CLI tools](../client-guide/builtin-cli-tools.md) may be enough.
 
 ## Review the generated program
 
+Before relying on the results, check that the program tests the intended
+workload and only reports timings after correctness passes:
+
 | Check | Reason |
 | --- | --- |
-| Every reference points to an earlier instruction in this request | Handles do not survive another submission |
-| Output tensors are written before comparison | An uninitialized allocation is not a computed answer |
-| The result is explicitly selected by `return_()` | `run()` alone does not send a value back |
-| File uploads use the dedicated helper methods | `Program.upload(kind="file")` is not supported |
-| Host-only work is selected with `get_function(..., cpu_only=True)` and invoked in its own `run` | The worker releases the GPU lease and checks for CUDA access |
-| `assert_close` precedes `benchmark` | Incorrect output should not produce a successful timing report |
-| The program checks `result.completed` before reading expected keys | Failures can return only partial results |
-| Target and version information accompanies results | Generated code must match the actual server environment |
+| Inputs, shapes, dtypes, and tolerances match your task | The experiment should measure the workload you intended |
+| The kernel output is checked against the reference before benchmarking | Incorrect output should not produce a successful timing report |
+| Compilation and execution match the GPU server's architecture and installed tools | A local build or assumption may not match the remote environment |
+| The client reports failures and returns the requested results | Missing or partial results must not be presented as success |
+| The agent provides a runnable file and its invocation | You should be able to reproduce the experiment |
 
-Uploaded Python can use its own libraries, CLI tools and profiler scripts.
-`cpu_only=True` applies only to the selected function's own `run` instruction.
-Compilation that loads a CUDA module must keep the lease or split host building
-and GPU loading into separate instructions. Nested reference-shaped arguments
-remain JSON literals; pass handles as top-level arguments.
+For a closer review of how the program submits work and reads results, use
+[Write a client program](../client-guide/writing-a-program.md).
 
-## Preserve evidence and iterate
+## Use the results to guide the next revision
 
-Keep the generated client, source code, exact command, input shapes and types,
-server target and versions, correctness report, timing report and `request_id`.
-A program with `status == "FAILED"` is a valid response with an instruction
-error; a transport exception may leave execution outcome unknown. Do not turn
-either into a successful timing number.
+Once the agent has run the experiment, use the result to give it a focused
+follow-up task. If correctness fails, provide the error and ask it to fix the
+kernel before optimizing. If correctness passes but the kernel is slow, ask it
+to investigate the bottleneck and compare its next version against this run.
+Keep the input shapes, dtypes, tolerances, and GPU environment consistent so
+the comparison measures the effect of the code change.
 
-Feed the specific error, failing instruction and relevant server version back
-to the agent for the next revision. On an uncertain transport outcome, check
-logs before replaying code with external side effects. Each revision should
-still be a complete program and should pass correctness before it is measured.
+Save the runnable client and results from each version you want to compare.
+When an error needs more context, use the request ID to find the
+[server logs](../server-guide/logging.md) and share the relevant entries with
+the agent. This gives the next revision a concrete starting point.

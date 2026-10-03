@@ -1,35 +1,19 @@
-# Router
+# Launch the router
 
-A Router gives clients one server address and selects an available compute
-node for each request. A node supervisor starts, checks and restarts its local
-Python server. The supervisor and Python server initiate their connections to
-the Router, so compute nodes do not need to accept inbound network connections.
+The Router gives clients a stable address for a changing pool of compute nodes.
+Instead of connecting to individual machines, clients send programs to the
+Router, which selects an available node for each request. You can add capacity,
+replace a machine, or take a node offline without changing the address clients
+use. This separates the lifetime of the client endpoint from that of the GPU
+machines doing the work.
 
-Install the client and Python server from the same revision as the Rust
-binaries so their internal protocols match.
+## Start a Router and a node
 
-## Components and connections
-
-| Component | Where it runs | Responsibility |
-| --- | --- | --- |
-| `kcoral router` | A host reachable by clients and nodes | Accept HTTP requests, manage a bounded wait queue and select nodes |
-| `kcoral server --router ...` | Each compute node | Supervise one Python server process tree and report its health |
-| Python server | Each compute node | Execute programs with the existing worker pool |
-
-Clients connect over HTTP. Nodes connect to the Router over gRPC streams,
-using Protocol Buffers over HTTP/2.
-
-The node manager opens `ConnectSupervisor`, a stream of health, instance and
-capacity reports. The Python server opens one `ConnectSlot` stream per local
-worker. A slot is one connection able to carry one execution at a time. Both
-connections originate on the node; the Router sends work over these existing
-streams. The node manager never handles execution bodies.
-
-Request and response bytes travel in frames of at most 256 KiB. Small bounded
-queues and HTTP/2 flow control limit buffering in the tunnel. The Python
-`/execute` implementation still assembles the complete request before parsing it.
-
-## Build and launch
+Install the [KCoral package](../getting-started/installation.md) on the Router
+host and the [server environment](../getting-started/installation.md#install-the-server)
+on each compute node. Use the same KCoral version across the deployment. Prebuilt
+packages include the required Rust binaries. Installing from source with `pip`
+builds them automatically; no separate Cargo command is needed.
 
 ```{warning}
 KCoral allows clients to execute arbitrary code on its workers. Only allow
@@ -38,81 +22,121 @@ isolated network and never expose these endpoints to the public internet.
 Run workers in a sandbox with restricted permissions and access to host resources.
 ```
 
-Use Rust 1.87 or newer and Cargo. The build supplies its own
-Protocol Buffers compiler. Build from the repository root:
+To try a routed deployment on one GPU machine, start the Router in one terminal:
 
 ```bash
-cargo build --release --locked
-export PATH="$PWD/target/release:$PATH"
-```
-
-Install the [Python package](../getting-started/installation.md) on the Router host
-and the worker environment on each compute node. Start the Router:
-
-```bash
-export KCORAL_NODE_TOKEN='<shared-node-token>'
 kcoral router --host 127.0.0.1 --port 9000
 ```
 
-On the same machine, start a node with the same token and a stable `node-id`:
+In a second terminal, start a node:
 
 ```bash
-export KCORAL_NODE_TOKEN='<shared-node-token>'
-kcoral server \
-  --router http://127.0.0.1:9000 \
-  --node-id gpu-a
+kcoral server --router http://127.0.0.1:9000 --node-id gpu-a
 ```
 
-The examples run on one machine. For remote nodes, bind the Router with
-`--host 0.0.0.0` and replace `127.0.0.1` in the Router URL with its reachable address. Give each node
-a distinct stable `node-id`. The example uses plain HTTP for a controlled
-network; an HTTPS endpoint requires TLS terminated by a compatible proxy.
-The optional token authenticates node streams; it does not provide public
-client authorization or encryption.
+The Router listens on port `9000`. The second command starts a supervisor and
+its local KCoral server on GPU `0` by default. The node
+registers as `gpu-a` and becomes available once its server is healthy and ready
+to receive work. The Router itself does not execute programs or need a GPU.
 
-With `--router`, `kcoral server` starts a supervisor (the node manager) that
-manages the Python server using the current Python environment. Its health-check address follows
-`--host` and `--port`; the Router does not connect to that address.
-Without `--router`, the Python server runs directly.
-
-Pass server options directly:
+Check the deployment through the Router's address:
 
 ```bash
-kcoral server \
-  --router http://127.0.0.1:9000 \
-  --node-id gpu-a \
-  --host 0.0.0.0 --gpus 0 --log-dir /var/log/kcoral
+curl http://127.0.0.1:9000/health
 ```
 
-The manager requires Linux 5.3 or newer, access to `/proc`, and permission to
-signal its child processes. Run the Router
-and node managers under your service manager so those processes are also
-restarted if they fail.
+Once the node is ready, the Router's `/health` response reports
+`"status": "ok"`, the pool's GPU target, and its combined request capacity.
+Clients use `http://127.0.0.1:9000` as their
+server URL, with the same `Client` and `Program` API used for a standalone
+server. See [Writing a program](../client-guide/writing-a-program.md) for
+submitting a request.
 
-Clients continue using `Client`, `Program`, `POST /execute` and `GET /health`:
+### How the components work together
 
-```python
-from kcoral import Client
+The two commands above start three components: the Router, a supervisor, and
+the KCoral server that the supervisor manages. The machine running that server
+is a compute node; in this example, it is registered as `gpu-a`.
 
-with Client("http://127.0.0.1:9000") as client:
-    print(client.target())
-    # client.execute(program) uses the same program format as a direct server.
-```
+| Component | Role |
+| --- | --- |
+| Router | Accepts client requests, selects a healthy node with capacity, and forwards programs and results |
+| Supervisor | Starts the node's KCoral server, reports its health and capacity, and restarts it if it fails |
+| KCoral server | Executes programs in its worker pool, just as in a standalone deployment |
 
-## Capacity and health
+`kcoral server --router ...` starts the supervisor automatically. The supervisor
+manages the server's lifetime; programs and results pass between the Router
+and the server directly.
 
-A node needs a healthy supervisor report and an idle slot for the same Python
-server instance before it can receive work. All eligible nodes must match the
-Router's target and runtime-version baseline. A Python restart invalidates slots
-from the previous instance. Disconnected nodes without active requests expire
-after the retention interval; once all records expire, the next healthy node
-establishes a new compatibility baseline.
+### Common settings
 
-When choosing between nodes, the Router compares reported busy workers with
-its own active requests and divides the larger number by worker capacity. It
-samples two candidates and chooses the lower load, breaking ties toward the
-least recently selected node. Python's worker pool remains the final capacity
-boundary.
+- Router `--host 127.0.0.1` and `--port 9000` default to local access on port
+  `9000`. Use `--host 0.0.0.0` to accept connections over a trusted network.
+- On the server, `--router` specifies which Router to join, and `--node-id`
+  identifies the node. Give each node a distinct identifier and keep it stable
+  across restarts.
+- The Router can require a shared token before allowing nodes to join. This
+  check is optional and disabled by default, so nodes can connect without a
+  token. To enable it, set the `KCORAL_NODE_TOKEN` environment variable to the
+  same value on the Router and each node before launching them, or pass `--node-token` on both commands. The Router then
+  rejects node connections with a missing or incorrect token. This check does
+  not authenticate clients or encrypt traffic.
+
+To use separate machines, start the Router with `--host 0.0.0.0` on a host
+reachable over your trusted network. Replace `127.0.0.1` in node and client URLs
+with that host's address, and give each node a distinct `--node-id`. Nodes can
+join and leave while clients continue using the same Router address.
+
+Nodes sharing a Router must have matching GPU targets and runtime versions;
+incompatible nodes cannot receive work. Use separate Routers for different GPU
+architectures or runtime environments.
+
+## Recover from failures and stop nodes
+
+A routed deployment can keep serving requests when a node becomes unavailable,
+as long as other compatible nodes have capacity. The supervisor monitors its
+local server and restarts it if it fails or stops responding. If the node loses
+its Router connection, it attempts to reconnect while continuing to monitor
+the server.
+
+Requests already running on a failed node may be interrupted. What clients see
+depends on whether the request had started:
+
+| Situation | Client-visible behavior |
+| --- | --- |
+| The queue is full or the wait for capacity expires | HTTP 503; the request has not been sent to a node and can be retried |
+| A connection to a node fails after work may have started | HTTP 502; execution may have occurred, so the Router does not automatically retry the request |
+| The client disconnects | Work may still be running on the node; disconnecting does not guarantee that it stops |
+
+To stop a node you launched in a terminal, press **Ctrl+C** in that terminal.
+The node stops accepting new work and waits for active requests to finish before
+exiting. A background node can be stopped the same way with a SIGTERM signal,
+for example `kill <pid>`, where `<pid>` is the process ID of `kcoral server`.
+If you use a tool such as systemd to run the node as a background service, allow
+enough time in its stop timeout for your longest requests to finish. Forcing
+the process to stop before then can interrupt those requests.
+
+Recovery from an unresponsive server is different: the supervisor cannot wait
+indefinitely for its requests to finish. It asks the server to stop, then forces
+it to exit if necessary so a replacement can restore the node's capacity. The
+[supervisor options](#node-connection-and-supervisor-options) control this wait
+and the health checks.
+
+As described in the [server cache configuration](launch-the-server.md#cache),
+each server keeps its own upload caches. A request sent to a different node may
+need to transfer the same content again, and restarting a server clears its
+memory cache.
+
+Router and supervisor logs go to the console. Use the request ID to follow a
+request across Router events and the [server logs](logging.md) when diagnosing
+a failure.
+
+## Configuration
+
+### Router options
+
+These options apply to `kcoral router`. Use `kcoral router --help` to list them.
+For the token, an explicit `--node-token` overrides `KCORAL_NODE_TOKEN`.
 
 | Router option | Default | Meaning |
 | --- | --- | --- |
@@ -124,64 +148,33 @@ boundary.
 | `--queue-wait-timeout-seconds` | `1800` | Maximum wait for capacity |
 | `--max-queued-requests` | `1024` | Bound on requests waiting for capacity |
 | `--node-retention-seconds` | `600` | Retention of disconnected, unused node records |
-| `--max-request-bytes` | `268435456` | Maximum accepted request body size |
+| `--max-request-bytes` | `268435456` (256 MiB) | Maximum accepted request body size, in bytes |
+| `--node-token` | No token, or `KCORAL_NODE_TOKEN` | Authenticate node connections |
 
-The Router uses the [health schema](../client-guide/protocol.md#get-health),
-with router-local request counts.
+### Node connection and supervisor options
 
-The supervisor polls loopback-only `/internal/worker-status` and forwards worker
-occupancy and environment information to the router. Node eligibility follows
-these states:
+These options apply to nodes launched with `kcoral server`. For execution and
+worker settings, see the [server configuration](launch-the-server.md#configuration).
+Explicit command-line options take precedence over environment variables.
 
-| Node status | Meaning |
-| --- | --- |
-| `starting` | A node is registered but has not established healthy service |
-| `ready` | Health and compatibility allow admission, subject to capacity |
-| `recovering` | Successful observations are accumulating after a failure |
-| `incompatible` | Target or runtime versions differ from the Router baseline |
-| `unhealthy` | Health observations failed or became stale |
+| Option | Default | Environment variable | Meaning |
+| --- | --- | --- | --- |
+| `--router` | Disabled | `KCORAL_ROUTER_ENDPOINT` | Router HTTP(S) origin |
+| `--node-id` | Unset; required with `--router` | `KCORAL_NODE_ID` | Stable identifier for this node |
+| `--node-token` | No token | `KCORAL_NODE_TOKEN` | Bearer token for node connections |
 
-Start with one Router. With multiple replicas, direct each node's supervisor
-stream and all of its slots to the same replica. Otherwise a replica may see
-health without the corresponding execution connections.
+The following advanced options control the supervisor's health checks and
+restart behavior. They require `--router` and are omitted from
+`kcoral server --help`.
 
-## Cache negotiation and failures
-
-`X-KCoral-Node` identifies the selected node. The client sends it back
-as a preference during cache-miss retries. If the node or Python instance
-changes, the client may need to resend bytes. Memory caches are instance-local;
-persistent file caches follow their configured storage lifetime.
-
-The Router creates a fresh `X-Request-ID` for every HTTP attempt, including
-rejections, and propagates it through Router and Python logs. Cache negotiation
-may therefore produce several request identifiers for one `Client.execute()`.
-Router and node-manager logs are plain text without terminal color codes; the
-Router's `request_finished` record can be correlated with Python's JSON events
-using `request_id`.
-
-| Failure | Client-visible behavior |
-| --- | --- |
-| Queue full or no capacity before timeout | HTTP 503 before node selection; retrying is safe |
-| Tunnel fails after work may have reached a node | HTTP 502 with an unknown execution outcome; the Router does not replay the program |
-| Client disconnects | Router capacity is released and the slot is discarded; this does not prove GPU computation has stopped |
-| Router connection fails | Node connections reconnect; local server health checks and restart decisions continue independently |
-
-The node manager checks local health every 2 seconds by default, with a 1-second
-probe timeout, 3-failure threshold and 30-second startup grace. Restart delays
-grow from 1 to 30 seconds with jitter, and reset after 60 seconds of stable running.
-
-To stop a node, send SIGTERM to the `kcoral server` process.
-It withdraws healthy status and signals the Python child. Idle slots close and
-active requests finish before the child exits. Normal shutdown waits for that
-exit without imposing an additional timeout.
-
-When restarting an unhealthy server, `--termination-grace-seconds` (default 5)
-limits the wait after SIGTERM before forced cleanup. The node manager removes
-descendant processes before starting the replacement Python server.
-
-External shutdown deadlines can still interrupt work. Configure the service
-manager's stop timeout, such as systemd's `TimeoutStopSec`, to allow the desired
-request completion. The service manager must also clean up the entire process
-tree if the node manager itself dies.
-
-Implementation reference: [Router source and package guide](https://github.com/mlc-ai/kcoral/tree/main/rust/kcoral).
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--health-interval-seconds` | `2` | Interval between health probes and between control heartbeats |
+| `--health-timeout-seconds` | `1` | Timeout for each local health probe |
+| `--failure-threshold` | `3` | Consecutive failed health probes before restarting the server |
+| `--startup-grace-seconds` | `30` | Initial period during which failed health probes do not trigger a restart |
+| `--stable-reset-seconds` | `60` | Healthy running time before resetting restart backoff |
+| `--termination-grace-seconds` | `5` | Grace period before force-killing an unhealthy server during restart; normal shutdown waits for requests to finish |
+| `--restart-min-delay-seconds` | `1` | Initial restart backoff |
+| `--restart-max-delay-seconds` | `30` | Maximum restart backoff before jitter |
+| `--restart-jitter` | `0.2` | Random variation in restart delay, as a fraction; accepted range `0`–`0.5` |

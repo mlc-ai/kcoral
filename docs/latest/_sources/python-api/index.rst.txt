@@ -77,8 +77,19 @@ Server integration
 
 .. autoclass:: ServerConfig
 
-The :doc:`../server-guide/launch-the-server` page explains each field, the corresponding
-command-line option and differences between command-line and Python defaults.
+See :doc:`../server-guide/launch-the-server` for worker, cache, logging and
+request settings. Most configuration fields correspond to CLI flags with
+underscores replaced by hyphens. The logging flags ``--no-log-console`` and
+``--no-log-programs`` set ``log_console`` and ``log_programs`` to ``False``;
+``--sandbox-readonly-path`` appends to ``sandbox_readonly_paths``.
+Python defaults to ``log_dir=None``; the CLI defaults to ``logs`` or
+``KCORAL_LOG_DIR``. Console events are enabled by default in both cases.
+
+For routed deployments, ``router_endpoint``, ``node_id`` and ``node_token``
+correspond to ``--router``, ``--node-id`` and ``--node-token``. These connect
+the server's data slots to the Router. Creating an application with
+:func:`create_app` does not start the node supervisor; the CLI launcher does.
+See :doc:`../server-guide/router` for the deployment workflow.
 
 .. autofunction:: create_app
 

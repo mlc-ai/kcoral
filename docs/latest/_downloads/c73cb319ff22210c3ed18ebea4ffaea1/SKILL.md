@@ -18,7 +18,7 @@ disagree, that file wins.
 
 - The client endpoints are `POST /execute` and `GET /health`.
 - A request body is a **program**: an ordered list of instructions executed
-  top to bottom on a GPU worker.
+  top to bottom on a GPU or CPU worker.
 - There is no session state. Handles (`id`s) live for one request; a second
   `execute` shares nothing with the first, so every program uploads everything
   it needs.
@@ -37,7 +37,7 @@ For simple tasks, use `@client.function(timeout=30)` and call `.remote()` for th
 decoded value, or `.execute()` for the full `ProgramResult`. Define the function
 in a file, import dependencies inside it, and pass inputs explicitly. Configure
 the server on `Client` and keep it open for remote calls. See
-[Remote functions](../../../docs/client-guide/writing-a-program.md#remote-functions)
+[Remote functions](../../../docs/client-guide/writing-a-program.md#call-remote-functions)
 for supported inputs and execution boundaries.
 
 Upload a harness, select its entry point, run it and return what you want to inspect:
@@ -112,7 +112,7 @@ hidden files and empty directories. Missing paths, symlinks, and special files
 fail collection. Earlier returns survive later ordinary instruction failures.
 Saves require an existing parent; file replacement needs `overwrite=True`, and
 folder destinations must be new. Transfers are buffered and subject to server
-limits. See [client usage](../../../docs/client-guide/writing-a-program.md#returning-files-and-folders).
+limits. See [client usage](../../../docs/client-guide/writing-a-program.md#return-files-and-folders).
 
 ## Instructions
 
@@ -180,7 +180,7 @@ For convenience, uploaded Python can import `compile_tirx` and `benchmark` from
 `kcoral.builtins`. You can also use your own compilation and measurement harness.
 See the [API reference](../../../docs/python-api/index.rst#gpu-utilities)
 for signatures and options, and the
-[compilation tutorial](../../../docs/tutorials/benchmark-kernel.md#where-to-compile)
+[compilation tutorial](../../../docs/tutorials/benchmark-kernel.md#choose-where-to-compile)
 for GPU-server, CPU-server and local compilation examples.
 
 ## Tensors
@@ -218,7 +218,7 @@ by `benchmark` or your own measurement code.
 
 ## Outcomes
 
-- `options`: `timeout_seconds` (default 300, maximum 3600),
+- `options`: `timeout_seconds` (server defaults: 300, maximum 900),
   `output_limit_bytes` (default 1 MiB per stream). Values above a maximum are
   clamped. `stdout`/`stderr` come back with the response.
 - `COMPLETED` — every instruction ran; `results` holds the returned values.
@@ -226,17 +226,18 @@ by `benchmark` or your own measurement code.
   already ran stay in `results`. `error` carries `kind` (`parse`, `compile`,
   `runtime`, `gpu_access`, `correctness`, `serialization`, `unavailable`,
   `engine`), `message`, `instruction_index`, `instruction_id`, `traceback`.
-- `CACHE_MISS` — blobs missing; the Python client retries this once
-  automatically.
+- `CACHE_MISS` — blobs missing; the Python client retries with the missing
+  blobs, then with all local blobs if that retry misses again.
 - Exceptions: `KCoralError` (carries `status_code` and `kind`; 503
   means no worker free, 504 means `timeout_seconds` hit), `TransportError`
-  (request never reached the server), `ProtocolError` (malformed response).
+  (no HTTP response could be obtained; execution may have occurred),
+  `ProtocolError` (malformed response or failed cache recovery).
 
 ## Non-Python clients
 
 The wire format is `multipart/form-data` with a `program` part
 (`application/json`) plus one `blob:<sha256>` part
-(`application/octet-stream`) per tensor, bytes, or library blob, where
+(`application/octet-stream`) per tensor, bytes, file, or library blob, where
 `<sha256>` is the lowercase hex SHA-256 of the part bytes. Blobs are cached by
 hash: on `status: CACHE_MISS`, resend the program with the parts listed in
 `missing_blobs`, and resend every blob if that retry misses again. Responses

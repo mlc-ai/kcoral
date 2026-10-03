@@ -237,7 +237,7 @@
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Launch the router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
@@ -245,10 +245,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/benchmark-kernel.html">Benchmark a Kernel with KCoral</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/remote-compilation.html">Remote Compilation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/agent-integration.html">Agent Integration Guide</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Development Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../development-guide/build-the-docs.html">Build the Docs</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
@@ -319,9 +315,7 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <p><a id="writing-a-benchmark-program"></a>
-<a id="writing-a-program"></a></p>
-<section id="write-a-client-program">
+          <section id="write-a-client-program">
 <h1>Write a client program<a class="headerlink" href="#write-a-client-program" title="Link to this heading">¶</a></h1>
 <p>To submit a benchmark to KCoral, you describe the work in a program. Each program
 represents one request: it specifies the code and data to upload, the functions
@@ -367,8 +361,8 @@ into a request. There are four core instructions:</p>
 <code class="docutils literal notranslate"><span class="pre">upload_folder()</span></code> add uploads to the program, while <code class="docutils literal notranslate"><span class="pre">return_file()</span></code> and
 <code class="docutils literal notranslate"><span class="pre">return_folder()</span></code> select files or folders to send back. These use the same
 <code class="docutils literal notranslate"><span class="pre">upload</span></code> and <code class="docutils literal notranslate"><span class="pre">return</span></code> instructions. The sections on
-<a class="reference internal" href="#uploading-files-and-folders">uploading files</a> and
-<a class="reference internal" href="#returning-files-and-folders">returning files</a> cover these helpers in detail.</p>
+<a class="reference internal" href="#upload-files-and-folders">uploading files</a> and
+<a class="reference internal" href="#return-files-and-folders">returning files</a> cover these helpers in detail.</p>
 <p>When an instruction produces a value, the builder returns a <code class="docutils literal notranslate"><span class="pre">Register</span></code>: a local
 Python reference to the value that will exist on the server when the instruction
 runs. Pass registers to later instructions to select a function to call, supply
@@ -414,8 +408,8 @@ if the server’s machine is unreachable and the connection attempt receives no
 response, the setting above stops that attempt after 10 seconds. This setting
 does not limit how long a submitted program can run. See the
 <a class="reference internal" href="../python-api/index.html"><span class="std std-doc">Python API</span></a> for all client options.</p>
-<section id="simple-program">
-<h3>Simple program<a class="headerlink" href="#simple-program" title="Link to this heading">¶</a></h3>
+<section id="submit-a-simple-program">
+<h3>Submit a simple program<a class="headerlink" href="#submit-a-simple-program" title="Link to this heading">¶</a></h3>
 <p>To demonstrate <code class="docutils literal notranslate"><span class="pre">client.execute()</span></code> and its options, this example uploads one line
 of Python that prints <code class="docutils literal notranslate"><span class="pre">2</span></code> on the server. The call submits the program and returns
 its results, including the captured output:</p>
@@ -463,7 +457,6 @@ with the request’s <code class="docutils literal notranslate"><span class="pre
 captured <code class="docutils literal notranslate"><span class="pre">stdout</span></code> and <code class="docutils literal notranslate"><span class="pre">stderr</span></code> and flags indicating whether either was truncated.
 Returned tensors arrive as NumPy arrays in client CPU memory, and byte results
 arrive as Python <code class="docutils literal notranslate"><span class="pre">bytes</span></code>. Modules and callable handles cannot be returned.</p>
-<p><a id="handling-failures"></a></p>
 <p>A <code class="docutils literal notranslate"><span class="pre">COMPLETED</span></code> result means every instruction ran successfully. If an instruction
 fails, the result has status <code class="docutils literal notranslate"><span class="pre">FAILED</span></code>, and <code class="docutils literal notranslate"><span class="pre">result.error</span></code> describes what went
 wrong. The server skips the remaining instructions, but values selected by
@@ -484,8 +477,8 @@ These metrics can help distinguish a busy server or GPU from a slow program.
 They describe the request as a whole; use the measurements from your benchmark
 harness or profiler to assess the kernel’s execution time.</p>
 </section>
-<section id="remote-functions">
-<h3>Remote functions<a class="headerlink" href="#remote-functions" title="Link to this heading">¶</a></h3>
+<section id="call-remote-functions">
+<h3>Call remote functions<a class="headerlink" href="#call-remote-functions" title="Link to this heading">¶</a></h3>
 <p>KCoral also provides <code class="docutils literal notranslate"><span class="pre">&#64;client.function()</span></code> to run a Python function on the server
 without building a program by hand. In this example, <code class="docutils literal notranslate"><span class="pre">gpu_sum.remote(4)</span></code> creates
 the values 0 through 3 on the server’s GPU, adds them, and returns <code class="docutils literal notranslate"><span class="pre">6</span></code>:</p>
@@ -518,15 +511,15 @@ For a complete example that uploads a tensor, adds one on the GPU, and returns a
 NumPy array, <a class="reference download internal" download="" href="../_downloads/b9a1f3d3b6e2589d5eb247ee57f32d4a/remote_function.py"><code class="xref download docutils literal notranslate"><span class="pre">download</span> <span class="pre">remote_function.py</span></code></a>.</p>
 </section>
 </section>
-<section id="working-with-tensors-and-files">
-<h2>Working with tensors and files<a class="headerlink" href="#working-with-tensors-and-files" title="Link to this heading">¶</a></h2>
+<section id="work-with-tensors-and-files">
+<h2>Work with tensors and files<a class="headerlink" href="#work-with-tensors-and-files" title="Link to this heading">¶</a></h2>
 <p>A program may need tensor inputs or files for its code to read, and it may
 produce tensors or files you want to retrieve. You can upload data from the
 client or create it on the server, then select the outputs to return. The
 following snippets illustrate separate uses of a <code class="docutils literal notranslate"><span class="pre">Program</span></code>; start with a fresh
 <code class="docutils literal notranslate"><span class="pre">program</span> <span class="pre">=</span> <span class="pre">Program()</span></code> for each example.</p>
-<section id="tensors">
-<h3>Tensors<a class="headerlink" href="#tensors" title="Link to this heading">¶</a></h3>
+<section id="create-and-upload-tensors">
+<h3>Create and upload tensors<a class="headerlink" href="#create-and-upload-tensors" title="Link to this heading">¶</a></h3>
 <p>Tensors hold the inputs and outputs of most machine learning kernels. KCoral
 lets you create them on the server or upload them from the client, then pass
 them to functions through registers.</p>
@@ -561,10 +554,9 @@ to a PyTorch tensor by reinterpreting its bytes:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">from_numpy</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">))</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
 </pre></div>
 </div>
-<p><a id="files-used-by-uploaded-scripts"></a></p>
 </section>
-<section id="uploading-files-and-folders">
-<h3>Uploading files and folders<a class="headerlink" href="#uploading-files-and-folders" title="Link to this heading">¶</a></h3>
+<section id="upload-files-and-folders">
+<h3>Upload files and folders<a class="headerlink" href="#upload-files-and-folders" title="Link to this heading">¶</a></h3>
 <p>Use <code class="docutils literal notranslate"><span class="pre">upload_file()</span></code> to make a file available to code running on the server.
 Supply its contents as bytes and choose a destination in the request’s working
 directory:</p>
@@ -596,8 +588,8 @@ and special files are not supported.</p>
 removed when the request finishes. See the <a class="reference internal" href="protocol.html#file"><span class="std std-ref">file upload rules</span></a> for
 path requirements and restrictions.</p>
 </section>
-<section id="returning-files-and-folders">
-<h3>Returning files and folders<a class="headerlink" href="#returning-files-and-folders" title="Link to this heading">¶</a></h3>
+<section id="return-files-and-folders">
+<h3>Return files and folders<a class="headerlink" href="#return-files-and-folders" title="Link to this heading">¶</a></h3>
 <p>A program may produce files you want to keep, such as a profiling report or a
 folder of debugging output. Use <code class="docutils literal notranslate"><span class="pre">return_file()</span></code> or <code class="docutils literal notranslate"><span class="pre">return_folder()</span></code> to retrieve
 these outputs. Add the instructions after the code that writes the files, then
@@ -629,16 +621,13 @@ and empty directories, but do not preserve original file metadata. See the
 </section>
 <section id="next-steps">
 <h2>Next steps<a class="headerlink" href="#next-steps" title="Link to this heading">¶</a></h2>
-<!-- Preserve legacy section anchors so older links still reach this page. -->
-<p><a id="the-shape-of-a-program"></a>
-<a id="where-to-compile"></a>
-<a id="languages-supported-by-remote-compilation"></a>
-<a id="measuring"></a>
-<a id="checking-correctness"></a>
-<a id="running-your-own-code-off-the-gpu"></a></p>
+<p>For complete programs, browse the repository’s
+<a class="reference external" href="https://github.com/mlc-ai/kcoral/tree/main/examples">examples directory</a>.
+The tutorials below explain how to use these programs for common workflows.</p>
 <ul class="simple">
-<li><p><a class="reference internal" href="../tutorials/benchmark-kernel.html"><span class="std std-doc">Benchmark a Kernel with KCoral</span></a>: compile a
-kernel, check its output, and measure its execution time.</p></li>
+<li><p><a class="reference internal" href="../tutorials/benchmark-kernel.html"><span class="std std-doc">Benchmark a Kernel with KCoral</span></a>: follow
+<code class="docutils literal notranslate"><span class="pre">examples/benchmark_kernel.py</span></code> to compile a kernel, check its output, and
+measure its execution time.</p></li>
 <li><p><a class="reference internal" href="../tutorials/remote-compilation.html"><span class="std std-doc">Remote Compilation</span></a>: compile on a CPU
 server and run the resulting library on a GPU server.</p></li>
 <li><p><a class="reference internal" href="../tutorials/agent-integration.html"><span class="std std-doc">Agent Integration Guide</span></a>: give a coding
@@ -704,15 +693,15 @@ method signatures or the underlying request and response formats.</p></li>
 <li><a class="reference internal" href="#">Write a client program</a><ul>
 <li><a class="reference internal" href="#build-programs-with-instructions">Build programs with instructions</a></li>
 <li><a class="reference internal" href="#create-a-client-and-submit-programs">Create a client and submit programs</a><ul>
-<li><a class="reference internal" href="#simple-program">Simple program</a></li>
+<li><a class="reference internal" href="#submit-a-simple-program">Submit a simple program</a></li>
 <li><a class="reference internal" href="#read-results">Read results</a></li>
-<li><a class="reference internal" href="#remote-functions">Remote functions</a></li>
+<li><a class="reference internal" href="#call-remote-functions">Call remote functions</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#working-with-tensors-and-files">Working with tensors and files</a><ul>
-<li><a class="reference internal" href="#tensors">Tensors</a></li>
-<li><a class="reference internal" href="#uploading-files-and-folders">Uploading files and folders</a></li>
-<li><a class="reference internal" href="#returning-files-and-folders">Returning files and folders</a></li>
+<li><a class="reference internal" href="#work-with-tensors-and-files">Work with tensors and files</a><ul>
+<li><a class="reference internal" href="#create-and-upload-tensors">Create and upload tensors</a></li>
+<li><a class="reference internal" href="#upload-files-and-folders">Upload files and folders</a></li>
+<li><a class="reference internal" href="#return-files-and-folders">Return files and folders</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#next-steps">Next steps</a></li>
@@ -727,7 +716,7 @@ method signatures or the underlying request and response formats.</p></li>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=37f9d0c5"></script>
+</div><script src="../_static/documentation_options.js?v=adebac25"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

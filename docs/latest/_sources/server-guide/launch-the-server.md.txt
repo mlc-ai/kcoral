@@ -1,8 +1,11 @@
 # Launch the server
 
-Install the [worker environment](../getting-started/installation.md) that matches
-your programs first. Use GPU workers to execute programs and CPU workers to
-compile CUDA C without a GPU.
+KCoral servers run in two modes: GPU and CPU. A GPU server handles the usual
+kernel development workflow, from compilation to correctness checks and
+benchmarking. A CPU server runs jobs that do not need a GPU, such as compilation,
+so you can add compilation capacity independently of your GPU machines. Install
+the [server environment](../getting-started/installation.md#install-the-server)
+for the jobs you plan to run before starting either mode.
 
 ## Start an instance
 
@@ -13,75 +16,173 @@ isolated network and never expose these endpoints to the public internet.
 Run workers in a sandbox with restricted permissions and access to host resources.
 ```
 
+For a typical setup, start a GPU server:
+
 ```bash
 kcoral server --host 127.0.0.1 --port 8000
 ```
 
-The server binds to `127.0.0.1` by default. Use `--host` or `KCORAL_SERVER_HOST` to
-select another address.
+By default, this starts eight worker processes sharing physical GPU `0` and
+listens at `http://127.0.0.1:8000`. Each worker handles one request at a time.
+These defaults assume no `KCORAL_SERVER_DEVICE` or `KCORAL_SERVER_GPUS`
+environment override is set.
 
-To compile on a machine without a GPU and execute on a separate GPU machine,
-run two instances of this same command:
+Startup logs show the workers being initialized. Wait for the pool to be ready
+and the HTTP server to start listening. The final lines look like this, with
+timestamps and intermediate messages omitted; the target depends on your GPU:
 
-```bash
-kcoral server --device cpu --num-workers 16 --host 0.0.0.0 --port 8000
-kcoral server --device gpu --gpus 0 --workers-per-gpu 8 --host 0.0.0.0 --port 8001
+```text
+INFO    pool_ready sandbox=bubblewrap mode=gpu target={'arch': 'sm_100a'} workers=8
+INFO:   Application startup complete.
+INFO:   Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 ```
 
-See [configuration](#configuration) for every option and its default.
+You can then check that the server is reachable:
 
-Check readiness with `GET /health`, which also reports the `target` an uploaded
-library must be built for and the `versions` the worker runs. When compiling on
-a CPU server, read the target from the GPU server. Submit programs with
-`POST /execute` using `multipart/form-data`.
+```bash
+curl http://127.0.0.1:8000/health
+```
 
-Several workers share each GPU, so one can compile while another measures on the
-GPU it is not using; they take turns through a per-GPU lease and never run on it
-at once. Raising `--workers-per-gpu` keeps the GPUs busier at the cost of dividing
-their memory among more concurrent benchmarks.
+A healthy server returns JSON with `"status": "ok"`. The response also includes
+its GPU architecture in `target` and installed runtime versions in `versions`.
+If startup fails, see [logs](logging.md) for how to investigate. If bubblewrap
+cannot start, the server warns and continues without filesystem isolation;
+see [isolation](#isolate-worker-files-with-bubblewrap) below.
 
-Workers serve one request by default, then the pool replaces them before making
-the slot idle again, so an out-of-bounds or race-sensitive kernel cannot make a
-later request depend on its process history. `--max-requests-per-worker 0` reuses
-workers instead: reset and poison detection still run, but undefined CUDA
-behaviour is no longer contained, and replacement costs enough on short requests
-that throughput numbers should record the setting.
+### Common settings
 
-## Choose a deployment
+The following options let you adapt the GPU server to your machine and workload:
 
-Start with one GPU instance for remote compilation and measurement. Use separate
-CPU and GPU instances when compilation capacity should scale independently;
-the [Remote Compilation tutorial](../tutorials/remote-compilation.md)
-explains how to pass a compiled library between them.
-The CPU compilation service does not provide general GPU execution.
+- `--gpus 0` selects physical GPU `0`, the default. The value is a GPU ID,
+  not a GPU count. To use multiple GPUs, pass their IDs separated by commas:
+  `--gpus 0,1` selects GPUs `0` and `1`. All selected GPUs must have the same
+  target architecture.
+- `--workers-per-gpu 8` runs eight workers per GPU by default. They take turns
+  holding exclusive GPU access through a lease. Clients can mark functions with
+  `cpu_only=True` to declare that they do not use the GPU, allowing them to run
+  while another worker uses it. See
+  [running CPU-only functions](../tutorials/benchmark-kernel.md#overlap-cpu-work-with-gpu-execution)
+  for how clients select this behavior. More workers can improve utilization
+  when requests spend substantial time compiling or doing other CPU work. Once
+  the GPU stays busy, adding workers brings little benefit and increases pressure
+  on CPU resources, host memory, and GPU memory. Start with the default of eight
+  and adjust for your workload.
+- `--max-requests-per-worker 1`, the default, replaces each worker after one
+  request, giving the next request a fresh process and GPU context. This prevents
+  a faulty kernel's process state from affecting later requests. Increasing the
+  limit spreads replacement overhead across multiple requests; setting it to
+  `0` removes scheduled replacements entirely. Reuse can help with short
+  requests, but cleanup and error checks cannot contain every effect of invalid
+  GPU code. Failed workers may still need replacement.
+- `--host 127.0.0.1` and `--port 8000` are the default listening address and
+  port. This address accepts connections only from the same machine. Use
+  `--host 0.0.0.0` to listen on all network interfaces when clients connect over
+  a trusted network; clients use the server's reachable address in their URLs.
+  You can also set `KCORAL_SERVER_HOST` and `KCORAL_SERVER_PORT`; explicit
+  command-line options take precedence over these environment variables.
+- `--default-timeout-seconds 300` gives requests a five-minute execution
+  budget by default when they omit a timeout. `--max-timeout-seconds 900` caps
+  client-requested budgets at 15 minutes by default. Increase these for longer
+  jobs. The budget covers execution of the request itself, excluding time spent
+  waiting for server capacity or access to the GPU.
+- `--log-dir logs` writes request and worker event logs under `logs` by
+  default, unless `KCORAL_LOG_DIR` is set. Pass another directory to change it.
+  See [logs](logging.md) for how to follow requests and diagnose failures.
 
-`0.0.0.0` listens on every network interface. The default `127.0.0.1` listens
-only on this machine. Disabling filesystem isolation lets workers execute
-uploaded Python code with the server's permissions; a request working directory
-alone does not isolate that code from the host.
+For example, to use two GPUs with four workers on each:
 
-See [logs](logging.md) to follow a request and diagnose worker replacement.
+```bash
+kcoral server --gpus 0,1 --workers-per-gpu 4
+```
+
+See [configuration](#configuration) for the full option reference. Once the
+server is running, [Writing a program](../client-guide/writing-a-program.md)
+walks through sending your first request.
+
+## Add a CPU server for compilation
+
+One GPU server can handle both compilation and measurement. If compilation
+becomes a bottleneck, you can move CPU-only jobs to a CPU server and scale the
+two roles separately. Start these instances in separate terminals, on the
+same machine or on separate hosts:
+
+```bash
+# Compilation server
+kcoral server --device cpu --num-workers 16 --host 0.0.0.0 --port 8000
+
+# GPU execution server
+kcoral server --device gpu --host 0.0.0.0 --port 8001
+```
+
+In CPU mode, `--num-workers` controls the number of worker processes and defaults
+to one. The example allows up to 16 requests to run concurrently. Choose a count
+that fits the host's CPU and memory capacity, accounting for compilers that use
+multiple threads. CPU mode ignores `--gpus` and `--workers-per-gpu`.
+
+Both servers report `pool_ready` followed by the HTTP startup messages shown
+above. For the CPU command, the pool line looks like this, with the timestamp
+omitted:
+
+```text
+INFO    pool_ready sandbox=bubblewrap mode=cpu target={} workers=16
+```
+
+Check `/health` at each server's address to confirm it is reachable. The GPU
+server listens on port `8001` in this example and still defaults to eight
+workers on GPU `0`.
+
+The [Remote Compilation tutorial](../tutorials/remote-compilation.md) demonstrates
+compiling CUDA C on a CPU server and passing the resulting library to a GPU
+server. Other compilation workflows can run there if their dependencies are
+installed and they do not require GPU access. The CPU server cannot execute
+GPU kernels. Its `target` is empty, so clients should read the GPU server's
+target before compiling a library for it.
+CPU workers accept Python modules, bytes and files; tensor and library uploads
+require a GPU worker.
 
 ## Isolate worker files with bubblewrap
 
-The host or container must allow unprivileged user namespaces.
+Code running on the server can read and write files. Giving each request a
+working directory keeps its outputs together, but does not by itself
+prevent that code from modifying the server's files or another worker's data.
+Filesystem isolation limits the damage an accidental file operation can cause.
 
-By default, the server checks whether bubblewrap can start before creating
-workers. If the check fails or times out, it warns and disables isolation for
-that server run. Restart to check again. Set `--sandbox none` or
-`ServerConfig(sandbox="none")` to disable isolation and skip the check.
-See [installation requirements](../getting-started/installation.md#server-system-requirements).
+The KCoral server uses [bubblewrap](https://github.com/containers/bubblewrap),
+a Linux sandboxing tool, to give each worker
+its own view of the filesystem. Bubblewrap uses Linux namespaces to separate the
+worker's environment from the host. KCoral makes runtime dependencies available
+read-only and gives the worker a private writable directory at `/work`. Other
+workers' files are hidden, and network access is disabled. Keep the server's
+cache and logs outside the read-only runtime paths, whose contents remain
+visible to workers. Uploaded code still runs on the host's CPU and, in GPU mode, its
+assigned GPU. `/work/.kcoral` is reserved for runtime files and cannot receive
+uploads.
 
-When enabled, each worker can write ordinary files only under its private
-`/work`. Other workers' files and the server's cache and logs are hidden;
-runtime dependencies are read-only, and network access is disabled.
-`/work/.kcoral` is reserved for runtime files and cannot receive uploads.
+This isolation is enabled by default with `--sandbox bubblewrap`. Install
+bubblewrap and allow unprivileged user namespaces on the host or container;
+see the [installation requirements](../getting-started/installation.md#server-system-requirements).
+Before creating workers, the server checks that bubblewrap can start. If the
+check fails or times out, it warns and disables isolation for that run. For
+example, if bubblewrap is not installed, the warning includes:
 
-`--max-requests-per-worker 0` reuses processes while clearing files and caches
-between programs. Programs must finish background work before returning;
-workers with remaining resources or failed cleanup are replaced.
+```text
+RuntimeWarning: bubblewrap could not start; filesystem isolation is disabled for this server run: bubblewrap isolation requires bwrap on PATH; install bubblewrap
+```
 
-For dependencies outside the standard runtime directories, add read-only paths:
+Without isolation, uploaded code has the server process's access to host files. Fix the
+reported problem and restart the server to check again.
+
+To disable filesystem isolation explicitly and skip the startup check, use
+`--sandbox none`.
+
+When workers are reused (`--max-requests-per-worker` greater than `1`, or `0`),
+the server clears their working files between requests. If cleanup fails or
+code leaves resources such as background threads or child processes running,
+the server replaces the worker before accepting another request on it.
+
+For dependencies outside the
+[standard runtime paths](https://github.com/mlc-ai/kcoral/blob/main/python/kcoral/sandbox.py#L180-L201),
+add read-only paths:
 
 ```bash
 kcoral server --sandbox-readonly-path /opt/custom-compiler
@@ -96,8 +197,8 @@ sharing an interpreter or provide GPU memory isolation.
 
 ## Configuration
 
-The command-line interface accepts the options below. Python applications pass
-the corresponding fields to `ServerConfig`.
+The following options configure a standalone server. Use `--help` to display
+command-line help.
 Explicit command-line options take precedence over environment variables.
 Defaults in this table assume none of those environment variables is set.
 
@@ -106,44 +207,42 @@ worker exclusive access to its GPU while it executes or measures GPU work.
 
 ### Binding and worker selection
 
-| Option | Default | Environment variable | Configuration field |
+| Option | Default | Environment variable | Meaning |
 | --- | --- | --- | --- |
-| `--host` | `127.0.0.1` | `KCORAL_SERVER_HOST` | Passed to the HTTP server, not `ServerConfig` |
-| `--port` | `8000` | `KCORAL_SERVER_PORT` | Passed to the HTTP server, not `ServerConfig` |
-| `--device` | `gpu` | `KCORAL_SERVER_DEVICE` | `device` |
-| `--gpus` | `0` | `KCORAL_SERVER_GPUS` | `gpus`, a list, default `[0]` |
-| `--num-workers` | `1` | — | `num_workers`, used in CPU mode |
-| `--workers-per-gpu` | `8` | — | `workers_per_gpu`, used in GPU mode |
-| `--max-requests-per-worker` | `1` | — | `max_requests_per_worker`; `0` reuses workers |
-| `--worker-termination-grace-seconds` | `5` | — | `worker_termination_grace_seconds` |
-| `--sandbox` | `bubblewrap` | — | `sandbox`; `none` explicitly disables filesystem isolation |
-| `--sandbox-readonly-path` | No additional paths | — | `sandbox_readonly_paths`, a list of paths; repeatable |
+| `--host` | `127.0.0.1` | `KCORAL_SERVER_HOST` | Listening address |
+| `--port` | `8000` | `KCORAL_SERVER_PORT` | Listening port |
+| `--device` | `gpu` | `KCORAL_SERVER_DEVICE` | Worker mode: `gpu` or `cpu` |
+| `--gpus` | `0` | `KCORAL_SERVER_GPUS` | Comma-separated physical GPU IDs |
+| `--num-workers` | `1` | — | Worker count in CPU mode |
+| `--workers-per-gpu` | `8` | — | Workers per GPU in GPU mode |
+| `--max-requests-per-worker` | `1` | — | Requests before replacement; `0` allows unlimited reuse |
+| `--worker-termination-grace-seconds` | `5` | — | Seconds between SIGTERM and SIGKILL when stopping a failed worker |
+| `--sandbox` | `bubblewrap` | — | Filesystem isolation; `none` disables it |
+| `--sandbox-readonly-path` | No additional paths | — | Additional read-only dependency path; repeatable |
 
 `--gpus` takes comma-separated physical device numbers such as `0,1`. Workers
 select their devices from this option, so setting `CUDA_VISIBLE_DEVICES` on the
 front-end does not restrict the server. All selected GPUs must report the same
-target architecture. CPU mode ignores `gpus` and uses `num_workers` instead.
+target architecture. CPU mode ignores `--gpus` and uses `--num-workers` instead.
 
 The default replaces a worker after each request, giving the next request a
 fresh process and GPU context. Reusing workers can reduce replacement overhead,
 but reset and poison detection cannot contain every effect of invalid GPU code.
-Record this setting when comparing throughput.
 
 ### Time and size limits
 
 All options ending in `-bytes` take an integer number of bytes, not a value
 with a unit suffix.
 
-| Option | Default | Configuration field | Meaning |
-| --- | --- | --- | --- |
-| `--worker-wait-timeout-seconds` | `1800` | `worker_wait_timeout_seconds` | Time to wait for a free worker before a 503 response |
-| `--default-timeout-seconds` | `300` | `default_timeout_seconds` | Execution limit when a request omits its timeout |
-| `--max-timeout-seconds` | `900` | `max_timeout_seconds` | Upper bound for a request's timeout |
-| `--max-request-bytes` | `268435456` (256 MiB) | `max_request_bytes` | Maximum request body size |
-| `--max-response-bytes` | `268435456` (256 MiB) | `max_response_bytes` | Maximum serialized response size |
-| `--output-limit-bytes` | `1048576` (1 MiB) | `output_limit_bytes` | Default captured stdout/stderr limit per stream |
-| `--max-output-limit-bytes` | `16777216` (16 MiB) | `max_output_limit_bytes` | Maximum requested captured output per stream |
-| `--cache-capacity-bytes` | `17179869184` (16 GiB) | `cache_capacity_bytes` | Memory cache capacity for tensors, bytes and libraries |
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--worker-wait-timeout-seconds` | `1800` | Time to wait for a free worker before a 503 response |
+| `--default-timeout-seconds` | `300` | Execution limit when a request omits its timeout |
+| `--max-timeout-seconds` | `900` | Upper bound for a request's timeout |
+| `--max-request-bytes` | `268435456` (256 MiB) | Maximum request body size |
+| `--max-response-bytes` | `268435456` (256 MiB) | Maximum serialized response size |
+| `--output-limit-bytes` | `1048576` (1 MiB) | Default captured stdout/stderr limit per stream |
+| `--max-output-limit-bytes` | `16777216` (16 MiB) | Maximum requested captured output per stream |
 
 Worker acquisition can wait up to 30 minutes by default. The execution budget
 starts after worker assignment and excludes time waiting for another worker's
@@ -154,58 +253,58 @@ Request `timeout_seconds` and `output_limit_bytes` override their respective
 defaults, up to these server maximums. See {ref}`protocol options <options>`
 for clamping and [errors](../client-guide/protocol.md#errors) for request failures.
 
-### File upload cache
+### Cache
 
-File uploads use a persistent disk cache; tensors, bytes and libraries use the
-memory cache. The default directory is `$XDG_CACHE_HOME/kcoral/files` when
-`XDG_CACHE_HOME` is an absolute path, otherwise `~/.cache/kcoral/files`.
+When repeatedly evaluating a kernel or iterating on agent-generated kernels,
+you often upload the same harness files, input tensors, or compiled libraries
+with each request. KCoral caches uploaded content so clients can reuse unchanged
+uploads without transferring their contents again. The Python client handles
+cache misses automatically by resending the required content.
 
-| Option | Default | Configuration field |
+The server keeps two caches, both keyed by the SHA-256 hash of the uploaded
+bytes:
+
+- The **memory cache** holds tensor, byte-string, and library uploads in the
+  server process's CPU memory. Its contents are lost when the server restarts.
+- The **file cache** holds file uploads on disk. Its contents can survive server
+  restarts, independently of the temporary files created for each request.
+
+| Option | Default | Meaning |
 | --- | --- | --- |
-| `--disk-cache-dir` | The directory described above | `disk_cache_dir` |
-| `--disk-cache-capacity-mbytes` | `16384` MiB (16 GiB) | `disk_cache_capacity_mbytes` |
+| `--cache-capacity-bytes` | `17179869184` (16 GiB) | Memory cache budget, in bytes |
+| `--disk-cache-dir` | The directory described below | Persistent file cache directory |
+| `--disk-cache-capacity-mbytes` | `16384` MiB (16 GiB) | File cache budget, in MiB |
 
-An empty directory option (`None` in `ServerConfig`) or zero capacity disables
-file caching without falling back to the memory cache. Cached content survives
-server restarts. Caching is best-effort: storage failures and oversized objects
-do not prevent execution when the request supplies the bytes.
+The memory cache evicts less recently used entries when it exceeds its budget.
+Entries in use by active requests are retained, so the budget can be exceeded
+while those entries are pinned. Individual uploads larger than one quarter of
+the budget are not cached, but remain usable by the request that supplied them.
 
-File destinations are private to each request and removed when the request
-ends. See [file uploads](../client-guide/writing-a-program.md#uploading-files-and-folders) for
-path restrictions, snapshot behavior and directory uploads.
+The file cache defaults to `$XDG_CACHE_HOME/kcoral/files` when `XDG_CACHE_HOME`
+is an absolute path, otherwise `~/.cache/kcoral/files`. It evicts older entries
+to stay within its budget. An empty directory option (`--disk-cache-dir ''`) or zero disk capacity
+disables file caching without
+falling back to the memory cache. Storage failures and oversized files do not
+prevent execution when the request supplies the bytes.
+
+Both caches store uploaded bytes, not execution state: each request creates
+its own tensors, loads its libraries, and materializes its files. Changes made
+during execution do not change the cached uploads.
+
+See [protocol caching](../client-guide/protocol.md#caching) for
+cache lookup and retry behavior, and
+[file uploads](../client-guide/writing-a-program.md#upload-files-and-folders)
+for working with request files.
 
 ### Logs
 
-| Option | Command-line default | Configuration field and Python default |
+| Option | Default behavior | Effect |
 | --- | --- | --- |
-| `--log-dir` | `logs`, or `KCORAL_LOG_DIR` | `log_dir=None` |
-| `--no-log-console` | Console mirroring enabled | `log_console=True` |
-| `--no-log-programs` | Program recording enabled | `log_programs=True` |
+| `--log-dir` | `logs`, or `KCORAL_LOG_DIR` | Choose where to save logs and programs |
+| `--no-log-console` | Console events enabled | Disable console events |
+| `--no-log-programs` | Program recording enabled | Disable saved program JSON |
 
-The two `--no-*` flags set their fields to `False`. `--log-dir ''` disables
-logging; direct Python construction already defaults to `log_dir=None`.
+`--log-dir ''` disables
+log files and saved programs; console events remain enabled unless you also
+pass `--no-log-console`.
 See [logs](logging.md) for locations, events and investigation commands.
-
-### Configure an application in Python
-
-`create_app` builds the application; an HTTP server such as uvicorn runs it.
-The server extra must be installed. This example defines an application and
-does not start workers until the application enters its serving lifecycle.
-
-```python
-from pathlib import Path
-
-from kcoral import ServerConfig, create_app
-
-app = create_app(
-    ServerConfig(
-        gpus=[0],
-        workers_per_gpu=8,
-        log_dir=Path("logs"),
-        disk_cache_capacity_mbytes=16384,
-    )
-)
-```
-
-See the {ref}`Python reference <server-integration>` for
-the complete configuration signature and application factory.

@@ -3,7 +3,7 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Build the Docs" href="../development-guide/build-the-docs.html"><link rel="prev" title="Remote Compilation" href="remote-compilation.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Python API" href="../python-api/index.html"><link rel="prev" title="Remote Compilation" href="remote-compilation.html">
         <link rel="canonical" href="https://kcoral.mlc.ai/docs/latest/tutorials/agent-integration.html">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-light.png" as="image">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-dark.png" as="image">
@@ -237,7 +237,7 @@
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Launch the router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
@@ -245,10 +245,6 @@
 <li class="toctree-l1"><a class="reference internal" href="benchmark-kernel.html">Benchmark a Kernel with KCoral</a></li>
 <li class="toctree-l1"><a class="reference internal" href="remote-compilation.html">Remote Compilation</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Agent Integration Guide</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Development Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../development-guide/build-the-docs.html">Build the Docs</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
@@ -321,73 +317,63 @@
         <article role="main" id="furo-main-content">
           <section id="agent-integration-guide">
 <h1>Agent Integration Guide<a class="headerlink" href="#agent-integration-guide" title="Link to this heading">¶</a></h1>
-<p>A coding agent can write KCoral programs using the repository’s <code class="docutils literal notranslate"><span class="pre">kcoral-client</span></code>
-skill.</p>
-<section id="give-the-agent-the-skill">
-<h2>Give the agent the skill<a class="headerlink" href="#give-the-agent-the-skill" title="Link to this heading">¶</a></h2>
-<p>This repository exposes the skill at <code class="docutils literal notranslate"><span class="pre">.agents/skills/kcoral-client/SKILL.md</span></code>.
-That directory links to <code class="docutils literal notranslate"><span class="pre">.claude/skills/kcoral-client</span></code>, the underlying source.
-An agent that supports repository skills can discover it there. For another
-agent, explicitly provide the file as task context or put it in that agent’s
-supported skill location. Merely mentioning the skill name does not guarantee
-that an agent has read it.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cat<span class="w"> </span>.agents/skills/kcoral-client/SKILL.md
-</pre></div>
-</div>
+<p>A coding agent can use KCoral to test generated kernels on a remote GPU and
+use the results to guide its next revision. To make that loop useful, the agent
+needs both the programming interface and a clear definition of success. This
+tutorial shows how to provide that context, ask for a runnable experiment, and
+review the results before iterating.</p>
+<section id="provide-the-kcoral-skill">
+<h2>Provide the KCoral skill<a class="headerlink" href="#provide-the-kcoral-skill" title="Link to this heading">¶</a></h2>
+<p>Start by giving the agent the <code class="docutils literal notranslate"><span class="pre">kcoral-client</span></code> skill, which explains how to
+construct and submit programs. In a repository checkout, ask the agent to read
+<code class="docutils literal notranslate"><span class="pre">.agents/skills/kcoral-client/SKILL.md</span></code>. If you are working outside the repository,
+download the skill and provide it as task context or install it in your agent’s
+supported skill location.</p>
 <p><a class="reference download internal" download="" href="../_downloads/c73cb319ff22210c3ed18ebea4ffaea1/SKILL.md"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">the</span> <span class="pre">skill</span></code></a>.</p>
-<p>Give the agent access to the same revision of the skill, the
-<a class="reference internal" href="../client-guide/protocol.html"><span class="std std-doc">KCoral Protocol</span></a> and
-<a class="reference internal" href="../client-guide/writing-a-program.html"><span class="std std-doc">Write a client program</span></a>. The protocol is the authority for field
-validation when a summary and the protocol disagree. The Python API supplies
-the actual method signatures.</p>
+<p>The agent can also refer to <a class="reference internal" href="../client-guide/writing-a-program.html"><span class="std std-doc">Write a client program</span></a>
+and the <a class="reference internal" href="../python-api/index.html"><span class="std std-doc">Python API</span></a> for examples and method details.
+Use documentation that matches the installed KCoral version.</p>
 </section>
-<section id="state-a-concrete-task">
-<h2>State a concrete task<a class="headerlink" href="#state-a-concrete-task" title="Link to this heading">¶</a></h2>
-<p>Provide the server address, kernel source or function to implement, tensor
-shapes and types, correctness tolerance, and the outputs you want. Say whether
-compilation should happen on the GPU server, on a separate CPU server, or locally.</p>
+<section id="define-the-experiment">
+<h2>Define the experiment<a class="headerlink" href="#define-the-experiment" title="Link to this heading">¶</a></h2>
+<p>The agent needs enough information to build an experiment whose results you
+can assess. Provide the server address, kernel source or function to implement,
+tensor shapes and types, correctness tolerance, and the outputs you want. Say
+whether compilation should happen on the GPU server, on a separate CPU server,
+or locally.</p>
 <p>For example, give the agent this prompt from the repository checkout:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Read .agents/skills/kcoral-client/SKILL.md before writing the client.
-Use docs/client-guide/protocol.md for field validation. Upload your own Python harness
-for compilation, allocation, correctness checks, and measurement.
 
-Write a runnable Python client for the KCoral server at http://127.0.0.1:8000.
+Write and run a Python client for the KCoral server at http://127.0.0.1:8000.
 Implement add-one for 4096 float32 elements using CUDA C. Compile on the
-GPU server, create or upload input tensors, compare the output with a Python
-reference, and benchmark only after correctness passes. Return the correctness
-report and all timing statistics. Handle FAILED outcomes separately from
-request/transport exceptions. Keep the program in a file that can be rerun.
+GPU server, compare the output with a Python reference using rtol=1e-2 and
+atol=1e-3, and benchmark only after correctness passes. Return the correctness
+report and timing statistics. Report any failure instead of a successful timing.
+Keep the program in a file that can be rerun.
 
 Use the supplied server; do not launch another server or change its configuration.
 Report the exact command, target architecture, runtime versions and results.
 </pre></div>
 </div>
-<p>Replace the task’s workload and endpoint with yours. Supply any required files
-and their expected relative paths. If the agent may execute submissions, make
-that scope explicit; otherwise ask it to produce the program for review.</p>
+<p>Replace the workload, tolerances, and endpoint with yours. Supply any required
+input files. The example authorizes the agent to run the experiment; if you want
+to review the program first, ask it to write the client without submitting it.</p>
 </section>
-<section id="have-the-agent-build-a-program">
-<h2>Have the agent build a program<a class="headerlink" href="#have-the-agent-build-a-program" title="Link to this heading">¶</a></h2>
-<p>The skill guides the agent through this sequence:</p>
-<ol class="arabic simple">
-<li><p>Inspect <a class="reference internal" href="../client-guide/protocol.html#get-health"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">Client.health()</span></code></span></a> and, when
-compiling a library, the GPU server’s <code class="docutils literal notranslate"><span class="pre">Client.target()</span></code> so it uses an available
-toolchain and the right architecture.</p></li>
-<li><p>Upload the module and use <code class="docutils literal notranslate"><span class="pre">get_function()</span></code> to select the kernel or launcher.</p></li>
-<li><p>Allocate device inputs in uploaded Python, or upload data whose exact values
-matter. Use <code class="docutils literal notranslate"><span class="pre">upload_file()</span></code> or <code class="docutils literal notranslate"><span class="pre">upload_folder()</span></code> for scripts that read files.</p></li>
-<li><p>Compile with an uploaded harness, or upload a prebuilt library.</p></li>
-<li><p>Run the kernel and compare it against a reference with your harness’s assertions.</p></li>
-<li><p>Run your measurement harness only after the comparison succeeds.</p></li>
-<li><p>Add <code class="docutils literal notranslate"><span class="pre">return_()</span></code> instructions for the correctness and timing reports, then
-submit with <code class="docutils literal notranslate"><span class="pre">Client.execute()</span></code> and inspect the outcome.</p></li>
-</ol>
-<p>The <a class="reference internal" href="benchmark-kernel.html"><span class="std std-doc">benchmark tutorial</span></a> explains compilation and GPU
-lease handling. Use the Python client to construct multipart requests: the client handles hashing, missing-blob negotiation and
-decoding tensor results.</p>
+<section id="guide-the-agent-through-the-workflow">
+<h2>Guide the agent through the workflow<a class="headerlink" href="#guide-the-agent-through-the-workflow" title="Link to this heading">¶</a></h2>
+<p>With the task and interface established, the agent can turn the experiment into
+a program. Ask it to check the server’s GPU architecture and installed tools,
+then prepare the inputs, compile the kernel, check its output, and measure it
+only after correctness passes.</p>
+<p>The <a class="reference internal" href="benchmark-kernel.html"><span class="std std-doc">benchmark tutorial</span></a> walks through this flow. If the
+agent needs to compile on a separate CPU server, point it to
+<a class="reference internal" href="remote-compilation.html"><span class="std std-doc">Remote Compilation</span></a>. For profiling or running an existing
+script, the <a class="reference internal" href="../client-guide/builtin-cli-tools.html"><span class="std std-doc">builtin CLI tools</span></a> may be enough.</p>
 </section>
 <section id="review-the-generated-program">
 <h2>Review the generated program<a class="headerlink" href="#review-the-generated-program" title="Link to this heading">¶</a></h2>
+<p>Before relying on the results, check that the program tests the intended
+workload and only reports timings after correctness passes:</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -396,50 +382,39 @@ decoding tensor results.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>Every reference points to an earlier instruction in this request</p></td>
-<td><p>Handles do not survive another submission</p></td>
+<tr class="row-even"><td><p>Inputs, shapes, dtypes, and tolerances match your task</p></td>
+<td><p>The experiment should measure the workload you intended</p></td>
 </tr>
-<tr class="row-odd"><td><p>Output tensors are written before comparison</p></td>
-<td><p>An uninitialized allocation is not a computed answer</p></td>
-</tr>
-<tr class="row-even"><td><p>The result is explicitly selected by <code class="docutils literal notranslate"><span class="pre">return_()</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">run()</span></code> alone does not send a value back</p></td>
-</tr>
-<tr class="row-odd"><td><p>File uploads use the dedicated helper methods</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">Program.upload(kind=&quot;file&quot;)</span></code> is not supported</p></td>
-</tr>
-<tr class="row-even"><td><p>Host-only work is selected with <code class="docutils literal notranslate"><span class="pre">get_function(...,</span> <span class="pre">cpu_only=True)</span></code> and invoked in its own <code class="docutils literal notranslate"><span class="pre">run</span></code></p></td>
-<td><p>The worker releases the GPU lease and checks for CUDA access</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">assert_close</span></code> precedes <code class="docutils literal notranslate"><span class="pre">benchmark</span></code></p></td>
+<tr class="row-odd"><td><p>The kernel output is checked against the reference before benchmarking</p></td>
 <td><p>Incorrect output should not produce a successful timing report</p></td>
 </tr>
-<tr class="row-even"><td><p>The program checks <code class="docutils literal notranslate"><span class="pre">result.completed</span></code> before reading expected keys</p></td>
-<td><p>Failures can return only partial results</p></td>
+<tr class="row-even"><td><p>Compilation and execution match the GPU server’s architecture and installed tools</p></td>
+<td><p>A local build or assumption may not match the remote environment</p></td>
 </tr>
-<tr class="row-odd"><td><p>Target and version information accompanies results</p></td>
-<td><p>Generated code must match the actual server environment</p></td>
+<tr class="row-odd"><td><p>The client reports failures and returns the requested results</p></td>
+<td><p>Missing or partial results must not be presented as success</p></td>
+</tr>
+<tr class="row-even"><td><p>The agent provides a runnable file and its invocation</p></td>
+<td><p>You should be able to reproduce the experiment</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>Uploaded Python can use its own libraries, CLI tools and profiler scripts.
-<code class="docutils literal notranslate"><span class="pre">cpu_only=True</span></code> applies only to the selected function’s own <code class="docutils literal notranslate"><span class="pre">run</span></code> instruction.
-Compilation that loads a CUDA module must keep the lease or split host building
-and GPU loading into separate instructions. Nested reference-shaped arguments
-remain JSON literals; pass handles as top-level arguments.</p>
+<p>For a closer review of how the program submits work and reads results, use
+<a class="reference internal" href="../client-guide/writing-a-program.html"><span class="std std-doc">Write a client program</span></a>.</p>
 </section>
-<section id="preserve-evidence-and-iterate">
-<h2>Preserve evidence and iterate<a class="headerlink" href="#preserve-evidence-and-iterate" title="Link to this heading">¶</a></h2>
-<p>Keep the generated client, source code, exact command, input shapes and types,
-server target and versions, correctness report, timing report and <code class="docutils literal notranslate"><span class="pre">request_id</span></code>.
-A program with <code class="docutils literal notranslate"><span class="pre">status</span> <span class="pre">==</span> <span class="pre">&quot;FAILED&quot;</span></code> is a valid response with an instruction
-error; a transport exception may leave execution outcome unknown. Do not turn
-either into a successful timing number.</p>
-<p>Feed the specific error, failing instruction and relevant server version back
-to the agent for the next revision. On an uncertain transport outcome, check
-logs before replaying code with external side effects. Each revision should
-still be a complete program and should pass correctness before it is measured.</p>
+<section id="use-the-results-to-guide-the-next-revision">
+<h2>Use the results to guide the next revision<a class="headerlink" href="#use-the-results-to-guide-the-next-revision" title="Link to this heading">¶</a></h2>
+<p>Once the agent has run the experiment, use the result to give it a focused
+follow-up task. If correctness fails, provide the error and ask it to fix the
+kernel before optimizing. If correctness passes but the kernel is slow, ask it
+to investigate the bottleneck and compare its next version against this run.
+Keep the input shapes, dtypes, tolerances, and GPU environment consistent so
+the comparison measures the effect of the code change.</p>
+<p>Save the runnable client and results from each version you want to compare.
+When an error needs more context, use the request ID to find the
+<a class="reference internal" href="../server-guide/logging.html"><span class="std std-doc">server logs</span></a> and share the relevant entries with
+the agent. This gives the next revision a concrete starting point.</p>
 </section>
 </section>
 
@@ -448,12 +423,12 @@ still be a complete program and should pass correctness before it is measured.</
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="../development-guide/build-the-docs.html">
+          <a class="next-page" href="../python-api/index.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">Build the Docs</div>
+                <div class="title">Python API</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
@@ -496,11 +471,11 @@ still be a complete program and should pass correctness before it is measured.</
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">Agent Integration Guide</a><ul>
-<li><a class="reference internal" href="#give-the-agent-the-skill">Give the agent the skill</a></li>
-<li><a class="reference internal" href="#state-a-concrete-task">State a concrete task</a></li>
-<li><a class="reference internal" href="#have-the-agent-build-a-program">Have the agent build a program</a></li>
+<li><a class="reference internal" href="#provide-the-kcoral-skill">Provide the KCoral skill</a></li>
+<li><a class="reference internal" href="#define-the-experiment">Define the experiment</a></li>
+<li><a class="reference internal" href="#guide-the-agent-through-the-workflow">Guide the agent through the workflow</a></li>
 <li><a class="reference internal" href="#review-the-generated-program">Review the generated program</a></li>
-<li><a class="reference internal" href="#preserve-evidence-and-iterate">Preserve evidence and iterate</a></li>
+<li><a class="reference internal" href="#use-the-results-to-guide-the-next-revision">Use the results to guide the next revision</a></li>
 </ul>
 </li>
 </ul>
@@ -512,7 +487,7 @@ still be a complete program and should pass correctness before it is measured.</
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=37f9d0c5"></script>
+</div><script src="../_static/documentation_options.js?v=adebac25"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

@@ -1,5 +1,3 @@
-<a id="instruction-protocol"></a>
-
 # KCoral Protocol
 
 KCoral exposes two client HTTP endpoints. A program is an ordered list of
@@ -78,10 +76,6 @@ and response format.
 | `X-Request-ID` | Identifies each HTTP attempt and matches the result/error `request_id` and server events. The Router generates a UUID before admission and forwards it to Python. A direct Python request may supply exactly one canonical lowercase UUID; absent, duplicate, or invalid IDs are replaced. Cache-miss retries get separate IDs. |
 | `X-KCoral-Node` | Identifies the node selected by the Router. Send it back as a cache-retry preference; a missing or unavailable preference falls back to another eligible node. |
 
-<a id="request-envelope"></a>
-
-<a id="request-fields"></a>
-
 | Part | Content type | Required | Meaning |
 | --- | --- | --- | --- |
 | `program` | `application/json` | yes | The program object below |
@@ -144,8 +138,6 @@ Upload source or binary data and produce a handle.
 }
 ```
 
-<a id="fields"></a>
-
 Each field is required for the listed kinds.
 
 | Field | Kinds | Notes |
@@ -159,8 +151,6 @@ Each field is required for the listed kinds.
 | `dtype` | tensor | Tensor data type |
 | `shape` | tensor | Tensor shape |
 
-<a id="details"></a>
-
 | Kind | Content and result |
 | --- | --- |
 | <a id="module"></a>`module` | Inline Python `source`, executed to form a namespace. The handle binds the whole module. |
@@ -168,10 +158,6 @@ Each field is required for the listed kinds.
 | <a id="bytes"></a>`bytes` | The blob's bytes unchanged in CPU memory. Pass them to uploaded Python to parse files or other binary formats. |
 | `file` | Materialize the blob at `path` in the request workspace and bind its normalized relative path as a string. Needs no GPU. See the file rules below. |
 | `library` | A precompiled TVM FFI shared library for the server's platform, loaded with `tvm_ffi.load_module`. The handle binds the loaded module; see [Library](#library). |
-
-<a id="cuda-c-modules"></a>
-<a id="cutedsl-modules"></a>
-<a id="triton-modules"></a>
 
 For modules, `get_function` selects an object from the executed Python namespace.
 The object need not be directly callable: a compiler tool may consume it first.
@@ -254,10 +240,8 @@ of its own:
 ```python
 from tvm.script import tirx as T
 
-
 @T.prim_func
 def add_one(A: T.Buffer((256,), "float32"), B: T.Buffer((256,), "float32")): ...  # kernel body
-
 
 target = tvm.target.Target({"kind": "cuda", "arch": "sm_100a"})
 with target:  # the tirx pipeline reads the arch from Target.current()
@@ -309,8 +293,6 @@ Select the exported function, then call it; no compile instruction appears.
 ]
 ```
 
-<a id="get_function"></a>
-
 ### get_function
 
 Select a named object from an earlier module or library upload.
@@ -324,8 +306,6 @@ Select a named object from an earlier module or library upload.
 }
 ```
 
-<a id="id1"></a>
-
 | Field | Type | Required | Notes |
 |---|---|---:|---|
 | `op` | string | yes | `"get_function"` |
@@ -333,8 +313,6 @@ Select a named object from an earlier module or library upload.
 | `module` | `{"$ref": id}` | yes | Earlier `module` or `library` upload |
 | `name` | string | yes | Non-empty function or object name |
 | `cpu_only` | boolean | no | Defaults to `false`; `true` declares that the function does not access the GPU |
-
-<a id="id2"></a>
 
 | Source | Selection behavior |
 | --- | --- |
@@ -374,16 +352,12 @@ earlier instructions.
 }
 ```
 
-<a id="id3"></a>
-
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `op` | string | yes | `run` |
 | `id` | string | yes | Unique handle for the result |
 | `fn` | reference | yes | An earlier callable handle, `{"$ref": id}` |
 | `args` | array | no | Positional arguments, default `[]` |
-
-<a id="id4"></a>
 
 | Value in `args` | Passed to the callable |
 | --- | --- |
@@ -411,8 +385,6 @@ Select an earlier value for the response.
 }
 ```
 
-<a id="id5"></a>
-
 | Field | Type | Required | Notes |
 |---|---|---:|---|
 | `op` | string | yes | `"return"` |
@@ -421,15 +393,11 @@ Select an earlier value for the response.
 | `kind` | string | For file/folder returns | `"file"` or `"folder"`; omit `value` |
 | `path` | string or `{"$ref": id}` | For file/folder returns | Workspace path, supplied literally or through an earlier handle |
 
-<a id="id6"></a>
-
 `return` has no `id` and creates no handle. Instructions run in the order given
 and a `return` may appear anywhere after the instruction it references, so a
 program can interleave returns with the uploads and runs that follow them. A
 `return` that has already run contributes its entry to `results` even if a later
 instruction fails.
-
-<a id="file-and-folder-selection"></a>
 
 **File and folder returns**
 
@@ -453,10 +421,6 @@ To return a folder whose path is held in an earlier register:
 | Size limit | Contents are buffered in the response and count against `max_response_bytes` (default 256 MiB). `output_limit_bytes` controls only stdout/stderr. |
 
 ## Caching
-
-<a id="blob-cache"></a>
-<a id="memory-cache"></a>
-<a id="file-cache"></a>
 
 | Property | Memory cache | File cache |
 | --- | --- | --- |
@@ -505,8 +469,6 @@ A hit in one category does not generally guarantee a hit in the other.
 
 ## Response
 
-<a id="response-fields"></a>
-
 | HTTP | Body | Meaning |
 |---:|---|---|
 | 200 | `status: COMPLETED` | Program completed |
@@ -518,10 +480,6 @@ A hit in one category does not generally guarantee a hit in the other.
 | 504 | `status: ERROR`, `error.kind: timeout` | Execution timed out |
 | 500 | `status: ERROR`, `error.kind: engine` | Worker failure outside an instruction, or server failure |
 | 500 | `status: ERROR`, `error.kind: response_too_large` | Results exceed the server's response-size limit |
-
-<a id="fields-1"></a>
-
-<a id="id7"></a>
 
 A 200 response carries the fields below. A non-200 carries the smaller error
 body described under [Errors](#errors) instead.
@@ -746,13 +704,11 @@ Its `kind` is `parse`, `request_too_large`, `busy`, `timeout`, `engine`, or
 This program uploads its own harness and returns `42`; it needs no binary parts.
 The same upload/get_function/run shape supports GPU harnesses and compiler tools.
 
-<a id="python-client"></a>
-
 The Python package constructs request parts, hashes and response values for you.
 
 | Task | Python client reference |
 | --- | --- |
 | Submit a first request | [Quickstart](../getting-started/quickstart.md) |
 | Construct programs and manage clients | [Program guide](writing-a-program.md); [API signatures and errors](../python-api/index.rst) |
-| Upload files and folders | `upload_folder` expands into ordinary file-upload instructions with no new operation. See [files used by uploaded scripts](writing-a-program.md#uploading-files-and-folders). |
-| Receive files and folders | Results decode to `ReturnedFile` and `ReturnedFolder`. See [client usage](writing-a-program.md#returning-files-and-folders). |
+| Upload files and folders | `upload_folder` expands into ordinary file-upload instructions with no new operation. See [files used by uploaded scripts](writing-a-program.md#upload-files-and-folders). |
+| Receive files and folders | Results decode to `ReturnedFile` and `ReturnedFolder`. See [client usage](writing-a-program.md#return-files-and-folders). |

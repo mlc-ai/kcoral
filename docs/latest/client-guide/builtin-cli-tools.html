@@ -237,7 +237,7 @@
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/launch-the-server.html">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../server-guide/router.html">Launch the router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../server-guide/logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
@@ -245,10 +245,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/benchmark-kernel.html">Benchmark a Kernel with KCoral</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/remote-compilation.html">Remote Compilation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/agent-integration.html">Agent Integration Guide</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Development Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../development-guide/build-the-docs.html">Build the Docs</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
@@ -357,7 +353,6 @@ covers how to select that server, upload inputs, and retrieve outputs. Each tool
 section then shows its command format, requirements, and examples.</p>
 <section id="common-reference">
 <h2>Common reference<a class="headerlink" href="#common-reference" title="Link to this heading">¶</a></h2>
-<p><a id="command-structure-and-help"></a></p>
 <p>All tools use this structure:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>kcoral run TOOL [KCoral options] -- [native arguments]
 </pre></div>
@@ -372,12 +367,10 @@ kcoral<span class="w"> </span>run<span class="w"> </span>python<span class="w"> 
 <p>These commands display KCoral’s help locally without contacting a server.
 For the native executable’s options, use the commands in each tool section.
 Native options are interpreted by the version installed on the worker.</p>
-<p><a id="connection-and-execution-options"></a></p>
 <section id="options">
 <h3>Options<a class="headerlink" href="#options" title="Link to this heading">¶</a></h3>
 <p>KCoral does not select a server unless a connection option or a nonempty
 <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</span></code> is supplied.</p>
-<p><a id="input-environment-and-output-options"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -443,7 +436,6 @@ kcoral<span class="w"> </span>run<span class="w"> </span>python<span class="w"> 
 KCoral uses the defaults in the options table for any omitted component; it does
 not take that component from <code class="docutils literal notranslate"><span class="pre">KCORAL_URL</span></code>. When overriding an environment URL
 this way, it prints a warning with the selected address.</p>
-<p><a id="input-layout-and-working-directory"></a></p>
 </section>
 <section id="files-and-workspace">
 <h3>Files and workspace<a class="headerlink" href="#files-and-workspace" title="Link to this heading">¶</a></h3>
@@ -513,7 +505,6 @@ Sending a script does not discover its imports or upload its parent directory.
 Without <code class="docutils literal notranslate"><span class="pre">--send</span></code>, the tool starts in an empty working directory. Relative paths
 in tool arguments are resolved in that directory; absolute paths refer to the worker’s
 filesystem, subject to the server’s isolation settings.</p>
-<p><a id="environment-variables-and-executable-lookup"></a></p>
 </section>
 <section id="environment">
 <h3>Environment<a class="headerlink" href="#environment" title="Link to this heading">¶</a></h3>
@@ -559,7 +550,6 @@ Overrides apply only to this invocation’s subprocess environment.</p>
 it reaches the worker only if selected with <code class="docutils literal notranslate"><span class="pre">--env</span> <span class="pre">MODE</span></code>. Your local shell
 also expands expressions such as <code class="docutils literal notranslate"><span class="pre">$HOME</span></code> before invoking KCoral unless they
 are quoted appropriately.</p>
-<p><a id="standard-input-and-output"></a></p>
 </section>
 <section id="output-and-exit-status">
 <h3>Output and exit status<a class="headerlink" href="#output-and-exit-status" title="Link to this heading">¶</a></h3>
@@ -577,7 +567,6 @@ still work:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--<span class="w"> </span>experiment/check.py<span class="w"> </span>&gt;<span class="w"> </span>run.log<span class="w"> </span><span class="m">2</span>&gt;<span class="w"> </span>run.err
 </pre></div>
 </div>
-<p><a id="returned-files-limits-and-exit-status"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -638,12 +627,10 @@ response limit is 256 MiB. A server may configure different limits. See
 </section>
 <section id="python">
 <h2>python<a class="headerlink" href="#python" title="Link to this heading">¶</a></h2>
-<p><a id="purpose-and-requirements"></a></p>
 <p>Use <code class="docutils literal notranslate"><span class="pre">python</span></code> for scripts, module entry points, or inline Python commands. It
 runs the <strong>worker’s Python interpreter</strong>, not the client’s interpreter. The
 worker must have the imported packages and any required GPU libraries installed.
 Upload your own modules and data along with the entry-point script.</p>
-<p><a id="command-format-and-arguments"></a></p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>kcoral run python [KCoral options] -- [Python options] SCRIPT [script arguments]
 kcoral run python [KCoral options] -- [Python options] -m MODULE [module arguments]
 kcoral run python [KCoral options] -- [Python options] -c CODE [code arguments]
@@ -680,7 +667,6 @@ kcoral run python [KCoral options] -- [Python options] -c CODE [code arguments]
 <p>A script, module, or inline command is required. The Python prompt, <code class="docutils literal notranslate"><span class="pre">-i</span></code>, and
 stdin execution with <code class="docutils literal notranslate"><span class="pre">-</span></code> are not supported. Options after the first KCoral <code class="docutils literal notranslate"><span class="pre">--</span></code>
 are Python or program arguments, even if they have names such as <code class="docutils literal notranslate"><span class="pre">--host</span></code>.</p>
-<p><a id="run-a-script-or-module"></a></p>
 <p>Given this local directory:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>experiment/
   check.py
@@ -697,7 +683,6 @@ kcoral<span class="w"> </span>run<span class="w"> </span>python<span class="w"> 
 kcoral<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>--<span class="w"> </span>-c<span class="w"> </span><span class="s1">'import sys; print(sys.version)'</span>
 </pre></div>
 </div>
-<p><a id="return-results-and-interpret-failures"></a></p>
 <p>If <code class="docutils literal notranslate"><span class="pre">check.py</span></code> writes <code class="docutils literal notranslate"><span class="pre">results/report.json</span></code>, download its containing directory:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--fetch<span class="w"> </span>results<span class="w"> </span>--out<span class="w"> </span>artifacts/python<span class="w"> </span>--<span class="w"> </span>experiment/check.py
 </pre></div>
@@ -741,12 +726,10 @@ the native interpreter options.</p>
 </section>
 <section id="ncu">
 <h2>ncu<a class="headerlink" href="#ncu" title="Link to this heading">¶</a></h2>
-<p><a id="id2"></a></p>
 <p>NVIDIA Nsight Compute measures GPU kernel performance and produces a report for
 later inspection. The worker needs <code class="docutils literal notranslate"><span class="pre">ncu</span></code>, an application compatible with the
 worker’s GPU, and permission to collect the required GPU performance counters.
 The application must actually launch kernels selected by the profiling options.</p>
-<p><a id="command-format-and-options"></a></p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>kcoral run ncu [KCoral options] --out DIRECTORY -- [ncu options] -- APPLICATION [arguments]
 </pre></div>
 </div>
@@ -806,7 +789,6 @@ Both separators are required, even when no native profiler options are supplied.
 </tbody>
 </table>
 </div>
-<p><a id="capture-a-report"></a></p>
 <p>Collect one launch with the basic set:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>ncu<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--out<span class="w"> </span>artifacts/ncu<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--<span class="w"> </span>--set<span class="w"> </span>basic<span class="w"> </span>--launch-count<span class="w"> </span><span class="m">1</span><span class="w"> </span>--<span class="w"> </span>python<span class="w"> </span>experiment/capture.py
@@ -823,7 +805,6 @@ kcoral<span class="w"> </span>run<span class="w"> </span>ncu<span class="w"> </s
 <p>Native filtering and replay behavior are controlled by the installed profiler.
 Profiling time is not the same as an ordinary benchmark run: collecting more
 metrics may require repeated executions of the kernel.</p>
-<p><a id="report-location-and-failure-handling"></a></p>
 <p>For <code class="docutils literal notranslate"><span class="pre">--out</span> <span class="pre">artifacts/ncu</span></code>, the report is always:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>artifacts/ncu/capture.ncu-rep
 </pre></div>
@@ -859,13 +840,11 @@ for section sets, filters, replay, and platform requirements.</p>
 </section>
 <section id="run-iket">
 <h2>run-iket<a class="headerlink" href="#run-iket" title="Link to this heading">¶</a></h2>
-<p><a id="id3"></a></p>
 <p>IKET records execution traces from supported GPU kernels. The worker needs
 <code class="docutils literal notranslate"><span class="pre">run-iket</span></code> and the runtime, GPU, and driver required by its installed version.
 Kernel support and instrumentation requirements depend on that version and the
 profiling mode. KCoral invokes the profiler with your application and retrieves
 its output; it does not modify uploaded source code.</p>
-<p><a id="id4"></a></p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>kcoral run run-iket [KCoral options] --out DIRECTORY -- profile [profile options] -- APPLICATION [arguments]
 </pre></div>
 </div>
@@ -916,7 +895,6 @@ application are required.</p>
 </tbody>
 </table>
 </div>
-<p><a id="collect-and-retrieve-a-timeline"></a></p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>run-iket<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--out<span class="w"> </span>artifacts/iket<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--<span class="w"> </span>profile<span class="w"> </span>--postprocess<span class="w"> </span>json<span class="w"> </span>--<span class="w"> </span>python<span class="w"> </span>experiment/capture.py
 </pre></div>
@@ -926,7 +904,6 @@ application are required.</p>
 <span class="w">  </span>--<span class="w"> </span>profile<span class="w"> </span>--postprocess<span class="w"> </span>json<span class="w"> </span>--keep<span class="w"> </span>--<span class="w"> </span>python<span class="w"> </span>experiment/capture.py
 </pre></div>
 </div>
-<p><a id="exit-behavior-and-troubleshooting"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -965,12 +942,10 @@ describes kernel instrumentation and version-specific requirements.</p>
 </section>
 <section id="compute-sanitizer">
 <h2>compute-sanitizer<a class="headerlink" href="#compute-sanitizer" title="Link to this heading">¶</a></h2>
-<p><a id="id1"></a></p>
 <p>NVIDIA Compute Sanitizer runs a CUDA application under a selected correctness
 checker. The worker needs the <code class="docutils literal notranslate"><span class="pre">compute-sanitizer</span></code> executable, a compatible CUDA
 driver and GPU, and the application’s dependencies. KCoral invokes the installed
 executable; it does not install the checker or compile the application for you.</p>
-<p><a id="command-format-and-checker-selection"></a></p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>kcoral run compute-sanitizer [KCoral options] -- [sanitizer options] APPLICATION [arguments]
 </pre></div>
 </div>
@@ -1008,7 +983,6 @@ the remaining arguments follow Compute Sanitizer’s native syntax.</p>
 <p>These are native options placed <strong>after</strong> <code class="docutils literal notranslate"><span class="pre">--</span></code>. Other options supported by the
 installed Compute Sanitizer are also forwarded. The application can be a program
 installed on the worker or an uploaded executable such as <code class="docutils literal notranslate"><span class="pre">./experiment/check</span></code>.</p>
-<p><a id="check-a-python-or-compiled-application"></a></p>
 <p>Run the default checker, select a race check, or check an uploaded executable:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>compute-sanitizer<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--<span class="w"> </span>python<span class="w"> </span>experiment/check.py
 kcoral<span class="w"> </span>run<span class="w"> </span>compute-sanitizer<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span><span class="se">\</span>
@@ -1020,7 +994,6 @@ kcoral<span class="w"> </span>run<span class="w"> </span>compute-sanitizer<span 
 <p>A compiled program must target the worker’s platform and preserve its executable
 bit in the upload. For useful source locations, build it with the line
 information recommended by Compute Sanitizer.</p>
-<p><a id="save-findings-and-handle-failures"></a></p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>compute-sanitizer<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--fetch<span class="w"> </span>sanitizer.log<span class="w"> </span>--out<span class="w"> </span>artifacts/check<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--<span class="w"> </span>--tool<span class="w"> </span>memcheck<span class="w"> </span>--error-exitcode<span class="w"> </span><span class="m">1</span><span class="w"> </span>--log-file<span class="w"> </span>sanitizer.log<span class="w"> </span>python<span class="w"> </span>experiment/check.py
@@ -1055,12 +1028,10 @@ for checker coverage and native options.</p>
 </section>
 <section id="shell">
 <h2>shell<a class="headerlink" href="#shell" title="Link to this heading">¶</a></h2>
-<p><a id="id5"></a></p>
 <p><code class="docutils literal notranslate"><span class="pre">shell</span></code> runs the command after <code class="docutils literal notranslate"><span class="pre">--</span></code> directly. It is not limited to Bash and does
 not automatically insert a shell. Use it for shell scripts, uploaded executables,
 or programs installed on the worker. The selected executable and any interpreter
 it needs must be available in the worker environment or uploaded working directory.</p>
-<p><a id="command-format-and-argument-handling"></a></p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>kcoral run shell [KCoral options] -- EXECUTABLE [arguments]
 </pre></div>
 </div>
@@ -1096,7 +1067,6 @@ are supported. <code class="docutils literal notranslate"><span class="pre">EXEC
 KCoral does not expand wildcards or interpret shell operators on its own.
 A bare program name is searched on the worker’s <code class="docutils literal notranslate"><span class="pre">PATH</span></code>; use <code class="docutils literal notranslate"><span class="pre">./program</span></code> to
 select an uploaded executable in the current directory.</p>
-<p><a id="run-scripts-and-return-their-files"></a></p>
 <p>These forms use different interpreters or direct execution:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>shell<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--<span class="w"> </span>bash<span class="w"> </span>experiment/setup.sh
 kcoral<span class="w"> </span>run<span class="w"> </span>shell<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--<span class="w"> </span>sh<span class="w"> </span>experiment/setup.sh
@@ -1114,7 +1084,6 @@ kcoral<span class="w"> </span>run<span class="w"> </span>shell<span class="w"> <
 <p>For direct execution, make the script executable before uploading it and use a
 first line such as <code class="docutils literal notranslate"><span class="pre">#!/bin/sh</span></code> that selects an interpreter available remotely.
 Uploaded compiled binaries must be compatible with the worker platform.</p>
-<p><a id="shell-syntax-environment-and-setup-steps"></a></p>
 <p>Use an explicit remote shell when commands need shell syntax. Keep expressions
 quoted so the local shell does not expand them first:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>run<span class="w"> </span>shell<span class="w"> </span>--send<span class="w"> </span>experiment<span class="w"> </span>--env<span class="w"> </span><span class="nv">MODE</span><span class="o">=</span>debug<span class="w"> </span><span class="se">\</span>
@@ -1136,7 +1105,6 @@ and isolation settings; <code class="docutils literal notranslate"><span class="
 For example, <code class="docutils literal notranslate"><span class="pre">kcoral</span> <span class="pre">run</span> <span class="pre">shell</span> <span class="pre">--</span> <span class="pre">echo</span> <span class="pre">hello</span> <span class="pre">&gt;</span> <span class="pre">result.txt</span></code> writes a <strong>local</strong>
 file after receiving the remote output. To create a remote file, use a command
 such as <code class="docutils literal notranslate"><span class="pre">sh</span> <span class="pre">-c</span> <span class="pre">'echo</span> <span class="pre">hello</span> <span class="pre">&gt;</span> <span class="pre">result.txt'</span></code> and select it with <code class="docutils literal notranslate"><span class="pre">--fetch</span> <span class="pre">result.txt</span></code>.</p>
-<p><a id="id6"></a></p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -1245,7 +1213,7 @@ such as <code class="docutils literal notranslate"><span class="pre">sh</span> <
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=37f9d0c5"></script>
+</div><script src="../_static/documentation_options.js?v=adebac25"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

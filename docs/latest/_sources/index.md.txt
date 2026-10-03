@@ -11,10 +11,10 @@ services can build kernels for a separate GPU server.
 | Run your first GPU program | [Installation](getting-started/installation.md) and [Your First Program](getting-started/quickstart.md) |
 | Write a client program | [Write a client program](client-guide/writing-a-program.md), [KCoral Protocol](client-guide/protocol.md) |
 | Run Python, checks, profilers, or shell commands | [Builtin CLI Tools](client-guide/builtin-cli-tools.md) |
-| Operate a service | [Launch the server](server-guide/launch-the-server.md), [Logging](server-guide/logging.md) and [Router](server-guide/router.md) |
+| Operate a service | [Launch the server](server-guide/launch-the-server.md), [Logging](server-guide/logging.md) and [Launch the router](server-guide/router.md) |
 | Compile remotely, then execute the returned library in another request | [Remote Compilation](tutorials/remote-compilation.md) |
 | Measure or automate a workload | [Benchmark a Kernel with KCoral](tutorials/benchmark-kernel.md) and [Agent Integration Guide](tutorials/agent-integration.md) |
-| Extend the project | [Build the Docs](development-guide/build-the-docs.md) and [Python API](python-api/index.rst) |
+| Look up Python interfaces | [Python API](python-api/index.rst) |
 
 ```{toctree}
 :caption: Getting Started
@@ -60,14 +60,6 @@ server-guide/logging
 tutorials/benchmark-kernel
 tutorials/remote-compilation
 tutorials/agent-integration
-```
-
-```{toctree}
-:caption: Development Guide
-:maxdepth: 1
-:hidden:
-
-development-guide/build-the-docs
 ```
 
 ```{toctree}

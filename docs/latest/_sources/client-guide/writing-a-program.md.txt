@@ -1,6 +1,3 @@
-<a id="writing-a-benchmark-program"></a>
-<a id="writing-a-program"></a>
-
 # Write a client program
 
 To submit a benchmark to KCoral, you describe the work in a program. Each program
@@ -28,8 +25,8 @@ The builder also provides helpers for working with files: `upload_file()` and
 `upload_folder()` add uploads to the program, while `return_file()` and
 `return_folder()` select files or folders to send back. These use the same
 `upload` and `return` instructions. The sections on
-[uploading files](#uploading-files-and-folders) and
-[returning files](#returning-files-and-folders) cover these helpers in detail.
+[uploading files](#upload-files-and-folders) and
+[returning files](#return-files-and-folders) cover these helpers in detail.
 
 When an instruction produces a value, the builder returns a `Register`: a local
 Python reference to the value that will exist on the server when the instruction
@@ -84,7 +81,7 @@ response, the setting above stops that attempt after 10 seconds. This setting
 does not limit how long a submitted program can run. See the
 [Python API](../python-api/index.rst) for all client options.
 
-### Simple program
+### Submit a simple program
 
 To demonstrate `client.execute()` and its options, this example uploads one line
 of Python that prints `2` on the server. The call submits the program and returns
@@ -139,8 +136,6 @@ captured `stdout` and `stderr` and flags indicating whether either was truncated
 Returned tensors arrive as NumPy arrays in client CPU memory, and byte results
 arrive as Python `bytes`. Modules and callable handles cannot be returned.
 
-<a id="handling-failures"></a>
-
 A `COMPLETED` result means every instruction ran successfully. If an instruction
 fails, the result has status `FAILED`, and `result.error` describes what went
 wrong. The server skips the remaining instructions, but values selected by
@@ -163,7 +158,7 @@ These metrics can help distinguish a busy server or GPU from a slow program.
 They describe the request as a whole; use the measurements from your benchmark
 harness or profiler to assess the kernel's execution time.
 
-### Remote functions
+### Call remote functions
 
 KCoral also provides `@client.function()` to run a Python function on the server
 without building a program by hand. In this example, `gpu_sum.remote(4)` creates
@@ -198,7 +193,7 @@ supported argument types, restrictions, and other ways to invoke the function.
 For a complete example that uploads a tensor, adds one on the GPU, and returns a
 NumPy array, {download}`download remote_function.py <../../examples/remote_function.py>`.
 
-## Working with tensors and files
+## Work with tensors and files
 
 A program may need tensor inputs or files for its code to read, and it may
 produce tensors or files you want to retrieve. You can upload data from the
@@ -206,7 +201,7 @@ client or create it on the server, then select the outputs to return. The
 following snippets illustrate separate uses of a `Program`; start with a fresh
 `program = Program()` for each example.
 
-### Tensors
+### Create and upload tensors
 
 Tensors hold the inputs and outputs of most machine learning kernels. KCoral
 lets you create them on the server or upload them from the client, then pass
@@ -251,9 +246,7 @@ to a PyTorch tensor by reinterpreting its bytes:
 torch.from_numpy(value.view(np.uint8)).view(torch.bfloat16)
 ```
 
-<a id="files-used-by-uploaded-scripts"></a>
-
-### Uploading files and folders
+### Upload files and folders
 
 Use `upload_file()` to make a file available to code running on the server.
 Supply its contents as bytes and choose a destination in the request's working
@@ -295,7 +288,7 @@ Upload destinations are relative to the request's working directory, which is
 removed when the request finishes. See the {ref}`file upload rules <file>` for
 path requirements and restrictions.
 
-### Returning files and folders
+### Return files and folders
 
 A program may produce files you want to keep, such as a profiling report or a
 folder of debugging output. Use `return_file()` or `return_folder()` to retrieve
@@ -331,16 +324,13 @@ and empty directories, but do not preserve original file metadata. See the
 
 ## Next steps
 
-<!-- Preserve legacy section anchors so older links still reach this page. -->
-<a id="the-shape-of-a-program"></a>
-<a id="where-to-compile"></a>
-<a id="languages-supported-by-remote-compilation"></a>
-<a id="measuring"></a>
-<a id="checking-correctness"></a>
-<a id="running-your-own-code-off-the-gpu"></a>
+For complete programs, browse the repository's
+[examples directory](https://github.com/mlc-ai/kcoral/tree/main/examples).
+The tutorials below explain how to use these programs for common workflows.
 
-- [Benchmark a Kernel with KCoral](../tutorials/benchmark-kernel.md): compile a
-  kernel, check its output, and measure its execution time.
+- [Benchmark a Kernel with KCoral](../tutorials/benchmark-kernel.md): follow
+  `examples/benchmark_kernel.py` to compile a kernel, check its output, and
+  measure its execution time.
 - [Remote Compilation](../tutorials/remote-compilation.md): compile on a CPU
   server and run the resulting library on a GPU server.
 - [Agent Integration Guide](../tutorials/agent-integration.md): give a coding

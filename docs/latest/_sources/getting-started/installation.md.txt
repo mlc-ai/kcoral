@@ -19,8 +19,6 @@ Run the installation commands below with this environment active.
 Prebuilt wheels are available on [PyPI](https://pypi.org/project/kcoral/).
 They support Linux on x86-64 and AArch64 with glibc 2.28 or newer.
 
-<a id="the-client"></a>
-
 ### Install the client
 
 ```bash
@@ -35,14 +33,9 @@ Verify that the client imports successfully:
 python -c "from kcoral import Client, Program; print('KCoral client is ready')"
 ```
 
-<a id="the-server"></a>
-
 ### Install the server
 
 Install the `server` extra:
-
-<a id="front-end-engine-and-client"></a>
-<a id="install-the-server-with-pip"></a>
 
 ```bash
 python -m pip install 'kcoral[server]'
@@ -59,7 +52,8 @@ Use a source installation to modify KCoral or install a specific revision.
 
 Install Git, Rust 1.87 or newer with Cargo, and a C/C++ build toolchain.
 The package build compiles the Rust router and node supervisor, including when
-installing only the client dependencies.
+installing only the client dependencies. The `pip` commands below build and
+install both binaries automatically; a separate `cargo build` is not needed.
 
 ```bash
 git clone https://github.com/mlc-ai/kcoral.git
@@ -82,15 +76,10 @@ To include the server dependencies, use:
 python -m pip install -e '.[server]'
 ```
 
-(gpu-server)=
-(cpu-compilation-server)=
 ## Server system requirements
 
 The server runs on Linux. Its Python dependencies are installed by the `server`
 extra; the GPU driver and system tools below must be installed separately.
-
-<a id="running-gpu-programs"></a>
-<a id="running-cpu-compilation-workers"></a>
 
 | Server mode | Purpose | Hardware |
 | --- | --- | --- |
@@ -115,3 +104,18 @@ filesystem isolation; see the isolation guide above for configuration.
 
 For deployment, see [Launch the server](../server-guide/launch-the-server.md)
 and [Remote Compilation](../tutorials/remote-compilation.md).
+
+## Prepare for local compilation (optional)
+
+If you want to compile CUDA C libraries on the client, as in the
+[benchmark tutorial](../tutorials/benchmark-kernel.md#on-the-client), install
+the CUDA toolkit and a compatible C++ compiler on that machine. Add TVM FFI
+and its C++ build dependencies to the active client environment:
+
+```bash
+python -m pip install 'apache-tvm-ffi[cpp]>=0.1.14.post0'
+```
+
+These additional dependencies are needed only when compiling locally. The
+KCoral `server` extra already includes the TVM FFI build dependencies for
+server-side compilation.

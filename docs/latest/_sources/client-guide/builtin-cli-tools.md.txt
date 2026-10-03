@@ -21,8 +21,6 @@ section then shows its command format, requirements, and examples.
 
 ## Common reference
 
-<a id="command-structure-and-help"></a>
-
 All tools use this structure:
 
 ```text
@@ -42,14 +40,10 @@ These commands display KCoral's help locally without contacting a server.
 For the native executable's options, use the commands in each tool section.
 Native options are interpreted by the version installed on the worker.
 
-<a id="connection-and-execution-options"></a>
-
 ### Options
 
 KCoral does not select a server unless a connection option or a nonempty
 `KCORAL_URL` is supplied.
-
-<a id="input-environment-and-output-options"></a>
 
 | Option | Default | Meaning and accepted values |
 | --- | --- | --- |
@@ -81,8 +75,6 @@ Explicit connection options override `KCORAL_URL`. With `--host` or `--port`,
 KCoral uses the defaults in the options table for any omitted component; it does
 not take that component from `KCORAL_URL`. When overriding an environment URL
 this way, it prints a warning with the selected address.
-
-<a id="input-layout-and-working-directory"></a>
 
 ### Files and workspace
 
@@ -119,8 +111,6 @@ Without `--send`, the tool starts in an empty working directory. Relative paths
 in tool arguments are resolved in that directory; absolute paths refer to the worker's
 filesystem, subject to the server's isolation settings.
 
-<a id="environment-variables-and-executable-lookup"></a>
-
 ### Environment
 
 Environment overrides are optional. Without them, execution uses the
@@ -154,8 +144,6 @@ it reaches the worker only if selected with `--env MODE`. Your local shell
 also expands expressions such as `$HOME` before invoking KCoral unless they
 are quoted appropriately.
 
-<a id="standard-input-and-output"></a>
-
 ### Output and exit status
 
 The tool captures stdout and stderr on the worker and displays them after the
@@ -175,8 +163,6 @@ still work:
 ```bash
 kcoral run python --send experiment -- experiment/check.py > run.log 2> run.err
 ```
-
-<a id="returned-files-limits-and-exit-status"></a>
 
 | Returned-file rule | Behavior |
 | --- | --- |
@@ -201,14 +187,10 @@ response limit is 256 MiB. A server may configure different limits. See
 
 ## python
 
-<a id="purpose-and-requirements"></a>
-
 Use `python` for scripts, module entry points, or inline Python commands. It
 runs the **worker's Python interpreter**, not the client's interpreter. The
 worker must have the imported packages and any required GPU libraries installed.
 Upload your own modules and data along with the entry-point script.
-
-<a id="command-format-and-arguments"></a>
 
 ```text
 kcoral run python [KCoral options] -- [Python options] SCRIPT [script arguments]
@@ -231,8 +213,6 @@ A script, module, or inline command is required. The Python prompt, `-i`, and
 stdin execution with `-` are not supported. Options after the first KCoral `--`
 are Python or program arguments, even if they have names such as `--host`.
 
-<a id="run-a-script-or-module"></a>
-
 Given this local directory:
 
 ```text
@@ -252,8 +232,6 @@ kcoral run python --send experiment -- -m experiment.my_package.check
 kcoral run python --send experiment -- -W ignore -X dev experiment/check.py
 kcoral run python -- -c 'import sys; print(sys.version)'
 ```
-
-<a id="return-results-and-interpret-failures"></a>
 
 If `check.py` writes `results/report.json`, download its containing directory:
 
@@ -278,14 +256,10 @@ the native interpreter options.
 
 ## ncu
 
-<a id="id2"></a>
-
 NVIDIA Nsight Compute measures GPU kernel performance and produces a report for
 later inspection. The worker needs `ncu`, an application compatible with the
 worker's GPU, and permission to collect the required GPU performance counters.
 The application must actually launch kernels selected by the profiling options.
-
-<a id="command-format-and-options"></a>
 
 ```text
 kcoral run ncu [KCoral options] --out DIRECTORY -- [ncu options] -- APPLICATION [arguments]
@@ -312,8 +286,6 @@ Both separators are required, even when no native profiler options are supplied.
 | Configuration files | Implicit Nsight configuration files are disabled. |
 | Profiler environment | Defaults `NCU_PROFILE` to `1` if it is absent from the worker environment and `--env` overrides. Timing helpers that honor it can avoid a competing profiler subscription. |
 
-<a id="capture-a-report"></a>
-
 Collect one launch with the basic set:
 
 ```bash
@@ -334,8 +306,6 @@ kcoral run ncu --send experiment --out artifacts/ncu-filtered --timeout 600 \
 Native filtering and replay behavior are controlled by the installed profiler.
 Profiling time is not the same as an ordinary benchmark run: collecting more
 metrics may require repeated executions of the kernel.
-
-<a id="report-location-and-failure-handling"></a>
 
 For `--out artifacts/ncu`, the report is always:
 
@@ -362,15 +332,11 @@ for section sets, filters, replay, and platform requirements.
 
 ## run-iket
 
-<a id="id3"></a>
-
 IKET records execution traces from supported GPU kernels. The worker needs
 `run-iket` and the runtime, GPU, and driver required by its installed version.
 Kernel support and instrumentation requirements depend on that version and the
 profiling mode. KCoral invokes the profiler with your application and retrieves
 its output; it does not modify uploaded source code.
-
-<a id="id4"></a>
 
 ```text
 kcoral run run-iket [KCoral options] --out DIRECTORY -- profile [profile options] -- APPLICATION [arguments]
@@ -394,8 +360,6 @@ application are required.
 | Directories | KCoral selects the output directory and starts the profiler in the uploaded workspace. Native `--output-dir`/`-o` and `--working-dir` are rejected. |
 | Workflow | Requires `profile`; standalone native postprocessing subcommands are unsupported. |
 
-<a id="collect-and-retrieve-a-timeline"></a>
-
 ```bash
 kcoral run run-iket --send experiment --out artifacts/iket \
   -- profile --postprocess json -- python experiment/capture.py
@@ -407,8 +371,6 @@ To retain intermediate files as well as the processed trace:
 kcoral run run-iket --send experiment --out artifacts/iket-debug --timeout 600 \
   -- profile --postprocess json --keep -- python experiment/capture.py
 ```
-
-<a id="exit-behavior-and-troubleshooting"></a>
 
 | Result or failure | Behavior or check |
 | --- | --- |
@@ -430,14 +392,10 @@ describes kernel instrumentation and version-specific requirements.
 
 ## compute-sanitizer
 
-<a id="id1"></a>
-
 NVIDIA Compute Sanitizer runs a CUDA application under a selected correctness
 checker. The worker needs the `compute-sanitizer` executable, a compatible CUDA
 driver and GPU, and the application's dependencies. KCoral invokes the installed
 executable; it does not install the checker or compile the application for you.
-
-<a id="command-format-and-checker-selection"></a>
 
 ```text
 kcoral run compute-sanitizer [KCoral options] -- [sanitizer options] APPLICATION [arguments]
@@ -459,8 +417,6 @@ These are native options placed **after** `--`. Other options supported by the
 installed Compute Sanitizer are also forwarded. The application can be a program
 installed on the worker or an uploaded executable such as `./experiment/check`.
 
-<a id="check-a-python-or-compiled-application"></a>
-
 Run the default checker, select a race check, or check an uploaded executable:
 
 ```bash
@@ -474,8 +430,6 @@ kcoral run compute-sanitizer --send experiment \
 A compiled program must target the worker's platform and preserve its executable
 bit in the upload. For useful source locations, build it with the line
 information recommended by Compute Sanitizer.
-
-<a id="save-findings-and-handle-failures"></a>
 
 ```bash
 kcoral run compute-sanitizer --send experiment \
@@ -496,14 +450,10 @@ for checker coverage and native options.
 
 ## shell
 
-<a id="id5"></a>
-
 `shell` runs the command after `--` directly. It is not limited to Bash and does
 not automatically insert a shell. Use it for shell scripts, uploaded executables,
 or programs installed on the worker. The selected executable and any interpreter
 it needs must be available in the worker environment or uploaded working directory.
-
-<a id="command-format-and-argument-handling"></a>
 
 ```text
 kcoral run shell [KCoral options] -- EXECUTABLE [arguments]
@@ -524,8 +474,6 @@ Arguments are forwarded as separate arguments, preserving local quoting.
 KCoral does not expand wildcards or interpret shell operators on its own.
 A bare program name is searched on the worker's `PATH`; use `./program` to
 select an uploaded executable in the current directory.
-
-<a id="run-scripts-and-return-their-files"></a>
 
 These forms use different interpreters or direct execution:
 
@@ -548,8 +496,6 @@ kcoral run shell --send experiment --fetch results --out artifacts/setup \
 For direct execution, make the script executable before uploading it and use a
 first line such as `#!/bin/sh` that selects an interpreter available remotely.
 Uploaded compiled binaries must be compatible with the worker platform.
-
-<a id="shell-syntax-environment-and-setup-steps"></a>
 
 Use an explicit remote shell when commands need shell syntax. Keep expressions
 quoted so the local shell does not expand them first:
@@ -577,8 +523,6 @@ Local shell operators outside the quoted remote command operate on the client.
 For example, `kcoral run shell -- echo hello > result.txt` writes a **local**
 file after receiving the remote output. To create a remote file, use a command
 such as `sh -c 'echo hello > result.txt'` and select it with `--fetch result.txt`.
-
-<a id="id6"></a>
 
 | Result or failure | Behavior or check |
 | --- | --- |

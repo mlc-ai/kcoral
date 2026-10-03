@@ -3,7 +3,7 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Router" href="router.html"><link rel="prev" title="Builtin CLI Tools" href="../client-guide/builtin-cli-tools.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Launch the router" href="router.html"><link rel="prev" title="Builtin CLI Tools" href="../client-guide/builtin-cli-tools.html">
         <link rel="canonical" href="https://kcoral.mlc.ai/docs/latest/server-guide/launch-the-server.html">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-light.png" as="image">
         <link rel="prefetch" href="../_static/brand/kcoral-logo-dark.png" as="image">
@@ -237,7 +237,7 @@
 <p class="caption" role="heading"><span class="caption-text">Server Guide</span></p>
 <ul class="current">
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Launch the server</a></li>
-<li class="toctree-l1"><a class="reference internal" href="router.html">Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="router.html">Launch the router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="logging.html">Logging</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
@@ -245,10 +245,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/benchmark-kernel.html">Benchmark a Kernel with KCoral</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/remote-compilation.html">Remote Compilation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tutorials/agent-integration.html">Agent Integration Guide</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Development Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../development-guide/build-the-docs.html">Build the Docs</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
@@ -321,9 +317,12 @@
         <article role="main" id="furo-main-content">
           <section id="launch-the-server">
 <h1>Launch the server<a class="headerlink" href="#launch-the-server" title="Link to this heading">¶</a></h1>
-<p>Install the <a class="reference internal" href="../getting-started/installation.html"><span class="std std-doc">worker environment</span></a> that matches
-your programs first. Use GPU workers to execute programs and CPU workers to
-compile CUDA C without a GPU.</p>
+<p>KCoral servers run in two modes: GPU and CPU. A GPU server handles the usual
+kernel development workflow, from compilation to correctness checks and
+benchmarking. A CPU server runs jobs that do not need a GPU, such as compilation,
+so you can add compilation capacity independently of your GPU machines. Install
+the <a class="reference internal" href="../getting-started/installation.html#install-the-server"><span class="std std-ref">server environment</span></a>
+for the jobs you plan to run before starting either mode.</p>
 <section id="start-an-instance">
 <h2>Start an instance<a class="headerlink" href="#start-an-instance" title="Link to this heading">¶</a></h2>
 <div class="admonition warning">
@@ -333,62 +332,151 @@ trusted clients to access your KCoral server or Router. Deploy on a trusted,
 isolated network and never expose these endpoints to the public internet.
 Run workers in a sandbox with restricted permissions and access to host resources.</p>
 </div>
+<p>For a typical setup, start a GPU server:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>server<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 </pre></div>
 </div>
-<p>The server binds to <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code> by default. Use <code class="docutils literal notranslate"><span class="pre">--host</span></code> or <code class="docutils literal notranslate"><span class="pre">KCORAL_SERVER_HOST</span></code> to
-select another address.</p>
-<p>To compile on a machine without a GPU and execute on a separate GPU machine,
-run two instances of this same command:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>server<span class="w"> </span>--device<span class="w"> </span>cpu<span class="w"> </span>--num-workers<span class="w"> </span><span class="m">16</span><span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
-kcoral<span class="w"> </span>server<span class="w"> </span>--device<span class="w"> </span>gpu<span class="w"> </span>--gpus<span class="w"> </span><span class="m">0</span><span class="w"> </span>--workers-per-gpu<span class="w"> </span><span class="m">8</span><span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8001</span>
+<p>By default, this starts eight worker processes sharing physical GPU <code class="docutils literal notranslate"><span class="pre">0</span></code> and
+listens at <code class="docutils literal notranslate"><span class="pre">http://127.0.0.1:8000</span></code>. Each worker handles one request at a time.
+These defaults assume no <code class="docutils literal notranslate"><span class="pre">KCORAL_SERVER_DEVICE</span></code> or <code class="docutils literal notranslate"><span class="pre">KCORAL_SERVER_GPUS</span></code>
+environment override is set.</p>
+<p>Startup logs show the workers being initialized. Wait for the pool to be ready
+and the HTTP server to start listening. The final lines look like this, with
+timestamps and intermediate messages omitted; the target depends on your GPU:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>INFO    pool_ready sandbox=bubblewrap mode=gpu target={'arch': 'sm_100a'} workers=8
+INFO:   Application startup complete.
+INFO:   Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 </pre></div>
 </div>
-<p>See <a class="reference internal" href="#configuration">configuration</a> for every option and its default.</p>
-<p>Check readiness with <code class="docutils literal notranslate"><span class="pre">GET</span> <span class="pre">/health</span></code>, which also reports the <code class="docutils literal notranslate"><span class="pre">target</span></code> an uploaded
-library must be built for and the <code class="docutils literal notranslate"><span class="pre">versions</span></code> the worker runs. When compiling on
-a CPU server, read the target from the GPU server. Submit programs with
-<code class="docutils literal notranslate"><span class="pre">POST</span> <span class="pre">/execute</span></code> using <code class="docutils literal notranslate"><span class="pre">multipart/form-data</span></code>.</p>
-<p>Several workers share each GPU, so one can compile while another measures on the
-GPU it is not using; they take turns through a per-GPU lease and never run on it
-at once. Raising <code class="docutils literal notranslate"><span class="pre">--workers-per-gpu</span></code> keeps the GPUs busier at the cost of dividing
-their memory among more concurrent benchmarks.</p>
-<p>Workers serve one request by default, then the pool replaces them before making
-the slot idle again, so an out-of-bounds or race-sensitive kernel cannot make a
-later request depend on its process history. <code class="docutils literal notranslate"><span class="pre">--max-requests-per-worker</span> <span class="pre">0</span></code> reuses
-workers instead: reset and poison detection still run, but undefined CUDA
-behaviour is no longer contained, and replacement costs enough on short requests
-that throughput numbers should record the setting.</p>
+<p>You can then check that the server is reachable:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>http://127.0.0.1:8000/health
+</pre></div>
+</div>
+<p>A healthy server returns JSON with <code class="docutils literal notranslate"><span class="pre">&quot;status&quot;:</span> <span class="pre">&quot;ok&quot;</span></code>. The response also includes
+its GPU architecture in <code class="docutils literal notranslate"><span class="pre">target</span></code> and installed runtime versions in <code class="docutils literal notranslate"><span class="pre">versions</span></code>.
+If startup fails, see <a class="reference internal" href="logging.html"><span class="std std-doc">logs</span></a> for how to investigate. If bubblewrap
+cannot start, the server warns and continues without filesystem isolation;
+see <a class="reference internal" href="#isolate-worker-files-with-bubblewrap">isolation</a> below.</p>
+<section id="common-settings">
+<h3>Common settings<a class="headerlink" href="#common-settings" title="Link to this heading">¶</a></h3>
+<p>The following options let you adapt the GPU server to your machine and workload:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--gpus</span> <span class="pre">0</span></code> selects physical GPU <code class="docutils literal notranslate"><span class="pre">0</span></code>, the default. The value is a GPU ID,
+not a GPU count. To use multiple GPUs, pass their IDs separated by commas:
+<code class="docutils literal notranslate"><span class="pre">--gpus</span> <span class="pre">0,1</span></code> selects GPUs <code class="docutils literal notranslate"><span class="pre">0</span></code> and <code class="docutils literal notranslate"><span class="pre">1</span></code>. All selected GPUs must have the same
+target architecture.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--workers-per-gpu</span> <span class="pre">8</span></code> runs eight workers per GPU by default. They take turns
+holding exclusive GPU access through a lease. Clients can mark functions with
+<code class="docutils literal notranslate"><span class="pre">cpu_only=True</span></code> to declare that they do not use the GPU, allowing them to run
+while another worker uses it. See
+<a class="reference internal" href="../tutorials/benchmark-kernel.html#overlap-cpu-work-with-gpu-execution"><span class="std std-ref">running CPU-only functions</span></a>
+for how clients select this behavior. More workers can improve utilization
+when requests spend substantial time compiling or doing other CPU work. Once
+the GPU stays busy, adding workers brings little benefit and increases pressure
+on CPU resources, host memory, and GPU memory. Start with the default of eight
+and adjust for your workload.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--max-requests-per-worker</span> <span class="pre">1</span></code>, the default, replaces each worker after one
+request, giving the next request a fresh process and GPU context. This prevents
+a faulty kernel’s process state from affecting later requests. Increasing the
+limit spreads replacement overhead across multiple requests; setting it to
+<code class="docutils literal notranslate"><span class="pre">0</span></code> removes scheduled replacements entirely. Reuse can help with short
+requests, but cleanup and error checks cannot contain every effect of invalid
+GPU code. Failed workers may still need replacement.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--host</span> <span class="pre">127.0.0.1</span></code> and <code class="docutils literal notranslate"><span class="pre">--port</span> <span class="pre">8000</span></code> are the default listening address and
+port. This address accepts connections only from the same machine. Use
+<code class="docutils literal notranslate"><span class="pre">--host</span> <span class="pre">0.0.0.0</span></code> to listen on all network interfaces when clients connect over
+a trusted network; clients use the server’s reachable address in their URLs.
+You can also set <code class="docutils literal notranslate"><span class="pre">KCORAL_SERVER_HOST</span></code> and <code class="docutils literal notranslate"><span class="pre">KCORAL_SERVER_PORT</span></code>; explicit
+command-line options take precedence over these environment variables.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--default-timeout-seconds</span> <span class="pre">300</span></code> gives requests a five-minute execution
+budget by default when they omit a timeout. <code class="docutils literal notranslate"><span class="pre">--max-timeout-seconds</span> <span class="pre">900</span></code> caps
+client-requested budgets at 15 minutes by default. Increase these for longer
+jobs. The budget covers execution of the request itself, excluding time spent
+waiting for server capacity or access to the GPU.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--log-dir</span> <span class="pre">logs</span></code> writes request and worker event logs under <code class="docutils literal notranslate"><span class="pre">logs</span></code> by
+default, unless <code class="docutils literal notranslate"><span class="pre">KCORAL_LOG_DIR</span></code> is set. Pass another directory to change it.
+See <a class="reference internal" href="logging.html"><span class="std std-doc">logs</span></a> for how to follow requests and diagnose failures.</p></li>
+</ul>
+<p>For example, to use two GPUs with four workers on each:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>server<span class="w"> </span>--gpus<span class="w"> </span><span class="m">0</span>,1<span class="w"> </span>--workers-per-gpu<span class="w"> </span><span class="m">4</span>
+</pre></div>
+</div>
+<p>See <a class="reference internal" href="#configuration">configuration</a> for the full option reference. Once the
+server is running, <a class="reference internal" href="../client-guide/writing-a-program.html"><span class="std std-doc">Writing a program</span></a>
+walks through sending your first request.</p>
 </section>
-<section id="choose-a-deployment">
-<h2>Choose a deployment<a class="headerlink" href="#choose-a-deployment" title="Link to this heading">¶</a></h2>
-<p>Start with one GPU instance for remote compilation and measurement. Use separate
-CPU and GPU instances when compilation capacity should scale independently;
-the <a class="reference internal" href="../tutorials/remote-compilation.html"><span class="std std-doc">Remote Compilation tutorial</span></a>
-explains how to pass a compiled library between them.
-The CPU compilation service does not provide general GPU execution.</p>
-<p><code class="docutils literal notranslate"><span class="pre">0.0.0.0</span></code> listens on every network interface. The default <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code> listens
-only on this machine. Disabling filesystem isolation lets workers execute
-uploaded Python code with the server’s permissions; a request working directory
-alone does not isolate that code from the host.</p>
-<p>See <a class="reference internal" href="logging.html"><span class="std std-doc">logs</span></a> to follow a request and diagnose worker replacement.</p>
+</section>
+<section id="add-a-cpu-server-for-compilation">
+<h2>Add a CPU server for compilation<a class="headerlink" href="#add-a-cpu-server-for-compilation" title="Link to this heading">¶</a></h2>
+<p>One GPU server can handle both compilation and measurement. If compilation
+becomes a bottleneck, you can move CPU-only jobs to a CPU server and scale the
+two roles separately. Start these instances in separate terminals, on the
+same machine or on separate hosts:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Compilation server</span>
+kcoral<span class="w"> </span>server<span class="w"> </span>--device<span class="w"> </span>cpu<span class="w"> </span>--num-workers<span class="w"> </span><span class="m">16</span><span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+
+<span class="c1"># GPU execution server</span>
+kcoral<span class="w"> </span>server<span class="w"> </span>--device<span class="w"> </span>gpu<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8001</span>
+</pre></div>
+</div>
+<p>In CPU mode, <code class="docutils literal notranslate"><span class="pre">--num-workers</span></code> controls the number of worker processes and defaults
+to one. The example allows up to 16 requests to run concurrently. Choose a count
+that fits the host’s CPU and memory capacity, accounting for compilers that use
+multiple threads. CPU mode ignores <code class="docutils literal notranslate"><span class="pre">--gpus</span></code> and <code class="docutils literal notranslate"><span class="pre">--workers-per-gpu</span></code>.</p>
+<p>Both servers report <code class="docutils literal notranslate"><span class="pre">pool_ready</span></code> followed by the HTTP startup messages shown
+above. For the CPU command, the pool line looks like this, with the timestamp
+omitted:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>INFO    pool_ready sandbox=bubblewrap mode=cpu target={} workers=16
+</pre></div>
+</div>
+<p>Check <code class="docutils literal notranslate"><span class="pre">/health</span></code> at each server’s address to confirm it is reachable. The GPU
+server listens on port <code class="docutils literal notranslate"><span class="pre">8001</span></code> in this example and still defaults to eight
+workers on GPU <code class="docutils literal notranslate"><span class="pre">0</span></code>.</p>
+<p>The <a class="reference internal" href="../tutorials/remote-compilation.html"><span class="std std-doc">Remote Compilation tutorial</span></a> demonstrates
+compiling CUDA C on a CPU server and passing the resulting library to a GPU
+server. Other compilation workflows can run there if their dependencies are
+installed and they do not require GPU access. The CPU server cannot execute
+GPU kernels. Its <code class="docutils literal notranslate"><span class="pre">target</span></code> is empty, so clients should read the GPU server’s
+target before compiling a library for it.
+CPU workers accept Python modules, bytes and files; tensor and library uploads
+require a GPU worker.</p>
 </section>
 <section id="isolate-worker-files-with-bubblewrap">
 <h2>Isolate worker files with bubblewrap<a class="headerlink" href="#isolate-worker-files-with-bubblewrap" title="Link to this heading">¶</a></h2>
-<p>The host or container must allow unprivileged user namespaces.</p>
-<p>By default, the server checks whether bubblewrap can start before creating
-workers. If the check fails or times out, it warns and disables isolation for
-that server run. Restart to check again. Set <code class="docutils literal notranslate"><span class="pre">--sandbox</span> <span class="pre">none</span></code> or
-<code class="docutils literal notranslate"><span class="pre">ServerConfig(sandbox=&quot;none&quot;)</span></code> to disable isolation and skip the check.
-See <a class="reference internal" href="../getting-started/installation.html#server-system-requirements"><span class="std std-ref">installation requirements</span></a>.</p>
-<p>When enabled, each worker can write ordinary files only under its private
-<code class="docutils literal notranslate"><span class="pre">/work</span></code>. Other workers’ files and the server’s cache and logs are hidden;
-runtime dependencies are read-only, and network access is disabled.
-<code class="docutils literal notranslate"><span class="pre">/work/.kcoral</span></code> is reserved for runtime files and cannot receive uploads.</p>
-<p><code class="docutils literal notranslate"><span class="pre">--max-requests-per-worker</span> <span class="pre">0</span></code> reuses processes while clearing files and caches
-between programs. Programs must finish background work before returning;
-workers with remaining resources or failed cleanup are replaced.</p>
-<p>For dependencies outside the standard runtime directories, add read-only paths:</p>
+<p>Code running on the server can read and write files. Giving each request a
+working directory keeps its outputs together, but does not by itself
+prevent that code from modifying the server’s files or another worker’s data.
+Filesystem isolation limits the damage an accidental file operation can cause.</p>
+<p>The KCoral server uses <a class="reference external" href="https://github.com/containers/bubblewrap">bubblewrap</a>,
+a Linux sandboxing tool, to give each worker
+its own view of the filesystem. Bubblewrap uses Linux namespaces to separate the
+worker’s environment from the host. KCoral makes runtime dependencies available
+read-only and gives the worker a private writable directory at <code class="docutils literal notranslate"><span class="pre">/work</span></code>. Other
+workers’ files are hidden, and network access is disabled. Keep the server’s
+cache and logs outside the read-only runtime paths, whose contents remain
+visible to workers. Uploaded code still runs on the host’s CPU and, in GPU mode, its
+assigned GPU. <code class="docutils literal notranslate"><span class="pre">/work/.kcoral</span></code> is reserved for runtime files and cannot receive
+uploads.</p>
+<p>This isolation is enabled by default with <code class="docutils literal notranslate"><span class="pre">--sandbox</span> <span class="pre">bubblewrap</span></code>. Install
+bubblewrap and allow unprivileged user namespaces on the host or container;
+see the <a class="reference internal" href="../getting-started/installation.html#server-system-requirements"><span class="std std-ref">installation requirements</span></a>.
+Before creating workers, the server checks that bubblewrap can start. If the
+check fails or times out, it warns and disables isolation for that run. For
+example, if bubblewrap is not installed, the warning includes:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>RuntimeWarning: bubblewrap could not start; filesystem isolation is disabled for this server run: bubblewrap isolation requires bwrap on PATH; install bubblewrap
+</pre></div>
+</div>
+<p>Without isolation, uploaded code has the server process’s access to host files. Fix the
+reported problem and restart the server to check again.</p>
+<p>To disable filesystem isolation explicitly and skip the startup check, use
+<code class="docutils literal notranslate"><span class="pre">--sandbox</span> <span class="pre">none</span></code>.</p>
+<p>When workers are reused (<code class="docutils literal notranslate"><span class="pre">--max-requests-per-worker</span></code> greater than <code class="docutils literal notranslate"><span class="pre">1</span></code>, or <code class="docutils literal notranslate"><span class="pre">0</span></code>),
+the server clears their working files between requests. If cleanup fails or
+code leaves resources such as background threads or child processes running,
+the server replaces the worker before accepting another request on it.</p>
+<p>For dependencies outside the
+<a class="reference external" href="https://github.com/mlc-ai/kcoral/blob/main/python/kcoral/sandbox.py#L180-L201">standard runtime paths</a>,
+add read-only paths:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>server<span class="w"> </span>--sandbox-readonly-path<span class="w"> </span>/opt/custom-compiler
 </pre></div>
 </div>
@@ -400,8 +488,8 @@ sharing an interpreter or provide GPU memory isolation.</p>
 </section>
 <section id="configuration">
 <h2>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">¶</a></h2>
-<p>The command-line interface accepts the options below. Python applications pass
-the corresponding fields to <code class="docutils literal notranslate"><span class="pre">ServerConfig</span></code>.
+<p>The following options configure a standalone server. Use <code class="docutils literal notranslate"><span class="pre">--help</span></code> to display
+command-line help.
 Explicit command-line options take precedence over environment variables.
 Defaults in this table assume none of those environment variables is set.</p>
 <p>A worker is a process that executes one request at a time. A lease gives a
@@ -414,59 +502,59 @@ worker exclusive access to its GPU while it executes or measures GPU work.</p>
 <tr class="row-odd"><th class="head"><p>Option</p></th>
 <th class="head"><p>Default</p></th>
 <th class="head"><p>Environment variable</p></th>
-<th class="head"><p>Configuration field</p></th>
+<th class="head"><p>Meaning</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--host</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">KCORAL_SERVER_HOST</span></code></p></td>
-<td><p>Passed to the HTTP server, not <code class="docutils literal notranslate"><span class="pre">ServerConfig</span></code></p></td>
+<td><p>Listening address</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--port</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8000</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">KCORAL_SERVER_PORT</span></code></p></td>
-<td><p>Passed to the HTTP server, not <code class="docutils literal notranslate"><span class="pre">ServerConfig</span></code></p></td>
+<td><p>Listening port</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--device</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">gpu</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">KCORAL_SERVER_DEVICE</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">device</span></code></p></td>
+<td><p>Worker mode: <code class="docutils literal notranslate"><span class="pre">gpu</span></code> or <code class="docutils literal notranslate"><span class="pre">cpu</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--gpus</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">KCORAL_SERVER_GPUS</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">gpus</span></code>, a list, default <code class="docutils literal notranslate"><span class="pre">[0]</span></code></p></td>
+<td><p>Comma-separated physical GPU IDs</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--num-workers</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
 <td><p>—</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">num_workers</span></code>, used in CPU mode</p></td>
+<td><p>Worker count in CPU mode</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--workers-per-gpu</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>—</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">workers_per_gpu</span></code>, used in GPU mode</p></td>
+<td><p>Workers per GPU in GPU mode</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--max-requests-per-worker</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
 <td><p>—</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">max_requests_per_worker</span></code>; <code class="docutils literal notranslate"><span class="pre">0</span></code> reuses workers</p></td>
+<td><p>Requests before replacement; <code class="docutils literal notranslate"><span class="pre">0</span></code> allows unlimited reuse</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--worker-termination-grace-seconds</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
 <td><p>—</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">worker_termination_grace_seconds</span></code></p></td>
+<td><p>Seconds between SIGTERM and SIGKILL when stopping a failed worker</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--sandbox</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">bubblewrap</span></code></p></td>
 <td><p>—</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">sandbox</span></code>; <code class="docutils literal notranslate"><span class="pre">none</span></code> explicitly disables filesystem isolation</p></td>
+<td><p>Filesystem isolation; <code class="docutils literal notranslate"><span class="pre">none</span></code> disables it</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--sandbox-readonly-path</span></code></p></td>
 <td><p>No additional paths</p></td>
 <td><p>—</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">sandbox_readonly_paths</span></code>, a list of paths; repeatable</p></td>
+<td><p>Additional read-only dependency path; repeatable</p></td>
 </tr>
 </tbody>
 </table>
@@ -474,11 +562,10 @@ worker exclusive access to its GPU while it executes or measures GPU work.</p>
 <p><code class="docutils literal notranslate"><span class="pre">--gpus</span></code> takes comma-separated physical device numbers such as <code class="docutils literal notranslate"><span class="pre">0,1</span></code>. Workers
 select their devices from this option, so setting <code class="docutils literal notranslate"><span class="pre">CUDA_VISIBLE_DEVICES</span></code> on the
 front-end does not restrict the server. All selected GPUs must report the same
-target architecture. CPU mode ignores <code class="docutils literal notranslate"><span class="pre">gpus</span></code> and uses <code class="docutils literal notranslate"><span class="pre">num_workers</span></code> instead.</p>
+target architecture. CPU mode ignores <code class="docutils literal notranslate"><span class="pre">--gpus</span></code> and uses <code class="docutils literal notranslate"><span class="pre">--num-workers</span></code> instead.</p>
 <p>The default replaces a worker after each request, giving the next request a
 fresh process and GPU context. Reusing workers can reduce replacement overhead,
-but reset and poison detection cannot contain every effect of invalid GPU code.
-Record this setting when comparing throughput.</p>
+but reset and poison detection cannot contain every effect of invalid GPU code.</p>
 </section>
 <section id="time-and-size-limits">
 <h3>Time and size limits<a class="headerlink" href="#time-and-size-limits" title="Link to this heading">¶</a></h3>
@@ -489,50 +576,37 @@ with a unit suffix.</p>
 <thead>
 <tr class="row-odd"><th class="head"><p>Option</p></th>
 <th class="head"><p>Default</p></th>
-<th class="head"><p>Configuration field</p></th>
 <th class="head"><p>Meaning</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--worker-wait-timeout-seconds</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1800</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">worker_wait_timeout_seconds</span></code></p></td>
 <td><p>Time to wait for a free worker before a 503 response</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--default-timeout-seconds</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">default_timeout_seconds</span></code></p></td>
 <td><p>Execution limit when a request omits its timeout</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--max-timeout-seconds</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">900</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">max_timeout_seconds</span></code></p></td>
 <td><p>Upper bound for a request’s timeout</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--max-request-bytes</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">268435456</span></code> (256 MiB)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">max_request_bytes</span></code></p></td>
 <td><p>Maximum request body size</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--max-response-bytes</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">268435456</span></code> (256 MiB)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">max_response_bytes</span></code></p></td>
 <td><p>Maximum serialized response size</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--output-limit-bytes</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1048576</span></code> (1 MiB)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">output_limit_bytes</span></code></p></td>
 <td><p>Default captured stdout/stderr limit per stream</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--max-output-limit-bytes</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">16777216</span></code> (16 MiB)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">max_output_limit_bytes</span></code></p></td>
 <td><p>Maximum requested captured output per stream</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--cache-capacity-bytes</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">17179869184</span></code> (16 GiB)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">cache_capacity_bytes</span></code></p></td>
-<td><p>Memory cache capacity for tensors, bytes and libraries</p></td>
 </tr>
 </tbody>
 </table>
@@ -545,38 +619,62 @@ wait does not give a running program a longer execution budget.</p>
 defaults, up to these server maximums. See <a class="reference internal" href="../client-guide/protocol.html#options"><span class="std std-ref">protocol options</span></a>
 for clamping and <a class="reference internal" href="../client-guide/protocol.html#errors"><span class="std std-ref">errors</span></a> for request failures.</p>
 </section>
-<section id="file-upload-cache">
-<h3>File upload cache<a class="headerlink" href="#file-upload-cache" title="Link to this heading">¶</a></h3>
-<p>File uploads use a persistent disk cache; tensors, bytes and libraries use the
-memory cache. The default directory is <code class="docutils literal notranslate"><span class="pre">$XDG_CACHE_HOME/kcoral/files</span></code> when
-<code class="docutils literal notranslate"><span class="pre">XDG_CACHE_HOME</span></code> is an absolute path, otherwise <code class="docutils literal notranslate"><span class="pre">~/.cache/kcoral/files</span></code>.</p>
+<section id="cache">
+<h3>Cache<a class="headerlink" href="#cache" title="Link to this heading">¶</a></h3>
+<p>When repeatedly evaluating a kernel or iterating on agent-generated kernels,
+you often upload the same harness files, input tensors, or compiled libraries
+with each request. KCoral caches uploaded content so clients can reuse unchanged
+uploads without transferring their contents again. The Python client handles
+cache misses automatically by resending the required content.</p>
+<p>The server keeps two caches, both keyed by the SHA-256 hash of the uploaded
+bytes:</p>
+<ul class="simple">
+<li><p>The <strong>memory cache</strong> holds tensor, byte-string, and library uploads in the
+server process’s CPU memory. Its contents are lost when the server restarts.</p></li>
+<li><p>The <strong>file cache</strong> holds file uploads on disk. Its contents can survive server
+restarts, independently of the temporary files created for each request.</p></li>
+</ul>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head"><p>Option</p></th>
 <th class="head"><p>Default</p></th>
-<th class="head"><p>Configuration field</p></th>
+<th class="head"><p>Meaning</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--disk-cache-dir</span></code></p></td>
-<td><p>The directory described above</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">disk_cache_dir</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--cache-capacity-bytes</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">17179869184</span></code> (16 GiB)</p></td>
+<td><p>Memory cache budget, in bytes</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--disk-cache-capacity-mbytes</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--disk-cache-dir</span></code></p></td>
+<td><p>The directory described below</p></td>
+<td><p>Persistent file cache directory</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--disk-cache-capacity-mbytes</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">16384</span></code> MiB (16 GiB)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">disk_cache_capacity_mbytes</span></code></p></td>
+<td><p>File cache budget, in MiB</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>An empty directory option (<code class="docutils literal notranslate"><span class="pre">None</span></code> in <code class="docutils literal notranslate"><span class="pre">ServerConfig</span></code>) or zero capacity disables
-file caching without falling back to the memory cache. Cached content survives
-server restarts. Caching is best-effort: storage failures and oversized objects
-do not prevent execution when the request supplies the bytes.</p>
-<p>File destinations are private to each request and removed when the request
-ends. See <a class="reference internal" href="../client-guide/writing-a-program.html#uploading-files-and-folders"><span class="std std-ref">file uploads</span></a> for
-path restrictions, snapshot behavior and directory uploads.</p>
+<p>The memory cache evicts less recently used entries when it exceeds its budget.
+Entries in use by active requests are retained, so the budget can be exceeded
+while those entries are pinned. Individual uploads larger than one quarter of
+the budget are not cached, but remain usable by the request that supplied them.</p>
+<p>The file cache defaults to <code class="docutils literal notranslate"><span class="pre">$XDG_CACHE_HOME/kcoral/files</span></code> when <code class="docutils literal notranslate"><span class="pre">XDG_CACHE_HOME</span></code>
+is an absolute path, otherwise <code class="docutils literal notranslate"><span class="pre">~/.cache/kcoral/files</span></code>. It evicts older entries
+to stay within its budget. An empty directory option (<code class="docutils literal notranslate"><span class="pre">--disk-cache-dir</span> <span class="pre">''</span></code>) or zero disk capacity
+disables file caching without
+falling back to the memory cache. Storage failures and oversized files do not
+prevent execution when the request supplies the bytes.</p>
+<p>Both caches store uploaded bytes, not execution state: each request creates
+its own tensors, loads its libraries, and materializes its files. Changes made
+during execution do not change the cached uploads.</p>
+<p>See <a class="reference internal" href="../client-guide/protocol.html#caching"><span class="std std-ref">protocol caching</span></a> for
+cache lookup and retry behavior, and
+<a class="reference internal" href="../client-guide/writing-a-program.html#upload-files-and-folders"><span class="std std-ref">file uploads</span></a>
+for working with request files.</p>
 </section>
 <section id="logs">
 <h3>Logs<a class="headerlink" href="#logs" title="Link to this heading">¶</a></h3>
@@ -584,51 +682,30 @@ path restrictions, snapshot behavior and directory uploads.</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head"><p>Option</p></th>
-<th class="head"><p>Command-line default</p></th>
-<th class="head"><p>Configuration field and Python default</p></th>
+<th class="head"><p>Default behavior</p></th>
+<th class="head"><p>Effect</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--log-dir</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">logs</span></code>, or <code class="docutils literal notranslate"><span class="pre">KCORAL_LOG_DIR</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">log_dir=None</span></code></p></td>
+<td><p>Choose where to save logs and programs</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--no-log-console</span></code></p></td>
-<td><p>Console mirroring enabled</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">log_console=True</span></code></p></td>
+<td><p>Console events enabled</p></td>
+<td><p>Disable console events</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--no-log-programs</span></code></p></td>
 <td><p>Program recording enabled</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">log_programs=True</span></code></p></td>
+<td><p>Disable saved program JSON</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>The two <code class="docutils literal notranslate"><span class="pre">--no-*</span></code> flags set their fields to <code class="docutils literal notranslate"><span class="pre">False</span></code>. <code class="docutils literal notranslate"><span class="pre">--log-dir</span> <span class="pre">''</span></code> disables
-logging; direct Python construction already defaults to <code class="docutils literal notranslate"><span class="pre">log_dir=None</span></code>.
+<p><code class="docutils literal notranslate"><span class="pre">--log-dir</span> <span class="pre">''</span></code> disables
+log files and saved programs; console events remain enabled unless you also
+pass <code class="docutils literal notranslate"><span class="pre">--no-log-console</span></code>.
 See <a class="reference internal" href="logging.html"><span class="std std-doc">logs</span></a> for locations, events and investigation commands.</p>
-</section>
-<section id="configure-an-application-in-python">
-<h3>Configure an application in Python<a class="headerlink" href="#configure-an-application-in-python" title="Link to this heading">¶</a></h3>
-<p><code class="docutils literal notranslate"><span class="pre">create_app</span></code> builds the application; an HTTP server such as uvicorn runs it.
-The server extra must be installed. This example defines an application and
-does not start workers until the application enters its serving lifecycle.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
-
-<span class="kn">from</span><span class="w"> </span><span class="nn">kcoral</span><span class="w"> </span><span class="kn">import</span> <span class="n">ServerConfig</span><span class="p">,</span> <span class="n">create_app</span>
-
-<span class="n">app</span> <span class="o">=</span> <span class="n">create_app</span><span class="p">(</span>
-    <span class="n">ServerConfig</span><span class="p">(</span>
-        <span class="n">gpus</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
-        <span class="n">workers_per_gpu</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
-        <span class="n">log_dir</span><span class="o">=</span><span class="n">Path</span><span class="p">(</span><span class="s2">"logs"</span><span class="p">),</span>
-        <span class="n">disk_cache_capacity_mbytes</span><span class="o">=</span><span class="mi">16384</span><span class="p">,</span>
-    <span class="p">)</span>
-<span class="p">)</span>
-</pre></div>
-</div>
-<p>See the <a class="reference internal" href="../python-api/index.html#server-integration"><span class="std std-ref">Python reference</span></a> for
-the complete configuration signature and application factory.</p>
 </section>
 </section>
 </section>
@@ -643,7 +720,7 @@ the complete configuration signature and application factory.</p>
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">Router</div>
+                <div class="title">Launch the router</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
@@ -686,15 +763,17 @@ the complete configuration signature and application factory.</p>
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">Launch the server</a><ul>
-<li><a class="reference internal" href="#start-an-instance">Start an instance</a></li>
-<li><a class="reference internal" href="#choose-a-deployment">Choose a deployment</a></li>
+<li><a class="reference internal" href="#start-an-instance">Start an instance</a><ul>
+<li><a class="reference internal" href="#common-settings">Common settings</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#add-a-cpu-server-for-compilation">Add a CPU server for compilation</a></li>
 <li><a class="reference internal" href="#isolate-worker-files-with-bubblewrap">Isolate worker files with bubblewrap</a></li>
 <li><a class="reference internal" href="#configuration">Configuration</a><ul>
 <li><a class="reference internal" href="#binding-and-worker-selection">Binding and worker selection</a></li>
 <li><a class="reference internal" href="#time-and-size-limits">Time and size limits</a></li>
-<li><a class="reference internal" href="#file-upload-cache">File upload cache</a></li>
+<li><a class="reference internal" href="#cache">Cache</a></li>
 <li><a class="reference internal" href="#logs">Logs</a></li>
-<li><a class="reference internal" href="#configure-an-application-in-python">Configure an application in Python</a></li>
 </ul>
 </li>
 </ul>
@@ -708,7 +787,7 @@ the complete configuration signature and application factory.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=37f9d0c5"></script>
+</div><script src="../_static/documentation_options.js?v=adebac25"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
