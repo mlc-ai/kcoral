@@ -47,8 +47,8 @@ def test_execute_library_multi_gpu_kernel(gpu_client, multiprocess):
     count = 2
     if count > capacity:
         pytest.skip("not enough reserved GPUs")
-    name = "multi_gpu_kernel_multiprocess.py" if multiprocess else "multi_gpu_kernel.py"
-    example = Path(__file__).parents[1] / "examples" / name
+    name = "multi_gpu_multiprocess" if multiprocess else "multi_gpu_single_process"
+    example = Path(__file__).parents[1] / "examples" / name / "main.py"
     program = runpy.run_path(str(example))["build_program"]()
     result = client.execute(program, gpu_count=count, timeout_seconds=120)
     assert result.completed, (result.error, result.stdout, result.stderr)

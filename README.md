@@ -100,7 +100,7 @@ With a running GPU server, the first program uploads a tensor, adds one on the
 GPU, returns it and checks the values:
 
 ```bash
-KCORAL_URL=http://127.0.0.1:8000 python examples/first_program.py
+KCORAL_URL=http://127.0.0.1:8000 python examples/first_program/main.py
 ```
 
 See [Your First Program](docs/getting-started/quickstart.md),
@@ -122,6 +122,6 @@ uploads and separate compilation/execution servers.
 
 Use `client.execute(program, gpu_count=N)` to run a program on 1–8 GPUs.
 Single- and multi-GPU programs share the same worker and release GPUs for `cpu_only` calls. Both standalone examples execute through `Program.run`:
-[one process controlling all GPUs](examples/multi_gpu_kernel.py) and
-[one worker per GPU](examples/multi_gpu_kernel_multiprocess.py).
+[one process controlling all GPUs](examples/multi_gpu_single_process/main.py) and
+[one worker per GPU](examples/multi_gpu_multiprocess/main.py).
 See the [multi-GPU guide](docs/client-guide/writing-a-program.md#run-a-multi-gpu-program).

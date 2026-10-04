@@ -26,33 +26,33 @@ CUDA toolkit, or TVM installation: the client sends source and data to the serve
 
 ## Run a complete example
 
-Start with `examples/benchmark_kernel.py`, which adds one to each of 256
+Start with `examples/benchmark_kernel/main.py`, which adds one to each of 256
 `float32` values. From the repository checkout, run it against your GPU server:
 
 ```bash
-KCORAL_URL=http://127.0.0.1:8000 python examples/benchmark_kernel.py
+KCORAL_URL=http://127.0.0.1:8000 python examples/benchmark_kernel/main.py
 ```
 
 <div class="code-example">
 <div class="code-example-preview">
 
-```{literalinclude} ../../examples/benchmark_kernel.py
+```{literalinclude} ../../examples/benchmark_kernel/main.py
 :language: python
 :lines: 1-24
 ```
 
 </div>
 <details>
-<summary><span class="code-example-expand">Show full source</span><span class="code-example-collapse">Show less</span>: <code>benchmark_kernel.py</code></summary>
+<summary><span class="code-example-expand">Show full source</span><span class="code-example-collapse">Show less</span>: <code>benchmark_kernel/main.py</code></summary>
 
-```{literalinclude} ../../examples/benchmark_kernel.py
+```{literalinclude} ../../examples/benchmark_kernel/main.py
 :language: python
 ```
 
 </details>
 </div>
 
-{download}`Download the example <../../examples/benchmark_kernel.py>`.
+{download}`Download the example <../../examples/benchmark_kernel/main.py>`.
 
 The client uploads the kernel and an `evaluate` function, uploads the input
 tensor, and calls `evaluate` on the server. That function allocates an output
@@ -98,10 +98,10 @@ For a complete example that compiles, checks, and measures kernels in all four
 languages, run this client from the repository checkout:
 
 ```bash
-KCORAL_URL=http://127.0.0.1:8000 python examples/remote_compile_client.py
+KCORAL_URL=http://127.0.0.1:8000 python examples/remote_compile/main.py
 ```
 
-{download}`Download remote_compile_client.py <../../examples/remote_compile_client.py>`.
+{download}`Download remote_compile/main.py <../../examples/remote_compile/main.py>`.
 
 Compilation can initialize CUDA or load GPU modules. Calls that do this need
 exclusive access to the GPU, just as kernel execution does, so another request
@@ -111,7 +111,7 @@ cannot use that GPU until the call gives up access.
 
 If you already have the compiler on your client machine, you can keep the build
 local and use the remote GPU for evaluation. The
-`examples/library_upload_client.py` example does this for a
+`examples/library_upload/main.py` example does this for a
 CUDA C add-one kernel. It needs the CUDA toolkit, a host C++ compiler, and TVM FFI
 with its C++ build dependencies on the client. See
 [local compilation setup](../getting-started/installation.md#prepare-for-local-compilation-optional).
@@ -120,7 +120,7 @@ Its `build_library` function writes the CUDA source to a temporary directory,
 compiles it for the supplied GPU architecture, and reads the resulting shared
 library as bytes:
 
-```{literalinclude} ../../examples/library_upload_client.py
+```{literalinclude} ../../examples/library_upload/main.py
 :language: python
 :pyobject: build_library
 ```
@@ -128,7 +128,7 @@ library as bytes:
 Here, `SOURCE` is the example's CUDA code, including a TVM FFI export for
 `add_one`. The client reads the remote GPU's architecture before building:
 
-```{literalinclude} ../../examples/library_upload_client.py
+```{literalinclude} ../../examples/library_upload/main.py
 :language: python
 :start-at:         arch = client.target()
 :end-at:             library = build_library(arch, directory)
@@ -137,7 +137,7 @@ Here, `SOURCE` is the example's CUDA code, including a TVM FFI export for
 
 The program then uploads the compiled bytes and selects the exported function:
 
-```{literalinclude} ../../examples/library_upload_client.py
+```{literalinclude} ../../examples/library_upload/main.py
 :language: python
 :start-at:     module = program.upload(kind="library"
 :end-at:     kernel = program.get_function(module=module, name="add_one")
@@ -151,10 +151,10 @@ server only needs to load and execute the library. See the
 requirements. Run the complete client from the repository checkout:
 
 ```bash
-KCORAL_URL=http://127.0.0.1:8000 python examples/library_upload_client.py
+KCORAL_URL=http://127.0.0.1:8000 python examples/library_upload/main.py
 ```
 
-{download}`Download library_upload_client.py <../../examples/library_upload_client.py>`.
+{download}`Download library_upload/main.py <../../examples/library_upload/main.py>`.
 
 ### On a CPU server
 
