@@ -405,7 +405,7 @@ for the duration of remote calls.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>program</strong> (<a class="reference internal" href="#kcoral.Program" title="kcoral.client.Program"><em>Program</em></a>) – Program built with the client-side <a class="reference internal" href="#kcoral.Program" title="kcoral.Program"><code class="xref py py-class docutils literal notranslate"><span class="pre">Program</span></code></a>.</p></li>
+<li><p><strong>program</strong> (<a class="reference internal" href="#kcoral.Program" title="kcoral.client.program.Program"><em>Program</em></a>) – Program built with the client-side <a class="reference internal" href="#kcoral.Program" title="kcoral.Program"><code class="xref py py-class docutils literal notranslate"><span class="pre">Program</span></code></a>.</p></li>
 <li><p><strong>gpu_count</strong> (<a class="reference external" href="https://docs.python.org/3/builtins/functions.html#int" title="(in Python v3.14)"><em>int</em></a><em> | </em><em>None</em>) – Run once on 1-8 GPUs. CPU-only calls release the complete
 set after synchronization; later GPU instructions reacquire it.
 Omit to use the configured single-GPU workers.</p></li>
@@ -428,7 +428,7 @@ not raise an exception; inspect <code class="docutils literal notranslate"><span
 </ul>
 </dd>
 <dt class="field-even">Return type<span class="colon">:</span></dt>
-<dd class="field-even"><p><a class="reference internal" href="#kcoral.ProgramResult" title="kcoral.client.ProgramResult"><em>ProgramResult</em></a></p>
+<dd class="field-even"><p><a class="reference internal" href="#kcoral.ProgramResult" title="kcoral.client.result.ProgramResult"><em>ProgramResult</em></a></p>
 </dd>
 </dl>
 <p>The first submission omits binary blobs. A cache miss retries with
@@ -523,7 +523,7 @@ survives between invocations. The function’s source is captured at decoration.
 </ul>
 </dd>
 <dt class="field-even">Return type<span class="colon">:</span></dt>
-<dd class="field-even"><p><a class="reference internal" href="#kcoral.Program" title="kcoral.client.Program"><em>Program</em></a></p>
+<dd class="field-even"><p><a class="reference internal" href="#kcoral.Program" title="kcoral.client.program.Program"><em>Program</em></a></p>
 </dd>
 </dl>
 <p>Defaults are bound locally and sent explicitly. Arguments may be JSON
@@ -547,7 +547,7 @@ No pickle deserialization is used.</p>
 <dd class="field-even"><p>A <a class="reference internal" href="#kcoral.ProgramResult" title="kcoral.ProgramResult"><code class="xref py py-class docutils literal notranslate"><span class="pre">ProgramResult</span></code></a>; instruction failures remain data.</p>
 </dd>
 <dt class="field-odd">Return type<span class="colon">:</span></dt>
-<dd class="field-odd"><p><a class="reference internal" href="#kcoral.ProgramResult" title="kcoral.client.ProgramResult"><em>ProgramResult</em></a></p>
+<dd class="field-odd"><p><a class="reference internal" href="#kcoral.ProgramResult" title="kcoral.client.result.ProgramResult"><em>ProgramResult</em></a></p>
 </dd>
 </dl>
 <p>Uses the same cache negotiation and error handling as <code class="docutils literal notranslate"><span class="pre">Client.execute</span></code>.
@@ -631,7 +631,7 @@ and cannot conflict with another file upload.</p>
 </ul>
 </dd>
 <dt class="field-even">Return type<span class="colon">:</span></dt>
-<dd class="field-even"><p><a class="reference internal" href="#kcoral.Register" title="kcoral.client.Register"><em>Register</em></a></p>
+<dd class="field-even"><p><a class="reference internal" href="#kcoral.Register" title="kcoral.client.program.Register"><em>Register</em></a></p>
 </dd>
 </dl>
 <p>Add this instruction before any code that reads the destination.
@@ -690,7 +690,7 @@ the DLPack tensor exchange protocol, or raw bytes.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Return type<span class="colon">:</span></dt>
-<dd class="field-even"><p><a class="reference internal" href="#kcoral.Register" title="kcoral.client.Register"><em>Register</em></a></p>
+<dd class="field-even"><p><a class="reference internal" href="#kcoral.Register" title="kcoral.client.program.Register"><em>Register</em></a></p>
 </dd>
 </dl>
 <p>A library is a precompiled TVM FFI module packaged as a shared library;
@@ -706,7 +706,7 @@ Use <a class="reference internal" href="#kcoral.Program.upload_file" title="kcor
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>module</strong> (<a class="reference internal" href="#kcoral.Register" title="kcoral.client.Register"><em>Register</em></a><em> | </em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#dict" title="(in Python v3.14)"><em>dict</em></a><em>[</em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em>, </em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em>]</em>) – An earlier upload register or <code class="docutils literal notranslate"><span class="pre">{&quot;$ref&quot;:</span> <span class="pre">&quot;id&quot;}</span></code> reference.</p></li>
+<li><p><strong>module</strong> (<a class="reference internal" href="#kcoral.Register" title="kcoral.client.program.Register"><em>Register</em></a><em> | </em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#dict" title="(in Python v3.14)"><em>dict</em></a><em>[</em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em>, </em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em>]</em>) – An earlier upload register or <code class="docutils literal notranslate"><span class="pre">{&quot;$ref&quot;:</span> <span class="pre">&quot;id&quot;}</span></code> reference.</p></li>
 <li><p><strong>name</strong> (<a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a>) – Nonempty function name exported by the module or library.</p></li>
 <li><p><strong>cpu_only</strong> (<a class="reference external" href="https://docs.python.org/3/builtins/functions.html#bool" title="(in Python v3.14)"><em>bool</em></a>) – Declare that the function does not access the GPU.</p></li>
 <li><p><strong>id</strong> (<a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em> | </em><em>None</em>) – Optional custom instruction identifier. Must be nonempty and unique.</p></li>
@@ -722,7 +722,7 @@ Use <a class="reference internal" href="#kcoral.Program.upload_file" title="kcor
 </ul>
 </dd>
 <dt class="field-even">Return type<span class="colon">:</span></dt>
-<dd class="field-even"><p><a class="reference internal" href="#kcoral.Register" title="kcoral.client.Register"><em>Register</em></a></p>
+<dd class="field-even"><p><a class="reference internal" href="#kcoral.Register" title="kcoral.client.program.Register"><em>Register</em></a></p>
 </dd>
 </dl>
 <p>Running a <code class="docutils literal notranslate"><span class="pre">cpu_only</span></code> function as its own instruction releases the
@@ -737,7 +737,7 @@ on a best-effort basis; it does not make GPU operations safe to call.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>fn</strong> (<a class="reference internal" href="#kcoral.Register" title="kcoral.client.Register"><em>Register</em></a>) – The <a class="reference internal" href="#kcoral.Register" title="kcoral.Register"><code class="xref py py-class docutils literal notranslate"><span class="pre">Register</span></code></a> returned by <a class="reference internal" href="#kcoral.Program.get_function" title="kcoral.Program.get_function"><code class="xref py py-meth docutils literal notranslate"><span class="pre">get_function()</span></code></a>,
+<li><p><strong>fn</strong> (<a class="reference internal" href="#kcoral.Register" title="kcoral.client.program.Register"><em>Register</em></a>) – The <a class="reference internal" href="#kcoral.Register" title="kcoral.Register"><code class="xref py py-class docutils literal notranslate"><span class="pre">Register</span></code></a> returned by <a class="reference internal" href="#kcoral.Program.get_function" title="kcoral.Program.get_function"><code class="xref py py-meth docutils literal notranslate"><span class="pre">get_function()</span></code></a>,
 or by an earlier <a class="reference internal" href="#kcoral.Program.run" title="kcoral.Program.run"><code class="xref py py-meth docutils literal notranslate"><span class="pre">run()</span></code></a> that returned a callable.</p></li>
 <li><p><strong>args</strong> (<a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#list" title="(in Python v3.14)"><em>list</em></a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.14)"><em>Any</em></a><em>] </em><em>| </em><em>None</em>) – Positional arguments; omitted or <code class="docutils literal notranslate"><span class="pre">None</span></code> means no arguments.
 Top-level registers are encoded automatically. Nested lists and
@@ -755,7 +755,7 @@ dictionaries remain JSON literals, including reference-shaped objects.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Return type<span class="colon">:</span></dt>
-<dd class="field-even"><p><a class="reference internal" href="#kcoral.Register" title="kcoral.client.Register"><em>Register</em></a></p>
+<dd class="field-even"><p><a class="reference internal" href="#kcoral.Register" title="kcoral.client.program.Register"><em>Register</em></a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -784,7 +784,7 @@ dictionaries remain JSON literals, including reference-shaped objects.</p></li>
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>key</strong> (<a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a>) – Unique, nonempty response key.</p></li>
-<li><p><strong>value</strong> (<a class="reference internal" href="#kcoral.Register" title="kcoral.client.Register"><em>Register</em></a><em> | </em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#dict" title="(in Python v3.14)"><em>dict</em></a><em>[</em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em>, </em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em>]</em>) – An earlier register or <code class="docutils literal notranslate"><span class="pre">{&quot;$ref&quot;:</span> <span class="pre">&quot;id&quot;}</span></code> reference.</p></li>
+<li><p><strong>value</strong> (<a class="reference internal" href="#kcoral.Register" title="kcoral.client.program.Register"><em>Register</em></a><em> | </em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#dict" title="(in Python v3.14)"><em>dict</em></a><em>[</em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em>, </em><a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em>]</em>) – An earlier register or <code class="docutils literal notranslate"><span class="pre">{&quot;$ref&quot;:</span> <span class="pre">&quot;id&quot;}</span></code> reference.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Raises<span class="colon">:</span></dt>
@@ -1254,7 +1254,7 @@ duplicate identifiers, invalid paths or references to later instructions.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=662ba41e"></script>
+</div><script src="../_static/documentation_options.js?v=b53f3a80"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
