@@ -12,14 +12,15 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from support.runtime import fake_runtime_factory
 
 from kcoral import Client
 from kcoral import client as client_module
-from kcoral.app import create_app
 from kcoral.config import ServerConfig
-from kcoral.testing import fake_runtime_factory
+from kcoral.server.app import create_app
 from kcoral.tools import cli
-from kcoral.tools._common import pack_inputs, unpack_inputs
+from kcoral.tools.cli import pack_inputs
+from kcoral.tools.runner import unpack_inputs
 
 
 def isolated_tool_runtime_factory(python_executable):

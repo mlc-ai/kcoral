@@ -25,7 +25,10 @@ nitpick_ignore = [("py:class", "fastapi.applications.FastAPI")]
 # Callable decorators use private ParamSpec/TypeVar placeholders. These describe
 # signatures rather than public objects with documentation cross-reference targets.
 nitpick_ignore_regex = [
-    (r"py:(class|obj)", r"(?:typing\.|kcoral\.functions\.)?~?_(?:Parameters|ReturnType)")
+    (
+        r"py:(class|obj)",
+        r"(?:typing\.|kcoral\.client\.(?:functions|http)\.)?~?_(?:Parameters|ReturnType)",
+    )
 ]
 
 html_theme = "furo"

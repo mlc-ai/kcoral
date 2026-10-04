@@ -4,8 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from kcoral.cache import ByteCache, DiskFileCache
-from kcoral.keys import compute_blob_hash
+from kcoral.protocol import compute_blob_hash
+from kcoral.server.cache import ByteCache, DiskFileCache
 
 
 def test_lru_eviction_over_budget():
@@ -127,7 +127,7 @@ def test_failed_publish_keeps_existing_object_and_removes_temporary(tmp_path, mo
     def fail(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr("kcoral.cache.os.replace", fail)
+    monkeypatch.setattr("kcoral.server.cache.os.replace", fail)
     cache.put(key, b"stable")
     assert cache.get(key) == b"stable"
     assert not list(tmp_path.rglob(".tmp-*"))

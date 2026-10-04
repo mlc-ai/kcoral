@@ -1,4 +1,4 @@
-from kcoral.gpu_runtime import _CUDAErrorAPI
+from kcoral.support.cuda import _CUDAErrorAPI
 
 
 class _Function:

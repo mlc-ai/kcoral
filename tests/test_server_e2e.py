@@ -7,14 +7,12 @@ from threading import Event
 import pytest
 from fastapi.testclient import TestClient
 from support.programs import harness_instructions, python_instructions
+from support.runtime import fake_runtime_factory
 
-from kcoral.app import create_app
 from kcoral.config import ServerConfig
-from kcoral.gpu_runtime import gpu_runtime_factory
-from kcoral.keys import compute_blob_hash
-from kcoral.multipart import parse_multipart
-from kcoral.schemas import strict_json_loads
-from kcoral.testing import fake_runtime_factory
+from kcoral.protocol import compute_blob_hash, parse_multipart, strict_json_loads
+from kcoral.runtime.gpu import gpu_runtime_factory
+from kcoral.server.app import create_app
 
 ADD_ONE = "def main(value):\n    return value + 1\n"
 
@@ -105,7 +103,7 @@ def test_health():
 
 
 def test_health_remains_responsive_while_upload_processing_waits(monkeypatch):
-    import kcoral.app as app_module
+    import kcoral.server.app as app_module
 
     original = app_module._parse_execute_request
     started, release = Event(), Event()

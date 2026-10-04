@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from kcoral._server import build_parser, config_from_args
-from kcoral.app import _describe
+from kcoral.server.app import _describe
+from kcoral.server.cli import build_parser, config_from_args
 
 
 def parse(argv):
@@ -54,7 +54,7 @@ def test_host_default_and_flag():
 
 
 def test_host_env():
-    code = "from kcoral._server import build_parser; print(build_parser().parse_args([]).host)"
+    code = "from kcoral.server.cli import build_parser; print(build_parser().parse_args([]).host)"
     out = subprocess.run(
         [sys.executable, "-c", code],
         env={

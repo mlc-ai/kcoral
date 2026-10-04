@@ -2,15 +2,16 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import ClassVar
 
 import pytest
 from support.programs import harness_call
+from support.runtime import fake_runtime_factory
 
-from kcoral.lease import GPULeases
-from kcoral.pool import PoolBusy, WorkerPool
+from kcoral.runtime.lease import GPULeases
+from kcoral.runtime.pool import PoolBusy, WorkerPool
+from kcoral.runtime.worker import Worker, WorkerCrashed, WorkerTimeout, worker_main
 from kcoral.schemas import GetFunction, Program, Ref, Return, Run, Upload
-from kcoral.testing import fake_runtime_factory
-from kcoral.worker import Worker, WorkerCrashed, WorkerTimeout, worker_main
 
 
 def prog(*instrs):
@@ -228,7 +229,7 @@ def test_worker_prepares_before_parent_grants_gpu_initialization(monkeypatch):
             return initialize
 
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "before-test")
-    monkeypatch.setattr("kcoral.worker.os.setsid", lambda: None)
+    monkeypatch.setattr("kcoral.runtime.worker.os.setsid", lambda: None)
     worker_main("GPU-abc123", Connection(), Factory(), max_requests=0)
 
     # The parent picks the card; what the server was launched with is gone.
@@ -263,7 +264,7 @@ def test_cpu_worker_does_not_change_visible_devices(monkeypatch):
             return next(self.incoming)
 
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "unchanged")
-    monkeypatch.setattr("kcoral.worker.os.setsid", lambda: None)
+    monkeypatch.setattr("kcoral.runtime.worker.os.setsid", lambda: None)
     worker_main(None, Connection(), fake_runtime_factory, max_requests=0)
 
     assert os.environ["CUDA_VISIBLE_DEVICES"] == "unchanged"
@@ -626,10 +627,12 @@ def test_parent_waits_for_retiring_process_exit_before_releasing_gpu(tmp_path):
     reason = "request_limit"
 
     class Connection:
-        messages = deque([
-            {'__lease__': 'acquire'},
-            {'__outcome__': 'outcome', '__retire_reason__': reason},
-        ])
+        messages: ClassVar = deque(
+            [
+                {"__lease__": "acquire"},
+                {"__outcome__": "outcome", "__retire_reason__": reason},
+            ]
+        )
 
         def send(self, message):
             pass
@@ -677,15 +680,15 @@ def test_cpu_timeout_waits_for_gpu_before_destroying_live_context():
     worker._start_process = lambda: None
     worker._initialize_process = lambda: None
     thread = threading.Thread(
-        target=worker._abandon_and_respawn, args=(leases, 'timeout'), daemon=True
+        target=worker._abandon_and_respawn, args=(leases, "timeout"), daemon=True
     )
     thread.start()
     try:
         deadline = time.monotonic() + 3
         while leases.depth(0) < 2 and not observed:
             assert time.monotonic() < deadline
-            time.sleep(.005)
-        assert not observed, 'Context destruction must wait for the peer GPU stage'
+            time.sleep(0.005)
+        assert not observed, "Context destruction must wait for the peer GPU stage"
     finally:
         leases.release(0, peer)
         thread.join(timeout=3)

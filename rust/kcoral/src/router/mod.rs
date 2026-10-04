@@ -2,10 +2,12 @@
 mod gateway;
 mod http;
 mod pool;
+mod slot;
 
 pub use http::{app, serve};
-use pool::{AcquireError, SlotGuard};
+use pool::AcquireError;
 pub use pool::{NodePool, RouterConfig};
+use slot::SlotGuard;
 use std::time::Duration;
 
 const NODE_HEADER: &str = "x-kcoral-node";

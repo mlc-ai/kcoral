@@ -11,23 +11,26 @@ import numpy as np
 import pytest
 import uvicorn
 from support.programs import harness_function
+from support.runtime import fake_runtime_factory
 
 from kcoral import Client, Program, Register
-from kcoral.app import create_app
-from kcoral.client import (
+from kcoral.client import KCoralError, ProtocolError, TransportError
+from kcoral.client.result import (
     _NUMPY_DTYPES,
-    KCoralError,
-    ProtocolError,
-    TransportError,
     _decode_tensor,
     _parse_program_result,
     _response_body,
 )
 from kcoral.config import ServerConfig
-from kcoral.keys import compute_blob_hash
-from kcoral.multipart import MultipartPart, encode_multipart, parse_multipart
-from kcoral.schemas import DTYPE_ITEM_SIZES, expected_tensor_nbytes
-from kcoral.testing import fake_runtime_factory
+from kcoral.protocol import (
+    MultipartPart,
+    compute_blob_hash,
+    encode_multipart,
+    expected_tensor_nbytes,
+    parse_multipart,
+)
+from kcoral.schemas import DTYPE_ITEM_SIZES
+from kcoral.server.app import create_app
 
 
 def _start_server(app):
@@ -388,7 +391,7 @@ def test_a_cpu_only_function_touching_the_gpu_fails_with_the_call_named(server_u
     module = program.upload(
         id="module",
         kind="module",
-        source="from kcoral.testing import simulate_cuda_call\n\n"
+        source="from support.runtime import simulate_cuda_call\n\n"
         "def main():\n"
         "    simulate_cuda_call('cudaMalloc')\n",
     )
@@ -827,7 +830,7 @@ def test_client_rejects_invalid_json_in_multipart_result():
     reason="real tensor client test requires KCORAL_GPU_TEST=1",
 )
 def test_tensor_round_trip_on_gpu():
-    from kcoral.gpu_runtime import gpu_runtime_factory
+    from kcoral.runtime.gpu import gpu_runtime_factory
 
     gpu_raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
     gpu_id = int(gpu_raw) if gpu_raw.isdigit() else 0

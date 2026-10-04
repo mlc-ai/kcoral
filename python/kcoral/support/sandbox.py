@@ -20,7 +20,7 @@ import threading
 from pathlib import Path
 from types import ModuleType
 
-from . import nvml
+from kcoral.support import cuda as nvml
 
 WORKSPACE = "/work"
 PRIVATE = ".kcoral"
@@ -176,7 +176,7 @@ class Sandbox:
             "ALL",
             "--disable-userns",
         ]
-        package_path = Path(__file__).absolute().parent.parent
+        package_path = Path(__file__).absolute().parents[2]
         paths = [
             Path(p)
             for p in (
@@ -255,7 +255,7 @@ class Sandbox:
             "--remount-ro",
             "/",
             "--",
-            *(program or (sys.executable, "-m", "kcoral.worker")),
+            *(program or (sys.executable, "-m", "kcoral.runtime.worker")),
         ]
         return command
 

@@ -1,4 +1,4 @@
-"""Received file contents and explicit local saving on Linux."""
+"""File and folder snapshots, returned artifacts, and explicit local saving."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
-from .schemas import normalize_file_path
+from kcoral.protocol import normalize_file_path
 
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
@@ -190,5 +190,150 @@ def _remove_partial_folder(parent_fd: int, name: str) -> None:
                 os.unlink(entry.name, dir_fd=fd)
     finally:
         for fd, entries, _, _ in reversed(stack):
+            entries.close()
+            os.close(fd)
+
+
+def _read_file(parent_fd: int, name: str, max_bytes: int) -> ReturnedFile:
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+    with os.fdopen(fd, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"file return requires a regular file: {name!r}")
+        if before.st_size > max_bytes:
+            raise ValueError("file return exceeds max_response_bytes binary budget")
+        # Never chase an append-only writer or allocate from an unbounded read.
+        data = stream.read(before.st_size)
+        after = os.fstat(stream.fileno())
+        if (
+            len(data) != before.st_size
+            or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns
+            or after.st_ctime_ns != before.st_ctime_ns
+        ):
+            raise ValueError(f"file changed while reading: {name!r}")
+        return ReturnedFile(data)
+
+
+def collect(
+    workspace: str, path: str, kind: str, *, max_bytes: int
+) -> ReturnedFile | ReturnedFolder:
+    """Capture a selection; caller commits results only after success."""
+    parent, _, name = normalize_file_path(path).rpartition("/")
+    with _open_directory(workspace, parent) as parent_fd:
+        if kind == "file":
+            return _read_file(parent_fd, name, max_bytes)
+        root_fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+    return _collect_folder(root_fd, max_bytes)
+
+
+def _collect_folder(root_fd: int, max_bytes: int) -> ReturnedFolder:
+    files = {}
+    directories = []
+    seen = set()
+    stack = []
+
+    def enter(fd: int, relative: str) -> None:
+        try:
+            info = os.fstat(fd)
+            identity = (info.st_dev, info.st_ino)
+            if identity in seen:
+                raise ValueError("file return encountered a repeated directory")
+            seen.add(identity)
+            stack.append((fd, os.scandir(fd), relative))
+        except BaseException:
+            os.close(fd)
+            raise
+
+    enter(root_fd, "")
+    try:
+        while stack:
+            parent_fd, entries, relative = stack[-1]
+            entry = next(entries, None)
+            if entry is None:
+                entries.close()
+                os.close(parent_fd)
+                stack.pop()
+                continue
+            name = normalize_file_path(f"{relative}/{entry.name}" if relative else entry.name)
+            mode = entry.stat(follow_symlinks=False).st_mode
+            if stat.S_ISDIR(mode):
+                directories.append(name)
+                enter(os.open(entry.name, _DIRECTORY_FLAGS, dir_fd=parent_fd), name)
+            elif stat.S_ISREG(mode):
+                file = _read_file(parent_fd, entry.name, max_bytes)
+                max_bytes -= len(file.read_bytes())
+                files[name] = file
+            else:
+                raise ValueError(f"file return rejects symbolic links and special files: {name!r}")
+    finally:
+        for fd, entries, _ in reversed(stack):
+            entries.close()
+            os.close(fd)
+    return ReturnedFolder(dict(sorted(files.items())), tuple(sorted(directories)))
+
+
+def _folder_files(folder: str | os.PathLike[str], destination: str) -> Iterator[tuple[str, bytes]]:
+    """Yield snapshots of regular files, never following links or recursing in Python.
+
+    Directory descriptors anchor each descent even if a local path is replaced
+    during traversal. Only the active ancestry stays open, so a wide tree does
+    not exhaust descriptors. File reads are bounded by their initial size.
+    """
+    source = Path(folder)
+    if source.is_symlink():
+        raise ValueError(f"upload_folder rejects symbolic links: {source}")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    seen = set()
+    stack = []
+
+    def enter(fd: int, remote: str) -> None:
+        try:
+            info = os.fstat(fd)
+            identity = (info.st_dev, info.st_ino)
+            if identity in seen:
+                raise ValueError(f"upload_folder encountered a repeated directory: {remote}")
+            seen.add(identity)
+            stack.append((fd, os.scandir(fd), remote))
+        except BaseException:
+            os.close(fd)
+            raise
+
+    enter(os.open(source, flags), destination)
+    try:
+        while stack:
+            parent_fd, entries, remote = stack[-1]
+            entry = next(entries, None)
+            if entry is None:
+                entries.close()
+                os.close(parent_fd)
+                stack.pop()
+                continue
+            path = normalize_file_path(f"{remote}/{entry.name}")
+            mode = entry.stat(follow_symlinks=False).st_mode
+            if stat.S_ISDIR(mode):
+                enter(os.open(entry.name, flags, dir_fd=parent_fd), path)
+            elif stat.S_ISREG(mode):
+                fd = os.open(
+                    entry.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd
+                )
+                with os.fdopen(fd, "rb") as stream:
+                    before = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(before.st_mode):
+                        raise ValueError(f"upload_folder requires a regular file: {path}")
+                    data = stream.read(before.st_size)
+                    after = os.fstat(stream.fileno())
+                    if (
+                        len(data) != before.st_size
+                        or after.st_size != before.st_size
+                        or after.st_mtime_ns != before.st_mtime_ns
+                        or after.st_ctime_ns != before.st_ctime_ns
+                    ):
+                        raise ValueError(f"upload_folder file changed while reading: {path}")
+                yield path, data
+            else:
+                raise ValueError(f"upload_folder rejects symbolic links and special files: {path}")
+    finally:
+        for fd, entries, _ in reversed(stack):
             entries.close()
             os.close(fd)

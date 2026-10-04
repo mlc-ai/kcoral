@@ -2,7 +2,7 @@
 
 
 def validate_args(parser, arguments):
-    from ._common import validate_profiler_args
+    from kcoral.tools.cli import validate_profiler_args
 
     validate_profiler_args(
         parser,
@@ -14,13 +14,13 @@ def validate_args(parser, arguments):
 
 
 def parse_args(argv):
-    from ._common import parse_args as parse_common
+    from kcoral.tools.cli import parse_args as parse_common
 
     return parse_common("run-iket", argv, profiling=True, validate=validate_args)
 
 
 def main(argv):
-    from ._common import run_tool
+    from kcoral.tools.cli import run_tool
 
     return run_tool("run-iket", *parse_args(argv))
 

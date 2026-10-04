@@ -1,4 +1,4 @@
-use super::{pool::Slot, AcquireError, NodePool, SlotGuard, DATA_CHUNK_BYTES, NODE_HEADER};
+use super::{slot::Slot, AcquireError, NodePool, SlotGuard, DATA_CHUNK_BYTES, NODE_HEADER};
 use crate::{
     headers,
     proto::{slot_frame::Payload, EndOfBody, HttpHeader, RequestHead, SlotFrame},

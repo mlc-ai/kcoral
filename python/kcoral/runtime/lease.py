@@ -3,7 +3,7 @@
 Several workers share each GPU, and a worker must hold its GPU's lease to run
 GPU instructions, so no two ever touch one at the same time. :class:`LeaseClient`
 is what the engine calls in the worker process; it sends messages to the parent,
-where :meth:`kcoral.worker.Worker.run` answers them out of the one
+where :meth:`kcoral.runtime.worker.Worker.run` answers them out of the one
 :class:`GPULeases` the pool owns.
 
 The parent arbitrates rather than the workers sharing an OS mutex: a killed
@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:  # a type-only import: worker.py imports this module at runtime
-    from .worker import Worker
+    from kcoral.runtime.worker import Worker
 
 
 class Ticket:

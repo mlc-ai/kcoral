@@ -5,12 +5,12 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 from support.programs import harness_instructions
+from support.runtime import fake_runtime_factory
 
-from kcoral.app import create_app
 from kcoral.config import ServerConfig
-from kcoral.events import EventLogger
-from kcoral.pool import PoolBusy
-from kcoral.testing import fake_runtime_factory
+from kcoral.runtime.pool import PoolBusy
+from kcoral.server.app import create_app
+from kcoral.server.events import EventLogger
 
 STRUCTURAL_PROGRAM = {
     "instructions": [
@@ -279,7 +279,7 @@ def _settled(pool, timeout=30.0):
 # Its cpu_only call sleeps first, so a neighbour can take the GPU before it is touched.
 CPU_ONLY_TOUCHING_GPU = (
     "import time\n"
-    "from kcoral.testing import simulate_cuda_call\n\n"
+    "from support.runtime import simulate_cuda_call\n\n"
     "def main():\n"
     "    time.sleep(0.5)\n"
     "    simulate_cuda_call('cudaMalloc')\n"
@@ -343,7 +343,7 @@ def test_a_server_that_cannot_start_says_so_on_disk(tmp_path):
 
 
 def test_an_unhandled_front_end_error_still_finishes_the_request(tmp_path, monkeypatch):
-    import kcoral.app as app_module
+    import kcoral.server.app as app_module
 
     def boom(payload, parts):
         raise RuntimeError("simulated front-end bug")

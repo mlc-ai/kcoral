@@ -14,7 +14,7 @@ from typing import Any, Generic, ParamSpec, TypeVar
 
 import numpy as np
 
-from .client import Client, Program, ProgramResult, ProtocolError
+from kcoral.client import Client, Program, ProgramResult, ProtocolError
 
 _Parameters = ParamSpec("_Parameters")
 _ReturnType = TypeVar("_ReturnType")

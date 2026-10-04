@@ -27,7 +27,7 @@ cargo clippy --locked --all-targets -- -D warnings
 
 The build downloads a platform-specific Protocol Buffers compiler through a
 build dependency. It does not use or require a system `protoc` executable. The
-generated Python client modules are checked into `python/kcoral` so installing
+generated Python client modules are checked into `python/kcoral/server/_generated` so installing
 the server does not require a compiler.
 
 ## Process ownership
@@ -62,10 +62,11 @@ request.
 
 ## Protocol and implementation
 
-`router/pool.rs` owns node status, admission, capacity, and slot lifetime;
+`router/pool.rs` owns node status, admission, and capacity;
+`router/slot.rs` owns slot transport and request lifetime;
 `router/gateway.rs` authenticates and registers outbound streams;
 `router/http.rs` bridges HTTP bodies and records request completion. Internal
-state stays private to the pool.
+state stays private to the router.
 
 `ConnectSupervisor` returns one empty `SupervisorAck`. `ConnectSlot` first
 accepts `SlotHello` and returns `SlotAck`; only then does Python reset reconnect

@@ -33,13 +33,13 @@ def validate_args(parser, arguments):
 
 
 def parse_args(argv):
-    from ._common import parse_args as parse_common
+    from kcoral.tools.cli import parse_args as parse_common
 
     return parse_common("python", argv, validate=validate_args)
 
 
 def main(argv):
-    from ._common import run_tool
+    from kcoral.tools.cli import run_tool
 
     return run_tool("python", *parse_args(argv))
 

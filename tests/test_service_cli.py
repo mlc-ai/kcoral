@@ -12,9 +12,10 @@ from pathlib import Path
 import httpx
 import pytest
 
-from kcoral import Client, Program, commands
+from kcoral import Client, Program
 from kcoral.__main__ import main
-from kcoral._server import build_parser, config_from_args
+from kcoral.server import cli as commands
+from kcoral.server.cli import build_parser, config_from_args
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -68,7 +69,7 @@ def test_routed_node_preserves_worker_options_and_python_environment(launch):
     assert argv[:2] == ["--server-url", "http://127.0.0.1:8123/"]
     assert "--router-endpoint" in argv
     boundary = argv.index("--")
-    assert argv[boundary + 1 : boundary + 4] == [sys.executable, "-m", "kcoral._server"]
+    assert argv[boundary + 1 : boundary + 4] == [sys.executable, "-m", "kcoral.server.cli"]
     worker_args = argv[boundary + 4 :]
     config = config_from_args(build_parser().parse_args(worker_args))
     assert config.device == "cpu" and config.num_workers == 3

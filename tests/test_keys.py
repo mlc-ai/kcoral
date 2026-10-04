@@ -1,7 +1,7 @@
 import pytest
 
 from kcoral.errors import ValidationError
-from kcoral.keys import compute_blob_hash, is_blob_hash, verify_blob
+from kcoral.protocol import compute_blob_hash, is_blob_hash, verify_blob
 
 
 def test_blob_hash_format_is_strict():

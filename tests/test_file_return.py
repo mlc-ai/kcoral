@@ -3,13 +3,12 @@
 import os
 
 import pytest
+from support.runtime import UNSHARED_GPU, FakeRuntime
 
 from kcoral import Program, Register, ReturnedFile, ReturnedFolder
-from kcoral.client import _decode_value
-from kcoral.engine import execute
-from kcoral.keys import compute_blob_hash
-from kcoral.schemas import parse_program
-from kcoral.testing import UNSHARED_GPU, FakeRuntime
+from kcoral.client.result import _decode_value
+from kcoral.protocol import compute_blob_hash, parse_program
+from kcoral.runtime.engine import execute
 
 
 def run(program, workspace, *, max_bytes=1024):

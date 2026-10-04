@@ -42,7 +42,7 @@ def main():
         )
         for source in sorted(output.glob("*.py")):
             source.write_text(source.read_text().rstrip() + "\n")
-            target = root / "python/kcoral" / source.name
+            target = root / "python/kcoral/server/_generated" / source.name
             if args.check:
                 if not target.exists() or target.read_bytes() != source.read_bytes():
                     raise SystemExit(f"gateway bindings need regeneration: {target}")

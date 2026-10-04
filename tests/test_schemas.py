@@ -1,16 +1,8 @@
 import pytest
 
 from kcoral.errors import ValidationError
-from kcoral.schemas import (
-    FileUpload,
-    GetFunction,
-    Ref,
-    Return,
-    Run,
-    Upload,
-    parse_program,
-    strict_json_loads,
-)
+from kcoral.protocol import parse_program, strict_json_loads
+from kcoral.schemas import FileUpload, GetFunction, Ref, Return, Run, Upload
 
 TENSOR_HASH = "0" * 64
 

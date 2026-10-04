@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
-import signal
 import tempfile
 import threading
 import time
@@ -23,11 +22,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import nvml
-from . import sandbox as sandboxing
-from .engine import execute, read_captured_output
-from .events import EventLogger
-from .lease import GPULeases, LeaseClient, NoopLease, NoopLeases
+from kcoral.runtime.engine import execute, read_captured_output
+from kcoral.runtime.lease import GPULeases, LeaseClient, NoopLease, NoopLeases
+from kcoral.server.events import EventLogger
+from kcoral.support import cuda as nvml
+from kcoral.support import sandbox as sandboxing
+from kcoral.support.platform import _terminate_process_tree
 
 _WORKER_PIPE_FAILURES = (EOFError, ConnectionResetError, BrokenPipeError, OSError)
 
@@ -593,41 +593,8 @@ class Worker:
         self._kill()
 
 
-def _terminate_process_tree(process, grace_seconds: float) -> None:
-    """Terminate the worker and everything the submitted code spawned.
-
-    The worker leads a process group (see :func:`worker_main`), so a killpg
-    covers grandchildren a plain ``Process.kill()`` would orphan. SIGTERM first,
-    ``grace_seconds`` for a clean exit, then SIGKILL the survivors.
-    """
-    if process.pid is None:
-        return
-    signaled_group = _signal_process_group(process.pid, signal.SIGTERM)
-    if not signaled_group:
-        process.terminate()
-    process.join(timeout=grace_seconds)
-    if signaled_group:
-        _signal_process_group(process.pid, signal.SIGKILL)
-    if process.is_alive():
-        process.kill()
-    process.join(timeout=5)
-
-
-def _signal_process_group(process_group_id: int, sig: signal.Signals) -> bool:
-    """Signal a process group; False when unsupported or the group is gone."""
-    if not hasattr(os, "killpg"):
-        return False
-    try:
-        os.killpg(process_group_id, sig)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # the group exists but a member is not signalable
-
-
 def _sandbox_main() -> None:
-    """Private entry point for ``python -m kcoral.worker`` inside bubblewrap."""
+    """Private entry point for ``python -m kcoral.runtime.worker`` inside bubblewrap."""
     from multiprocessing.connection import Connection
 
     conn = Connection(os.dup(0))

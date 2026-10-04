@@ -188,7 +188,7 @@ mod tests {
             "--",
             "python",
             "-m",
-            "kcoral._server",
+            "kcoral.server.cli",
         ]))
         .unwrap();
         assert_eq!(args.command[0], "python");

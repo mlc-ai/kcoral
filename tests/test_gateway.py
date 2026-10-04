@@ -14,15 +14,14 @@ import grpc
 import httpx
 import pytest
 from support.programs import harness_function
+from support.runtime import fake_runtime_factory
 
 from kcoral import Client, Program
-from kcoral import kcoral_gateway_pb2 as pb
-from kcoral import kcoral_gateway_pb2_grpc as rpc
-from kcoral.app import create_app
 from kcoral.config import ServerConfig
-from kcoral.health import HealthResponse
-from kcoral.testing import fake_runtime_factory
-from kcoral.tunnel import TunnelManager
+from kcoral.server._generated import kcoral_gateway_pb2 as pb
+from kcoral.server._generated import kcoral_gateway_pb2_grpc as rpc
+from kcoral.server.app import HealthResponse, create_app
+from kcoral.server.tunnel import TunnelManager
 
 
 def router_binary():
@@ -326,7 +325,7 @@ def test_cache_retry_recovers_when_same_node_restarts_between_attempts(tmp_path)
 
 
 async def _restart_during_retry(tmp_path):
-    from kcoral.keys import compute_blob_hash
+    from kcoral.protocol import compute_blob_hash
 
     async with running_router(tmp_path) as url, AsyncExitStack() as resources:
         original = await resources.enter_async_context(AsyncExitStack())
@@ -413,12 +412,14 @@ def test_router_cancellation_reason_reaches_node_logs(tmp_path, failure):
 
 async def _cancel_reason(tmp_path, failure):
     events = []
+    request_started = asyncio.Event()
 
     class Recorder:
         def emit(self, event, **fields):
             events.append((event, fields))
 
     async def application(scope, receive, send):
+        request_started.set()
         if failure == "invalid_response":
             await send({"type": "http.response.start", "status": 99})
             await send({"type": "http.response.body", "body": b""})
@@ -447,6 +448,10 @@ async def _cancel_reason(tmp_path, failure):
                 await ready_nodes(url, 1)
 
                 async def body():
+                    # Let the node observe the request before exceeding the limit;
+                    # an immediate rejection can close the stream before its head arrives.
+                    yield b"x"
+                    await asyncio.wait_for(request_started.wait(), 3)
                     yield b"x" * 2048
 
                 async with httpx.AsyncClient(timeout=3) as client:
@@ -489,9 +494,9 @@ async def _supervisor_reports_python_worker_status(tmp_path):
     child_script.write_text(
         "import os\n"
         "import uvicorn\n"
-        "from kcoral.app import create_app\n"
+        "from kcoral.server.app import create_app\n"
         "from kcoral.config import ServerConfig\n"
-        "from kcoral.testing import fake_runtime_factory\n"
+        "from support.runtime import fake_runtime_factory\n"
         "if __name__ == '__main__':\n"
         "    config = ServerConfig(sandbox='none', device='cpu', num_workers=2,\n"
         "        max_requests_per_worker=0,\n"
@@ -529,7 +534,7 @@ async def _supervisor_reports_python_worker_status(tmp_path):
                 ],
                 env={
                     **os.environ,
-                    "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "python"),
+                    "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "tests"),
                 },
                 stdout=log,
                 stderr=log,

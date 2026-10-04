@@ -6,8 +6,8 @@ A request is a program (an instruction sequence). See ``docs/client-guide/protoc
 from importlib.metadata import version
 from typing import TYPE_CHECKING, Any
 
-from .artifacts import ReturnedFile, ReturnedFolder
-from .client import (
+from kcoral.artifacts import ReturnedFile, ReturnedFolder
+from kcoral.client import (
     Client,
     KCoralError,
     Program,
@@ -16,12 +16,12 @@ from .client import (
     Register,
     TransportError,
 )
-from .config import ServerConfig
-from .functions import RemoteExecutionError, RemoteFunction
-from .schemas import parse_program
+from kcoral.client.functions import RemoteExecutionError, RemoteFunction
+from kcoral.config import ServerConfig
+from kcoral.protocol import parse_program
 
 if TYPE_CHECKING:
-    from .app import create_app
+    from kcoral.server.app import create_app
 
 __all__ = [
     "Client",
@@ -44,7 +44,7 @@ __version__ = version("kcoral")
 
 def __getattr__(name: str) -> Any:
     if name == "create_app":
-        from .app import create_app
+        from kcoral.server.app import create_app
 
         return create_app
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

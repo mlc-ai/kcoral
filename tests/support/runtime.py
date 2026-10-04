@@ -9,11 +9,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from .engine import Runtime, execute
-from .errors import ExecutionError, GPUAccessViolation
-from .lease import Lease
-from .python_module import LoadedPythonModule
-from .schemas import Program, ProgramOutcome
+from kcoral.errors import ExecutionError, GPUAccessViolation
+from kcoral.runtime.engine import Runtime, execute
+from kcoral.runtime.lease import Lease
+from kcoral.runtime.python import LoadedPythonModule
+from kcoral.schemas import Program, ProgramOutcome
 
 
 def execute_for_test(

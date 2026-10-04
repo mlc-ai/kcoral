@@ -1,4 +1,4 @@
-use super::{pool::Slot, NodePool, FIRST_FRAME_TIMEOUT, GRPC_MESSAGE_BYTES, PROTOCOL_VERSION};
+use super::{slot::Slot, NodePool, FIRST_FRAME_TIMEOUT, GRPC_MESSAGE_BYTES, PROTOCOL_VERSION};
 use crate::proto::{
     router_gateway_server::{RouterGateway, RouterGatewayServer},
     slot_frame::Payload,

@@ -1,7 +1,7 @@
 import pytest
 
 from kcoral.errors import ValidationError
-from kcoral.multipart import MultipartPart, encode_multipart, parse_multipart
+from kcoral.protocol import MultipartPart, encode_multipart, parse_multipart
 
 
 def test_multipart_round_trip_preserves_binary_data():
@@ -46,9 +46,7 @@ def test_binary_payload_preserves_boundary_prefixes():
     body = (
         b"--boundary\r\n"
         b'Content-Disposition: form-data; name="blob"\r\n'
-        b"Content-Type: application/octet-stream\r\n\r\n"
-        + payload
-        + b"\r\n--boundary--\r\n"
+        b"Content-Type: application/octet-stream\r\n\r\n" + payload + b"\r\n--boundary--\r\n"
     )
     assert parse_multipart("multipart/form-data; boundary=boundary", body) == [
         MultipartPart("blob", "application/octet-stream", payload)

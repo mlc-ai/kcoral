@@ -1,13 +1,9 @@
-"""Resolve a physical GPU id to its UUID, through NVML over ctypes.
-
-CUDA numbers only the devices a process may open, so hiding a card from other
-users renumbers the rest and a physical id stops naming the same GPU. NVML
-enumerates every card regardless, so pinning a worker by UUID survives that.
-"""
+"""Native NVIDIA device identity and CUDA runtime error APIs."""
 
 from __future__ import annotations
 
 import ctypes
+import ctypes.util
 from functools import cache
 from typing import Any
 
@@ -77,3 +73,55 @@ def uuid_key(value: str | None) -> str | None:
     if value is None:
         return None
     return value.strip().removeprefix("GPU-").lower() or None
+
+
+class _CUDAErrorAPI:
+    """The small libcudart surface needed to inspect CUDA's last-error slot."""
+
+    def __init__(self, library: Any) -> None:
+        self._get_last_error = library.cudaGetLastError
+        self._get_last_error.argtypes = []
+        self._get_last_error.restype = ctypes.c_int
+        self._get_error_name = library.cudaGetErrorName
+        self._get_error_name.argtypes = [ctypes.c_int]
+        self._get_error_name.restype = ctypes.c_char_p
+        self._get_error_string = library.cudaGetErrorString
+        self._get_error_string.argtypes = [ctypes.c_int]
+        self._get_error_string.restype = ctypes.c_char_p
+
+    def take_last_error(self) -> str | None:
+        code = self._get_last_error()
+        if code == 0:
+            return None
+        name = _decode_cuda_error(self._get_error_name(code), "cudaErrorUnknown")
+        description = _decode_cuda_error(self._get_error_string(code), "unknown error")
+        return f"CUDA error {name} ({code}): {description}"
+
+
+def _decode_cuda_error(value: bytes | None, fallback: str) -> str:
+    return value.decode("utf-8", errors="replace") if value is not None else fallback
+
+
+@cache
+def _cuda_error_api() -> _CUDAErrorAPI:
+    """Load the same CUDA runtime torch uses, once per worker process."""
+    candidates: list[str] = []
+    discovered = ctypes.util.find_library("cudart")
+    if discovered is not None:
+        candidates.append(discovered)
+    try:
+        import torch
+
+        if torch.version.cuda:
+            candidates.append(f"libcudart.so.{torch.version.cuda.split('.', 1)[0]}")
+    except Exception:
+        pass
+    candidates.extend(["libcudart.so", "libcudart.so.13", "libcudart.so.12", "libcudart.so.11.0"])
+
+    failures: list[str] = []
+    for candidate in dict.fromkeys(candidates):
+        try:
+            return _CUDAErrorAPI(ctypes.CDLL(candidate))
+        except (AttributeError, OSError) as exc:
+            failures.append(f"{candidate}: {exc}")
+    raise RuntimeError("could not load libcudart to inspect CUDA errors: " + "; ".join(failures))

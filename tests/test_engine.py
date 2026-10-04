@@ -1,10 +1,10 @@
 import pytest
 from support.programs import harness_call
+from support.runtime import UNSHARED_GPU, FakeRuntime, execute_for_test
 
-from kcoral.engine import execute
-from kcoral.keys import compute_blob_hash
+from kcoral.protocol import compute_blob_hash
+from kcoral.runtime.engine import execute
 from kcoral.schemas import FileUpload, GetFunction, Program, Ref, Return, Run, Upload
-from kcoral.testing import UNSHARED_GPU, FakeRuntime, execute_for_test
 
 
 def ref(handle):
@@ -482,7 +482,7 @@ def test_a_cpu_only_function_hands_the_gpu_over_for_its_call():
 
 # Stands in for uploaded code that reaches the CUDA API despite its declaration.
 CUDA_TOUCHING = (
-    "from kcoral.testing import simulate_cuda_call\n\n"
+    "from support.runtime import simulate_cuda_call\n\n"
     "def main():\n"
     "    simulate_cuda_call('cudaMalloc')\n"
     "    return 1\n"

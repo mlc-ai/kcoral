@@ -347,6 +347,12 @@ is required; `--fetch` is not supported. The first `--` starts native profiler
 arguments. The native `profile` command and the second `--` before the
 application are required.
 
+For TIRx kernels using TVM's official IKET profile, pass
+`-e TVM_IKET_OFFICIAL_PROFILE=cutlass-4.6.0` before the first `--`, unless that
+variable is already set in the worker environment. The generic KCoral tool
+preserves the profiler environment; the TIRx-harness adapter supplies this
+default itself. Use the package versions required by your TVM IKET profile.
+
 | Native option | Purpose |
 | --- | --- |
 | `--postprocess json` | Request JSON trace postprocessing. |

@@ -1,18 +1,19 @@
-"""Process-global settings an uploaded program can change, and how to put them back.
-
-A program runs inside the worker process, so it can flip a torch numeric global or
-set an environment variable and leave it that way. Neither is state the engine
-tracks, and both change what a *later* program measures - enabling TF32 alone moves
-an fp32 matmul by an order of magnitude, and the next program reports the speedup as
-its own.
-"""
+"""CPU execution, uploaded Python modules, and request state restoration."""
 
 from __future__ import annotations
 
-import ctypes
+import gc
+import hashlib
+import importlib.metadata
+import linecache
 import os
 import sys
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass
 from typing import Any
+
+from kcoral.errors import ExecutionError
+from kcoral.support.platform import _environ
 
 # Knobs read and written as an attribute, as (dotted path under ``torch``, name).
 # ``fp32_precision`` rather than the ``allow_tf32`` that shadows it: the boolean
@@ -29,9 +30,9 @@ _TORCH_ATTRS = (
     ("backends.cudnn", "deterministic"),
 )
 
-# Knobs reached through a getter/setter pair instead, as (getter, setter). Restored
-# before the attributes above: ``set_float32_matmul_precision`` writes through to the
-# per-backend knobs, so the finer-grained ones have to land last to survive.
+
+# Restore getter/setter pairs before attributes: ``set_float32_matmul_precision``
+# writes through to the per-backend knobs, so the finer-grained ones must land last.
 _TORCH_CALLS = (
     ("get_float32_matmul_precision", "set_float32_matmul_precision"),
     ("get_default_dtype", "set_default_dtype"),
@@ -39,6 +40,7 @@ _TORCH_CALLS = (
     ("is_grad_enabled", "set_grad_enabled"),
     ("are_deterministic_algorithms_enabled", "use_deterministic_algorithms"),
 )
+
 
 # The RNG is deliberately not restored: rewinding it would hand every request the
 # same random draw, a bigger change than the reseeding it would undo.
@@ -69,27 +71,6 @@ def restore(snapshot: dict[str, Any]) -> None:
     for name, value in environ.items():
         if current.get(name) != value:
             os.environ[name] = value  # ``__setitem__`` putenv()s, so libc is fixed too
-
-
-def _environ() -> dict[str, str]:
-    """The environment as C sees it, falling back to Python's view of it.
-
-    ``os.environ`` only tracks Python's own writes, so a compiled library calling
-    ``setenv`` leaves it stale and a restore diffed against it finds nothing to undo.
-    Reading libc's ``environ`` is what makes such a change visible; writing back
-    through ``os.environ`` is what makes the fix reach both.
-    """
-    try:
-        entries = ctypes.POINTER(ctypes.c_char_p).in_dll(ctypes.CDLL(None), "environ")
-        environ: dict[str, str] = {}
-        index = 0
-        while entries[index]:
-            name, _, value = entries[index].decode("utf-8", "surrogateescape").partition("=")
-            environ[name] = value
-            index += 1
-        return environ
-    except Exception:
-        return dict(os.environ)  # no libc ``environ`` to read, or it moved as we read
 
 
 def _snapshot_torch() -> dict[str, Any]:
@@ -147,3 +128,106 @@ def _reach(root: Any, path: str) -> Any:
     for part in path.split("."):
         root = getattr(root, part)
     return root
+
+
+@dataclass(frozen=True)
+class LoadedPythonModule:
+    namespace: dict[str, Any]
+
+    def get_function(self, name: str) -> Any:
+        try:
+            return self.namespace[name]
+        except KeyError:
+            raise ExecutionError(
+                "parse", f"the uploaded Python module defines no name {name!r}"
+            ) from None
+
+
+def materialize_module(source: str, seeded_fnames: list[str]) -> LoadedPythonModule:
+    # A kernel is re-read from its source text at compile time, so seed
+    # linecache. Key by content hash so two functions in one program don't
+    # overwrite each other's source.
+    digest = hashlib.sha1(source.encode("utf-8")).hexdigest()[:16]
+    fname = f"<uploaded:{digest}>"
+    linecache.cache[fname] = (len(source), None, source.splitlines(True), fname)
+    seeded_fnames.append(fname)
+    ns: dict = {}
+    try:
+        # Runs in the request worker process, with its configured device visibility.
+        exec(compile(source, fname, "exec"), ns)
+    except SyntaxError as exc:
+        raise ExecutionError("parse", f"syntax error: {exc}") from exc
+    except Exception as exc:
+        raise ExecutionError("parse", f"{type(exc).__name__}: {exc}") from exc
+    return LoadedPythonModule(namespace=ns)
+
+
+class CPURuntime:
+    """Runtime exposed by ``--device cpu`` workers.
+
+    CPU workers accept source files and can return a compiled shared object.
+    Uploaded Python supplies the compilation harness. GPU tensors and uploaded
+    libraries remain unavailable; constructing this runtime imports no GPU library.
+    """
+
+    def __init__(self) -> None:
+        self._seeded_fnames: list[str] = []
+        self._process_state = snapshot()
+
+    def load_module(self, source: str) -> Any:
+        return materialize_module(source, self._seeded_fnames)
+
+    def load_library(self, data: bytes) -> Any:
+        raise ExecutionError("unavailable", "library uploads require a GPU worker")
+
+    def get_function(self, module: Any, name: str) -> Any:
+        if isinstance(module, LoadedPythonModule):
+            return module.get_function(name)
+        raise ExecutionError("unavailable", "get_function expects an uploaded Python module")
+
+    def target(self) -> dict[str, str]:
+        """CPU workers compile for the architecture supplied by the client."""
+        return {}
+
+    def versions(self) -> dict[str, str]:
+        versions: dict[str, str] = {}
+        try:
+            versions["tvm_ffi"] = importlib.metadata.version("apache-tvm-ffi")
+        except importlib.metadata.PackageNotFoundError:
+            pass
+        return versions
+
+    def device_uuid(self) -> str | None:
+        return None
+
+    def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any:
+        raise ExecutionError("unavailable", "tensor uploads require a GPU worker")
+
+    def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None:
+        return None
+
+    def forbid_gpu(self) -> AbstractContextManager[None]:
+        return nullcontext()  # there is no GPU here to touch
+
+    def synchronize(self) -> None:
+        pass
+
+    def prepare_to_release_gpu(self) -> None:
+        self.synchronize()
+
+    def take_last_error(self) -> str | None:
+        return None
+
+    def reset(self) -> None:
+        import linecache
+
+        for fname in self._seeded_fnames:
+            linecache.cache.pop(fname, None)
+        self._seeded_fnames.clear()
+        gc.collect()
+        restore(self._process_state)
+
+
+def cpu_runtime_factory() -> CPURuntime:
+    """Picklable factory used by spawned CPU workers."""
+    return CPURuntime()

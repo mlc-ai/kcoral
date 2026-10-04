@@ -6,10 +6,10 @@ import pathlib
 
 import pytest
 from support.programs import harness_call, python_call
+from support.runtime import UNSHARED_GPU, execute_for_test
 
-from kcoral.keys import compute_blob_hash
+from kcoral.protocol import compute_blob_hash
 from kcoral.schemas import FileUpload, GetFunction, Program, Ref, Return, Run, Upload
-from kcoral.testing import UNSHARED_GPU, execute_for_test
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("KCORAL_GPU_TEST") != "1",
@@ -20,7 +20,7 @@ pytestmark = pytest.mark.skipif(
 def test_uploaded_tensor_has_independent_storage():
     import torch
 
-    from kcoral.gpu_runtime import _materialize_tensor
+    from kcoral.runtime.gpu import _materialize_tensor
 
     dtype_name = "float32"
     dtype = torch.float32
@@ -151,7 +151,7 @@ def build_tirx_library(tmp_path):
     consulted. The exported name comes from the function, not the IRModule key."""
     import tvm
 
-    from kcoral.gpu_runtime import GPURuntime, describe_target
+    from kcoral.runtime.gpu import GPURuntime, describe_target
 
     runtime = GPURuntime()
     module = runtime.load_module(PRIM_KERNEL.replace("def main(", "def add_one("))
@@ -235,7 +235,7 @@ def ref(handle):
 
 
 def runtime():
-    from kcoral.gpu_runtime import GPURuntime
+    from kcoral.runtime.gpu import GPURuntime
 
     return GPURuntime()
 
@@ -831,7 +831,7 @@ def test_library_with_a_missing_function_fails_to_compile(tmp_path):
 def test_library_cache_is_only_a_memoization(tmp_path):
     """A cold worker must behave exactly like a warm one: every request carries the
     bytes, so dropping the cache changes speed and nothing else."""
-    from kcoral import gpu_runtime
+    from kcoral.runtime import gpu as gpu_runtime
 
     data = build_library(CUDA_KERNEL, "add_one", tmp_path)
     digest = compute_blob_hash(data)
@@ -1203,8 +1203,8 @@ def test_benchmark_budgets_survive_the_l2_flush():
 def test_gpu_handoff_frees_unused_cache_and_preserves_live_tensor():
     import torch
 
-    from kcoral.engine import _drop_gpu
-    from kcoral.gpu_runtime import GPURuntime
+    from kcoral.runtime.engine import _drop_gpu
+    from kcoral.runtime.gpu import GPURuntime
 
     runtime = GPURuntime()
     torch.cuda.empty_cache()

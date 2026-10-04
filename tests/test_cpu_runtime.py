@@ -2,8 +2,8 @@ import sys
 
 import pytest
 
-from kcoral.cpu_runtime import CPURuntime
 from kcoral.errors import ExecutionError
+from kcoral.runtime.python import CPURuntime
 
 
 def test_cpu_runtime_loads_python_without_importing_torch(monkeypatch):

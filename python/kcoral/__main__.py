@@ -9,16 +9,16 @@ import sys
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["run"]:
-        from .tools.cli import run_main
+        from kcoral.tools.cli import run_main
 
         raise SystemExit(run_main(argv[1:]))
     if argv[:1] == ["server"]:
-        from .commands import server_main
+        from kcoral.server.cli import server_main
 
         server_main(argv[1:])
         return
     if argv[:1] == ["router"]:
-        from .commands import router_main
+        from kcoral.server.cli import router_main
 
         router_main(argv[1:])
         return

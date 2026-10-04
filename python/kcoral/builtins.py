@@ -10,7 +10,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
 
-from .errors import ExecutionError
+from kcoral.errors import ExecutionError
 
 __all__ = ["benchmark", "compile_tirx"]
 

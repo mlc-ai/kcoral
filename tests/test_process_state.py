@@ -7,7 +7,8 @@ import types
 
 import pytest
 
-from kcoral import gpu_runtime, process_state
+from kcoral.runtime import gpu as gpu_runtime
+from kcoral.runtime import python as process_state
 
 torch = pytest.importorskip("torch")
 
@@ -37,6 +38,8 @@ def runtime(monkeypatch):
     """A GPURuntime with the GPU-touching warm-up stubbed out."""
     monkeypatch.setitem(sys.modules, "tvm_ffi", types.SimpleNamespace())
     monkeypatch.setattr(gpu_runtime, "_warm_up", lambda: None)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
     return gpu_runtime.GPURuntime()
 
 

@@ -26,9 +26,11 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from . import process_state, sandbox
-from .errors import ExecutionError, GPUAccessViolation
-from .python_module import LoadedPythonModule, materialize_module
+from kcoral.errors import ExecutionError, GPUAccessViolation
+from kcoral.runtime import python as process_state
+from kcoral.runtime.python import LoadedPythonModule, materialize_module
+from kcoral.support import sandbox
+from kcoral.support.cuda import _cuda_error_api
 
 # Libraries already dlopened by this worker, keyed by the SHA-256 of their bytes.
 # Purely a memoization — every request carries the bytes it needs. Bounded because
@@ -241,7 +243,7 @@ class GPURuntime:
 def _call_site(frames: list[traceback.FrameSummary]) -> str:
     """Where the program's own code made the call: the innermost uploaded frame,
     else the innermost one outside this package."""
-    package = os.path.dirname(__file__)
+    package = str(Path(__file__).resolve().parents[1])
     for accept in (
         lambda frame: frame.filename.startswith("<uploaded:"),
         lambda frame: not frame.filename.startswith(package),
@@ -250,58 +252,6 @@ def _call_site(frames: list[traceback.FrameSummary]) -> str:
             if accept(frame):
                 return f"{frame.filename}:{frame.lineno} in {frame.name}"
     return "an unknown call site"
-
-
-class _CUDAErrorAPI:
-    """The small libcudart surface needed to inspect CUDA's last-error slot."""
-
-    def __init__(self, library: Any) -> None:
-        self._get_last_error = library.cudaGetLastError
-        self._get_last_error.argtypes = []
-        self._get_last_error.restype = ctypes.c_int
-        self._get_error_name = library.cudaGetErrorName
-        self._get_error_name.argtypes = [ctypes.c_int]
-        self._get_error_name.restype = ctypes.c_char_p
-        self._get_error_string = library.cudaGetErrorString
-        self._get_error_string.argtypes = [ctypes.c_int]
-        self._get_error_string.restype = ctypes.c_char_p
-
-    def take_last_error(self) -> str | None:
-        code = self._get_last_error()
-        if code == 0:
-            return None
-        name = _decode_cuda_error(self._get_error_name(code), "cudaErrorUnknown")
-        description = _decode_cuda_error(self._get_error_string(code), "unknown error")
-        return f"CUDA error {name} ({code}): {description}"
-
-
-def _decode_cuda_error(value: bytes | None, fallback: str) -> str:
-    return value.decode("utf-8", errors="replace") if value is not None else fallback
-
-
-@cache
-def _cuda_error_api() -> _CUDAErrorAPI:
-    """Load the same CUDA runtime torch uses, once per worker process."""
-    candidates: list[str] = []
-    discovered = ctypes.util.find_library("cudart")
-    if discovered is not None:
-        candidates.append(discovered)
-    try:
-        import torch
-
-        if torch.version.cuda:
-            candidates.append(f"libcudart.so.{torch.version.cuda.split('.', 1)[0]}")
-    except Exception:
-        pass
-    candidates.extend(["libcudart.so", "libcudart.so.13", "libcudart.so.12", "libcudart.so.11.0"])
-
-    failures: list[str] = []
-    for candidate in dict.fromkeys(candidates):
-        try:
-            return _CUDAErrorAPI(ctypes.CDLL(candidate))
-        except (AttributeError, OSError) as exc:
-            failures.append(f"{candidate}: {exc}")
-    raise RuntimeError("could not load libcudart to inspect CUDA errors: " + "; ".join(failures))
 
 
 def _warm_up() -> None:

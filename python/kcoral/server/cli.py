@@ -1,39 +1,16 @@
-"""Python execution server for standalone use and routed nodes.
-
-The front-end process itself touches no GPU. GPU workers import torch/tvm and
-are pinned to one GPU, which ``--workers-per-gpu`` of them share by taking turns
-through its lease. CPU workers need only TVM FFI and a CUDA toolchain, and
-compile uploaded source without importing a GPU runtime.
-
-    kcoral server --gpus 1,2,3
-    kcoral server --device cpu --num-workers 16
-
-Every ``ServerConfig`` field has a flag (see ``kcoral server --help``). A few
-flags default from the environment, so env-only deployments keep working:
-
-  KCORAL_SERVER_DEVICE  worker type: gpu or cpu (default "gpu")
-  KCORAL_SERVER_GPUS    comma-separated physical GPU ids the GPU workers pin (default "0")
-  KCORAL_SERVER_HOST    bind host (default 127.0.0.1)
-  KCORAL_SERVER_PORT    bind port (default 8000)
-  KCORAL_LOG_DIR        directory for structured event logs (default "logs"; empty disables)
-  KCORAL_ROUTER_ENDPOINT
-                        Router origin for outbound gRPC data slots (default disabled)
-  KCORAL_NODE_ID        stable node identifier required with a Router endpoint
-  KCORAL_NODE_TOKEN     bearer token used to authenticate outbound node connections
-
-The log is one JSONL stream per run under ``<log dir>/runs/``, uncapped, and it
-is mirrored to stderr unless ``--no-log-console`` says otherwise. Its first line
-names the run directory.
-"""
+"""Command-line configuration and standalone or supervised service startup."""
 
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
+import shutil
+import socket
 import sys
 from pathlib import Path
 
-from .config import ServerConfig
+from kcoral.config import ServerConfig
 
 _DEFAULTS = ServerConfig()
 
@@ -234,8 +211,7 @@ def server_components():
     try:
         import uvicorn
 
-        from .app import create_app
-        from .shutdown import ShutdownServer
+        from kcoral.server.app import ShutdownServer, create_app
     except ImportError as exc:
         raise SystemExit(
             f"cannot start the server: {exc}. Install the front-end: pip install 'kcoral[server]'"
@@ -252,6 +228,122 @@ def _warn_if_visible_devices_set() -> None:
             "workers are pinned by --gpus (physical GPU ids). Unset it to avoid confusion.",
             file=sys.stderr,
         )
+
+
+# Advanced routed-node options. Rust owns their types, defaults and validation.
+_SUPERVISOR_OPTIONS = (
+    "health-interval-seconds",
+    "health-timeout-seconds",
+    "failure-threshold",
+    "startup-grace-seconds",
+    "stable-reset-seconds",
+    "termination-grace-seconds",
+    "restart-min-delay-seconds",
+    "restart-max-delay-seconds",
+    "restart-jitter",
+)
+
+
+def exec_native_binary(
+    name: str, arguments: list[str], *, env: dict[str, str] | None = None
+) -> None:
+    """Replace this process with a Rust executable, preserving signals and exit status."""
+    search_path = os.pathsep.join([str(Path(sys.executable).parent), os.environ.get("PATH", "")])
+    executable = shutil.which(name, path=search_path)
+    if executable is None:
+        if sys.platform != "linux":
+            raise SystemExit(
+                f"{name} was not found. Router deployments (`kcoral router` and "
+                "`kcoral server --router`) run only on Linux."
+            )
+        raise SystemExit(
+            f"{name} was not found. Reinstall KCoral with KCORAL_BUILD_RUST=1, or build it "
+            "with `cargo build --release --locked` and add target/release to PATH. See the "
+            "Router deployment guide."
+        )
+    try:
+        os.execve(executable, [executable, *arguments], dict(os.environ) if env is None else env)
+    except OSError as exc:
+        raise SystemExit(f"cannot start {name}: {exc}") from exc
+
+
+def router_main(argv: list[str]) -> None:
+    exec_native_binary("kcoral-router", argv)
+
+
+def _health_origin(host: str, port: int) -> str:
+    # Probes originate on loopback, including for a specific local interface.
+    # Wildcard addresses are never used as destinations.
+    addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    address = ipaddress.ip_address(addresses[0][4][0])
+    if address.is_unspecified:
+        address = ipaddress.ip_address("::1" if address.version == 6 else "127.0.0.1")
+    host = f"[{address}]" if address.version == 6 else str(address)
+    return f"http://{host}:{port}/"
+
+
+def _add_supervisor_options(parser: argparse.ArgumentParser) -> None:
+    for name in _SUPERVISOR_OPTIONS:
+        parser.add_argument("--" + name, help=argparse.SUPPRESS)
+
+
+def server_parser() -> argparse.ArgumentParser:
+    parser = build_parser()
+    parser.description = "Start a KCoral server; add --router and --node-id to join a Router."
+    _add_supervisor_options(parser)
+    return parser
+
+
+def _python_arguments(argv: list[str]) -> list[str]:
+    """Remove launcher options while preserving the original Python server arguments."""
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    for name in ("router", "node-id", "node-token"):
+        parser.add_argument("--" + name)
+    _add_supervisor_options(parser)
+    _, arguments = parser.parse_known_args(argv)
+    return arguments
+
+
+def server_main(argv: list[str]) -> None:
+    parser = server_parser()
+    args = parser.parse_args(argv)
+    config_from_args(args)
+    if not args.router_endpoint:
+        for name in _SUPERVISOR_OPTIONS:
+            if getattr(args, name.replace("-", "_")) is not None:
+                parser.error(f"--{name} requires --router")
+        serve(args)
+        return
+    server_components()
+    try:
+        origin = _health_origin(args.host, args.port)
+    except (OSError, ValueError) as exc:
+        parser.error(f"cannot resolve --host {args.host!r}: {exc}")
+
+    node_args = [
+        "--server-url",
+        origin,
+        "--router-endpoint",
+        args.router_endpoint,
+        "--node-id",
+        args.node_id,
+    ]
+    for name in _SUPERVISOR_OPTIONS:
+        value = getattr(args, name.replace("-", "_"))
+        if value is not None:
+            node_args.append(f"--{name}={value}")
+
+    worker_args = _python_arguments(argv)
+    # The supervisor derives child defaults from the probe URL. Preserve the
+    # requested bind address, including environment defaults and wildcards.
+    worker_args += [f"--host={args.host}", f"--port={args.port}"]
+    env = dict(os.environ)
+    for name in ("KCORAL_ROUTER_ENDPOINT", "KCORAL_NODE_ID", "KCORAL_NODE_TOKEN"):
+        env.pop(name, None)
+    if args.node_token is not None:
+        env["KCORAL_NODE_TOKEN"] = args.node_token
+    node_args += ["--", sys.executable, "-m", "kcoral.server.cli", *worker_args]
+    exec_native_binary("kcoral-node", node_args, env=env)
 
 
 if __name__ == "__main__":

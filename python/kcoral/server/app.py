@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import json
+import logging
 import traceback
 import uuid
 import warnings
-from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -16,29 +15,26 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from ipaddress import ip_address
 from pathlib import Path
+from typing import Literal
 
+import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field
 
-from . import __version__, sandbox
-from .cache import ByteCache, DiskFileCache
-from .config import ServerConfig
-from .errors import ValidationError
-from .events import EventLogger
-from .health import HealthResponse
-from .keys import is_blob_hash, verify_blob
-from .multipart import MultipartPart, encode_multipart, parse_multipart
-from .pool import PoolBusy, SubmitOutcome, WorkerPool
-from .schemas import (
-    FileUpload,
-    Program,
-    ProgramOutcome,
-    Upload,
-    expected_tensor_nbytes,
-    parse_program,
-    strict_json_loads,
+from kcoral import __version__
+from kcoral.config import ServerConfig
+from kcoral.errors import ValidationError
+from kcoral.protocol import (
+    _encode_response,
+    parse_request,
 )
-from .worker import WorkerCrashed, WorkerTimeout
+from kcoral.runtime.pool import PoolBusy, SubmitOutcome, WorkerPool
+from kcoral.runtime.worker import WorkerCrashed, WorkerTimeout
+from kcoral.schemas import Program, ProgramOutcome
+from kcoral.server.cache import ByteCache, DiskFileCache, _CacheMiss, resolve_blobs
+from kcoral.server.events import EventLogger, _keep_program, _program_shape
+from kcoral.support import sandbox
 
 _TRACEBACK_LIMIT = 8192
 _MESSAGE_LIMIT = 2048
@@ -53,11 +49,6 @@ _FINISH_REASON_LEVEL = {
     "cache_miss": "INFO",
     "server_error": "ERROR",
 }
-
-
-class _CacheMiss(Exception):
-    def __init__(self, blobs: list[str]):
-        self.blobs = blobs
 
 
 def create_app(
@@ -94,11 +85,11 @@ def create_app(
     )
     if runtime_factory is None:
         if config.device == "cpu":
-            from .cpu_runtime import cpu_runtime_factory
+            from kcoral.runtime.python import cpu_runtime_factory
 
             runtime_factory = cpu_runtime_factory
         else:
-            from .gpu_runtime import gpu_runtime_factory
+            from kcoral.runtime.gpu import gpu_runtime_factory
 
             runtime_factory = gpu_runtime_factory
 
@@ -189,7 +180,7 @@ def create_app(
 
         try:
             if config.router_endpoint is not None:
-                from .tunnel import TunnelManager
+                from kcoral.server.tunnel import TunnelManager
 
                 assert config.node_id is not None
                 tunnel = TunnelManager(
@@ -522,74 +513,9 @@ def create_app(
 def _parse_execute_request(
     content_type: str | None, body: bytes, cache: ByteCache, file_cache: DiskFileCache
 ) -> tuple[Program, list[str], bytes]:
-    parts = parse_multipart(content_type, body)
-    program_bytes: bytes | None = None
-    supplied_blobs: dict[str, bytes] = {}
-
-    for part in parts:
-        if part.name == "program":
-            if program_bytes is not None:
-                raise ValidationError("duplicate multipart part: 'program'")
-            if part.content_type != "application/json":
-                raise ValidationError("the 'program' part must use application/json")
-            program_bytes = part.data
-            continue
-        if not part.name.startswith("blob:"):
-            raise ValidationError(f"unsupported multipart part: {part.name!r}")
-        blob_hash = part.name.removeprefix("blob:")
-        if not is_blob_hash(blob_hash):
-            raise ValidationError(f"malformed blob part name: {part.name!r}")
-        if blob_hash in supplied_blobs:
-            raise ValidationError(f"duplicate blob part: {blob_hash}")
-        if part.content_type != "application/octet-stream":
-            raise ValidationError(f"blob part {blob_hash} must use application/octet-stream")
-        verify_blob(blob_hash, part.data)
-        supplied_blobs[blob_hash] = part.data
-
-    if program_bytes is None:
-        raise ValidationError("missing multipart part: 'program'")
-    program = parse_program(strict_json_loads(program_bytes))
-    uploads = program.blob_uploads()
-    referenced_blobs = _dedup([upload.blob for upload in uploads if upload.blob is not None])
-    unreferenced = set(supplied_blobs) - set(referenced_blobs)
-    if unreferenced:
-        raise ValidationError(f"unreferenced blob part(s): {', '.join(sorted(unreferenced))}")
-
-    file_keys = {upload.blob for upload in uploads if isinstance(upload, FileUpload)}
-    memory_keys = {upload.blob for upload in uploads if not isinstance(upload, FileUpload)}
-    for blob_hash, data in supplied_blobs.items():
-        if blob_hash in memory_keys:
-            cache.put(blob_hash, data)
-    file_cache.put_many({key: data for key, data in supplied_blobs.items() if key in file_keys})
-
-    missing: list[str] = []
-    for blob_hash in referenced_blobs:
-        data = supplied_blobs.get(blob_hash)
-        if data is None and blob_hash in file_keys:
-            data = file_cache.get(blob_hash)
-        if data is None and blob_hash in memory_keys:
-            data = cache.get(blob_hash)
-        if data is None:
-            missing.append(blob_hash)
-        else:
-            # Owned bytes survive disk eviction while queued or executing. If a
-            # hash has both kinds of upload, the request can share these bytes.
-            program.blob_bytes[blob_hash] = data
-    for upload in uploads:
-        assert upload.blob is not None
-        data = program.blob_bytes.get(upload.blob)
-        if data is None:
-            continue
-        if upload.kind == "tensor":
-            assert upload.dtype is not None and upload.shape is not None
-            expected_size = expected_tensor_nbytes(upload.dtype, upload.shape)
-            if len(data) != expected_size:
-                raise ValidationError(
-                    f"tensor upload {upload.id!r} expects {expected_size} bytes, got {len(data)}"
-                )
-    if missing:
-        raise _CacheMiss(missing)
-    return program, [key for key in referenced_blobs if key in memory_keys], program_bytes
+    program, supplied_blobs, program_bytes = parse_request(content_type, body)
+    cache_keys = resolve_blobs(program, supplied_blobs, cache, file_cache)
+    return program, cache_keys, program_bytes
 
 
 def _describe(config: ServerConfig) -> dict[str, object]:
@@ -606,58 +532,6 @@ def _describe(config: ServerConfig) -> dict[str, object]:
         )
         for key, value in asdict(config).items()
     }
-
-
-def _program_shape(program: Program) -> dict[str, object]:
-    """The shape of the workload, for reading the log without opening the
-    program it describes."""
-    ops: Counter[str] = Counter()
-    uploads: Counter[str] = Counter()
-    for instruction in program.instructions:
-        ops[instruction.op] += 1
-        if isinstance(instruction, (Upload, FileUpload)):
-            kind = instruction.kind
-            uploads[kind] += 1
-    return {
-        "instructions": len(program.instructions),
-        "ops": dict(ops),
-        "uploads": dict(uploads) or None,
-        "blob_bytes": sum(len(data) for data in program.blob_bytes.values()) or None,
-    }
-
-
-def _keep_program(events: EventLogger, request_id: str, program_bytes: bytes) -> str | None:
-    """Write the program beside the log and answer with its name. The bytes
-    arrived over the wire, so nothing is re-serialized."""
-    directory = events.subdir("programs")
-    if directory is None:
-        return None
-    name = f"{request_id}.json"
-    try:
-        (directory / name).write_bytes(program_bytes)
-    except OSError:
-        return None  # best-effort, like every other write the log makes
-    return name
-
-
-def _encode_response(
-    payload: dict[str, object], binary_parts: dict[str, bytes]
-) -> tuple[bytes, str]:
-    result_bytes = json.dumps(
-        payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-    ).encode("utf-8")
-    if not binary_parts:
-        return result_bytes, "application/json"
-    parts = [MultipartPart("result", "application/json", result_bytes)]
-    parts.extend(
-        MultipartPart(name, "application/octet-stream", data) for name, data in binary_parts.items()
-    )
-    return encode_multipart(parts)
-
-
-def _dedup(items: list[str]) -> list[str]:
-    seen: set[str] = set()
-    return [item for item in items if not (item in seen or seen.add(item))]
 
 
 def _resolve_timeout(program: Program, config: ServerConfig) -> float:
@@ -697,3 +571,80 @@ def _request_id(request: Request) -> str:
         except ValueError:
             pass
     return str(uuid.uuid4())
+
+
+class RequestLoad(BaseModel):
+    request_capacity: int = Field(
+        ge=0,
+        description="Serviceable request capacity, occupied and free.",
+    )
+    requests_in_progress: int = Field(
+        ge=0,
+        description="Assigned requests, including compilation, GPU waiting, and cleanup.",
+    )
+    requests_waiting: int = Field(
+        ge=0,
+        description="Requests awaiting assignment.",
+    )
+
+
+class HealthResponse(BaseModel):
+    status: Literal["ok", "unavailable"] = Field(description="Endpoint health status.")
+    instance_id: str = Field(description="Changes on each endpoint restart.")
+    started_at: str = Field(description="Endpoint startup time in UTC (RFC 3339).")
+    gpu_count: int | None = Field(description="Number of configured GPUs, when known.")
+    load: RequestLoad
+    target: dict[str, str] = Field(description="Compilation target.")
+    versions: dict[str, str] = Field(description="Installed runtime and toolchain versions.")
+
+
+logger = logging.getLogger("uvicorn.error")
+
+
+class ShutdownServer(uvicorn.Server):
+    def __init__(self, config: uvicorn.Config, app) -> None:
+        super().__init__(config)
+        self.app = app
+
+    def handle_exit(self, sig, frame) -> None:
+        # force_exit skips lifespan; replaying signals can interrupt cleanup.
+        self.should_exit = True
+        asyncio.get_running_loop().call_soon(self._begin_shutdown)
+
+    def _begin_shutdown(self) -> None:
+        tunnel = getattr(self.app.state, "tunnel", None)
+        if tunnel is not None:
+            tunnel.begin_shutdown()
+        pool = getattr(self.app.state, "pool", None)
+        if pool is not None:
+            pool.begin_shutdown()
+            logger.info(
+                "Shutdown requested. Finishing remaining benchmarks: %d left.", pool.active_requests
+            )
+
+    async def shutdown(self, sockets=None) -> None:
+        pool = getattr(self.app.state, "pool", None)
+        if pool is not None and not pool.closing:
+            self._begin_shutdown()
+        progress = asyncio.create_task(self._report_progress(pool))
+        try:
+            await super().shutdown(sockets)
+        finally:
+            progress.cancel()
+            await asyncio.gather(progress, return_exceptions=True)
+
+    async def _report_progress(self, pool) -> None:
+        remaining = pool.active_requests if pool is not None else 0
+        while True:
+            await asyncio.sleep(0.1)
+            active = pool.active_requests if pool is not None else 0
+            if active != remaining:
+                logger.info("Finishing remaining benchmarks: %d left.", active)
+                remaining = active
+
+    async def _wait_tasks_to_complete(self) -> None:
+        # Uvicorn's default wait advertises Ctrl+C to force quit, which skips cleanup.
+        while self.server_state.connections or self.server_state.tasks:
+            await asyncio.sleep(0.1)
+        for server in self.servers:
+            await server.wait_closed()

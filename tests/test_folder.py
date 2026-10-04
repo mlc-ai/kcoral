@@ -6,8 +6,7 @@ import pytest
 from support.programs import harness_function
 
 from kcoral import Program
-from kcoral.keys import compute_blob_hash
-from kcoral.schemas import parse_program
+from kcoral.protocol import compute_blob_hash, parse_program
 
 
 def test_folder_expands_to_fixed_file_uploads_and_deduplicates(tmp_path):
@@ -91,7 +90,7 @@ def test_repeated_directory_identity_is_rejected(tmp_path, monkeypatch):
         # Simulate a bind mount revisiting an ancestor without requiring mount privileges.
         return root_info if stat.S_ISDIR(info.st_mode) else info
 
-    monkeypatch.setattr("kcoral.client.os.fstat", duplicate_directory)
+    monkeypatch.setattr("kcoral.artifacts.os.fstat", duplicate_directory)
     with pytest.raises(ValueError, match="repeated directory"):
         Program().upload_folder(tmp_path, path="data")
 

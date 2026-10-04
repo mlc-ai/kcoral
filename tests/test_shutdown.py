@@ -12,11 +12,11 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
 from support.programs import harness_call, harness_instructions
+from support.runtime import fake_runtime_factory
 
-from kcoral.pool import PoolBusy, WorkerPool
+from kcoral.runtime.pool import PoolBusy, WorkerPool
+from kcoral.runtime.worker import WorkerTimeout
 from kcoral.schemas import Program
-from kcoral.testing import fake_runtime_factory
-from kcoral.worker import WorkerTimeout
 
 
 def wait_until(predicate, timeout=10):
@@ -143,10 +143,10 @@ def test_real_server_reports_progress_and_drains_through_repeated_signals(tmp_pa
     script = f"""
 from pathlib import Path
 import uvicorn
-from kcoral.app import create_app
+from kcoral.server.app import create_app
 from kcoral.config import ServerConfig
-from kcoral.shutdown import ShutdownServer
-from kcoral.testing import fake_runtime_factory
+from kcoral.server.app import ShutdownServer
+from support.runtime import fake_runtime_factory
 app = create_app(ServerConfig(sandbox='none', device="cpu", num_workers=2,
                              log_dir=Path({str(tmp_path)!r})),
                  runtime_factory=fake_runtime_factory)

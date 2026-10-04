@@ -36,3 +36,38 @@ class GPUAccessViolation(ExecutionError):
         self.location = location
         self.call_stack = call_stack
         self.detected_at_ns = detected_at_ns
+
+
+class KCoralError(Exception):
+    """A server response with an HTTP status other than 200.
+
+    :param status_code: HTTP response status, such as 503 for a busy server.
+    :param message: The server's error message.
+    :param kind: Structured error kind, when provided by the server.
+    :param request_id: Request identifier, when provided by the server.
+
+    These parameters are also available as attributes. An instruction failure
+    with HTTP 200 is instead represented by :class:`ProgramResult`.
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        *,
+        kind: str | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        super().__init__(f"HTTP {status_code}: {message}")
+        self.status_code = status_code
+        self.message = message
+        self.kind = kind
+        self.request_id = request_id
+
+
+class TransportError(Exception):
+    """The request did not produce an HTTP response."""
+
+
+class ProtocolError(Exception):
+    """The server response does not follow the protocol."""

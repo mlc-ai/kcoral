@@ -2,13 +2,13 @@
 
 
 def parse_args(argv):
-    from ._common import parse_args as parse_common
+    from kcoral.tools.cli import parse_args as parse_common
 
     return parse_common("compute-sanitizer", argv)
 
 
 def main(argv):
-    from ._common import run_tool
+    from kcoral.tools.cli import run_tool
 
     return run_tool("compute-sanitizer", *parse_args(argv))
 

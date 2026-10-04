@@ -12,9 +12,9 @@ from urllib.parse import urlsplit
 
 import grpc
 
-from . import kcoral_gateway_pb2 as gateway_pb
-from . import kcoral_gateway_pb2_grpc as gateway_grpc
-from .events import EventLogger
+from kcoral.server._generated import kcoral_gateway_pb2 as gateway_pb
+from kcoral.server._generated import kcoral_gateway_pb2_grpc as gateway_grpc
+from kcoral.server.events import EventLogger
 
 DATA_CHUNK_BYTES = 256 * 1024
 GRPC_MESSAGE_BYTES = DATA_CHUNK_BYTES + 64 * 1024

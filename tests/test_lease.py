@@ -8,8 +8,8 @@ import threading
 import time
 from dataclasses import dataclass
 
-from kcoral.lease import GPULeases
-from kcoral.pool import IdleWorkers
+from kcoral.runtime.lease import GPULeases
+from kcoral.runtime.pool import IdleWorkers
 
 
 def until(predicate, timeout=2.0):

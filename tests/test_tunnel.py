@@ -5,17 +5,21 @@ import socket
 import grpc
 import pytest
 from support.programs import harness_instructions
+from support.runtime import fake_runtime_factory
 
-from kcoral import kcoral_gateway_pb2 as gateway_pb
-from kcoral import kcoral_gateway_pb2_grpc as gateway_grpc
-from kcoral import tunnel as tunnel_module
-from kcoral.app import create_app
 from kcoral.config import ServerConfig
-from kcoral.keys import compute_blob_hash
-from kcoral.multipart import MultipartPart, encode_multipart, parse_multipart
-from kcoral.schemas import strict_json_loads
-from kcoral.testing import fake_runtime_factory
-from kcoral.tunnel import DATA_CHUNK_BYTES, TunnelManager
+from kcoral.protocol import (
+    MultipartPart,
+    compute_blob_hash,
+    encode_multipart,
+    parse_multipart,
+    strict_json_loads,
+)
+from kcoral.server import tunnel as tunnel_module
+from kcoral.server._generated import kcoral_gateway_pb2 as gateway_pb
+from kcoral.server._generated import kcoral_gateway_pb2_grpc as gateway_grpc
+from kcoral.server.app import create_app
+from kcoral.server.tunnel import DATA_CHUNK_BYTES, TunnelManager
 
 
 class FakeCall:

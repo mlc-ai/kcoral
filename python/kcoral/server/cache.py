@@ -18,7 +18,15 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from .keys import compute_blob_hash, is_blob_hash, verify_blob
+from kcoral.errors import ValidationError
+from kcoral.protocol import (
+    _dedup,
+    compute_blob_hash,
+    expected_tensor_nbytes,
+    is_blob_hash,
+    verify_blob,
+)
+from kcoral.schemas import FileUpload, Program
 
 
 @dataclass
@@ -221,3 +229,54 @@ class DiskFileCache:
                     size -= entry_size
                 finally:
                     os.close(shard)
+
+
+class _CacheMiss(Exception):
+    def __init__(self, blobs: list[str]):
+        self.blobs = blobs
+
+
+def resolve_blobs(
+    program: Program, supplied_blobs: dict[str, bytes], cache: ByteCache, file_cache: DiskFileCache
+) -> list[str]:
+    uploads = program.blob_uploads()
+    referenced_blobs = _dedup([upload.blob for upload in uploads if upload.blob is not None])
+    unreferenced = set(supplied_blobs) - set(referenced_blobs)
+    if unreferenced:
+        raise ValidationError(f"unreferenced blob part(s): {', '.join(sorted(unreferenced))}")
+
+    file_keys = {upload.blob for upload in uploads if isinstance(upload, FileUpload)}
+    memory_keys = {upload.blob for upload in uploads if not isinstance(upload, FileUpload)}
+    for blob_hash, data in supplied_blobs.items():
+        if blob_hash in memory_keys:
+            cache.put(blob_hash, data)
+    file_cache.put_many({key: data for key, data in supplied_blobs.items() if key in file_keys})
+
+    missing: list[str] = []
+    for blob_hash in referenced_blobs:
+        data = supplied_blobs.get(blob_hash)
+        if data is None and blob_hash in file_keys:
+            data = file_cache.get(blob_hash)
+        if data is None and blob_hash in memory_keys:
+            data = cache.get(blob_hash)
+        if data is None:
+            missing.append(blob_hash)
+        else:
+            # Owned bytes survive disk eviction while queued or executing. If a
+            # hash has both kinds of upload, the request can share these bytes.
+            program.blob_bytes[blob_hash] = data
+    for upload in uploads:
+        assert upload.blob is not None
+        data = program.blob_bytes.get(upload.blob)
+        if data is None:
+            continue
+        if upload.kind == "tensor":
+            assert upload.dtype is not None and upload.shape is not None
+            expected_size = expected_tensor_nbytes(upload.dtype, upload.shape)
+            if len(data) != expected_size:
+                raise ValidationError(
+                    f"tensor upload {upload.id!r} expects {expected_size} bytes, got {len(data)}"
+                )
+    if missing:
+        raise _CacheMiss(missing)
+    return [key for key in referenced_blobs if key in memory_keys]
