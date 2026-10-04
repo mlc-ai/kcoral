@@ -149,6 +149,54 @@ def test_direct_worker_reports_bubblewrap_launch_failure(monkeypatch):
         Worker(None, cpu_runtime_factory, sandbox="bubblewrap", termination_grace_seconds=0.1)
 
 
+def test_multi_gpu_mounts_include_only_the_assigned_device_minors(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/bwrap")
+    monkeypatch.setattr(sandboxing.nvml, "device_minor_number", {0: 6, 2: 4}.__getitem__)
+    original_exists = Path.exists
+    nodes = {f"/dev/nvidia{i}" for i in range(8)}
+    monkeypatch.setattr(Path, "exists", lambda path: str(path) in nodes or original_exists(path))
+    instance = Sandbox()
+    try:
+        command = instance.command((0, 2))
+        devices = {command[i + 1] for i, arg in enumerate(command) if arg == "--dev-bind"}
+        assert nodes & devices == {"/dev/nvidia4", "/dev/nvidia6"}
+    finally:
+        instance.close()
+
+
+def test_explicit_gpu_set_preserves_filesystem_isolation(require_bubblewrap, tmp_path):
+    from support.runtime import fake_runtime_factory
+
+    hidden = tmp_path / "host-secret"
+    hidden.write_text("private")
+    allowed = tmp_path / "runtime"
+    allowed.mkdir()
+    (allowed / "data").write_text("shared")
+    pool = WorkerPool(
+        [0, 2],
+        fake_runtime_factory,
+        sandbox_readonly_paths=(allowed, Path(__file__).parent),
+        max_requests_per_worker=0,
+    )
+    try:
+        program = parsed(
+            """
+def main(hidden, allowed):
+    from pathlib import Path
+    from kcoral.support import sandbox
+    return [sandbox.active(), Path(hidden).exists(), Path(allowed, "data").read_text()]
+""",
+            args=[str(hidden), str(allowed)],
+            cpu_only=False,
+        )
+        program.options["gpu_count"] = 2
+        outcome = pool.submit(program, timeout=15)
+        assert outcome.gpu_ids == (0, 2)
+        assert values(outcome.execution)["value"] == [True, False, "shared"]
+    finally:
+        pool.shutdown()
+
+
 @pytest.mark.parametrize("failure", ["missing", "launch", "timeout"])
 def test_server_startup_disables_unavailable_sandbox_and_warns(monkeypatch, tmp_path, failure):
     from fastapi.testclient import TestClient
@@ -516,6 +564,32 @@ def main():
     )
     assert reason == "sandbox_cleanup"
     assert not worker._proc.is_alive()
+
+
+@pytest.mark.parametrize("leave_thread", [False, True])
+def test_surviving_sandbox_children_fail_the_request(worker, leave_thread):
+    root = worker._sandbox.root
+    result = worker.run(
+        parsed(
+            """
+def main(leave_thread):
+    import subprocess, sys, threading, time
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                     start_new_session=True)
+    if leave_thread:
+        threading.Thread(target=lambda: time.sleep(60), daemon=True).start()
+    return 42
+""",
+            [leave_thread],
+        ),
+        10,
+        NoopLeases(),
+    )
+    assert result.execution.status == "FAILED"
+    assert "background processes" in result.execution.error["message"]
+    assert result.retire_reason == "sandbox_cleanup"
+    assert not worker._proc.is_alive()
+    assert not root.exists()
 
 
 @pytest.mark.parametrize("status", ["COMPLETED", "FAILED"])

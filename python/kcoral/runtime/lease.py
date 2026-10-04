@@ -17,6 +17,7 @@ import time
 from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:  # a type-only import: worker.py imports this module at runtime
@@ -104,6 +105,9 @@ class NoopLeases:
     def initialization(self, gpu_id: None) -> Iterator[None]:
         yield
 
+    def quarantine(self, gpu_ids: tuple[int, ...]) -> None:
+        pass
+
     def depth(self, gpu_id: None) -> int:
         return 0
 
@@ -111,20 +115,32 @@ class NoopLeases:
         return None
 
 
-class GPULeases:
-    """One lease per GPU, granted FIFO among the workers pinned to it.
+class GPUUnavailable(RuntimeError):
+    """A device was quarantined because job cleanup could not be verified."""
 
-    Keyed by GPU id rather than indexed, because ``--gpus`` may name any ids it
-    likes and they need not start at zero or be consecutive.
+
+@dataclass
+class _LeaseRequest:
+    holder: object
+    ticket: Ticket
+    gpu_ids: tuple[int, ...] | None = None
+    count: int = 1
+
+
+class GPULeases:
+    """Shared arbitration for workers bound to one GPU or a fixed set.
+
+    A waiting set never holds a subset. Older requests reserve their place in
+    the queue; independent pinned-device requests can still pass one another.
     """
 
     def __init__(self, gpu_ids: list[int]) -> None:
         self._lock = threading.Lock()
         self._initializers: dict[int, deque[Ticket]] = {gpu: deque() for gpu in gpu_ids}
-        self._holder: dict[int, Worker | None] = {gpu: None for gpu in gpu_ids}
-        self._waiters: dict[int, deque[tuple[Worker, Ticket]]] = {gpu: deque() for gpu in gpu_ids}
-        # Who held the GPU when: (from, to, request id), on the monotonic clock.
-        self._held_since_ns: dict[int, int | None] = {gpu: None for gpu in gpu_ids}
+        self._unavailable: set[int] = set()
+        self._holder: dict[int, object | None] = dict.fromkeys(gpu_ids)
+        self._waiters: list[_LeaseRequest] = []
+        self._held_since_ns: dict[int, int | None] = dict.fromkeys(gpu_ids)
         self._history: dict[int, deque[tuple[int, int, str | None]]] = {
             gpu: deque(maxlen=256) for gpu in gpu_ids
         }
@@ -151,71 +167,107 @@ class GPULeases:
                 if pending:
                     pending[0].event.set()
 
-    def acquire(self, gpu_id: int, holder: Worker) -> float:
-        """Block until ``holder`` owns the GPU; returns the wait in milliseconds.
+    def acquire(self, gpu_id: int | tuple[int, ...], holder: Worker) -> float:
+        devices = (gpu_id,) if isinstance(gpu_id, int) else gpu_id
+        with self._lock:
+            if all(self._holder[gpu] is holder for gpu in devices):
+                return 0.0
+        result = self._acquire(_LeaseRequest(holder, Ticket(), devices))
+        assert result is not None
+        return result[1]
 
-        Unbounded on purpose: the caller leaves this out of the request's
-        execution timeout, so a worker is never killed for a neighbour's
-        slowness. FIFO bounds it instead, to one wait per worker ahead.
-        Acquiring an already-owned lease is a no-op, as with LeaseClient.
-        """
+    def acquire_count(
+        self, count: int, holder: object, *, cancelled: threading.Event | None = None
+    ) -> tuple[tuple[int, ...], float] | None:
+        """Wait for any complete set; cancellation removes the whole request."""
+        if not 1 <= count <= len(self._holder):
+            raise ValueError("GPU count exceeds this server's capacity")
+        return self._acquire(_LeaseRequest(holder, Ticket(), count=count), cancelled)
+
+    def _acquire(
+        self, request: _LeaseRequest, cancelled: threading.Event | None = None
+    ) -> tuple[tuple[int, ...], float] | None:
         started = time.monotonic()
         with self._lock:
-            if self._holder[gpu_id] is holder:
-                return 0.0
-            if self._holder[gpu_id] is None and not self._waiters[gpu_id]:
-                self._holder[gpu_id] = holder
-                self._held_since_ns[gpu_id] = time.monotonic_ns()
-                return 0.0
-            ticket = Ticket()
-            self._waiters[gpu_id].append((holder, ticket))
-        ticket.event.wait()
-        return (time.monotonic() - started) * 1000
+            self._waiters.append(request)
+            self._dispatch_locked()
+        while not request.ticket.event.wait(0.1):
+            if cancelled is not None and cancelled.is_set():
+                with self._lock:
+                    if request in self._waiters:
+                        self._waiters.remove(request)
+                        self._dispatch_locked()
+                        return None
+                    # A grant won the race; the caller will release it normally.
+                    break
+        if isinstance(request.ticket.value, GPUUnavailable):
+            raise request.ticket.value
+        return request.ticket.value, (time.monotonic() - started) * 1000
 
-    def release(self, gpu_id: int, holder: Worker) -> None:
-        """Give up the GPU and hand it to the next waiter."""
+    def quarantine(self, gpu_ids: tuple[int, ...]) -> None:
         with self._lock:
-            if self._holder[gpu_id] is not holder:
-                return
-            self._grant_next_locked(gpu_id)
+            self._unavailable.update(gpu_ids)
+            self._dispatch_locked()
 
-    def abandon(self, gpu_id: int, holder: Worker) -> None:
-        """Drop ``holder`` whether it held the lease or was queued for it, so the
-        pool can call this unconditionally after killing a worker."""
+    def release(self, gpu_id: int | tuple[int, ...], holder: Worker) -> None:
+        self.release_many((gpu_id,) if isinstance(gpu_id, int) else gpu_id, holder)
+
+    def release_many(self, gpu_ids: tuple[int, ...], holder: object) -> None:
         with self._lock:
-            waiters = self._waiters[gpu_id]
-            # Dropped without waking: the thread that would be waiting on the
-            # ticket is the one calling this, and waking it would return as
-            # though it held the GPU.
-            for entry in [e for e in waiters if e[0] is holder]:
-                waiters.remove(entry)
-            if self._holder[gpu_id] is holder:
-                self._grant_next_locked(gpu_id)
+            for gpu in gpu_ids:
+                if gpu not in self._unavailable and self._holder[gpu] is holder:
+                    since = self._held_since_ns[gpu]
+                    if since is not None:
+                        self._history[gpu].append((since, time.monotonic_ns(), _request_of(holder)))
+                    self._holder[gpu] = None
+                    self._held_since_ns[gpu] = None
+            self._dispatch_locked()
 
-    def _grant_next_locked(self, gpu_id: int) -> None:
-        """Pass the GPU to the longest-waiting worker, or mark it free. Callers
-        must already hold ``_lock``."""
-        now = time.monotonic_ns()
-        outgoing, since = self._holder[gpu_id], self._held_since_ns[gpu_id]
-        if outgoing is not None and since is not None:
-            self._history[gpu_id].append((since, now, _request_of(outgoing)))
-        waiters = self._waiters[gpu_id]
-        if waiters:
-            holder, ticket = waiters.popleft()
-            self._holder[gpu_id] = holder
-            self._held_since_ns[gpu_id] = now
-            ticket.event.set()
-        else:
-            self._holder[gpu_id] = None
-            self._held_since_ns[gpu_id] = None
+    def abandon(self, gpu_id: int | tuple[int, ...], holder: Worker) -> None:
+        with self._lock:
+            self._waiters = [entry for entry in self._waiters if entry.holder is not holder]
+        self.release(gpu_id, holder)
+
+    def _dispatch_locked(self) -> None:
+        blocked: set[int] = set()
+        for entry in list(self._waiters):
+            if (
+                entry.gpu_ids is not None and self._unavailable.intersection(entry.gpu_ids)
+            ) or entry.count > len(self._holder) - len(self._unavailable):
+                self._waiters.remove(entry)
+                entry.ticket.value = GPUUnavailable("worker cleanup failed; device unavailable")
+                entry.ticket.event.set()
+                continue
+            if entry.gpu_ids is None:
+                available = tuple(
+                    gpu
+                    for gpu, owner in self._holder.items()
+                    if owner is None and gpu not in blocked and gpu not in self._unavailable
+                )
+                if len(available) < entry.count:
+                    # Let active users drain instead of starving a large job.
+                    blocked.update(self._holder)
+                    continue
+                chosen = available[: entry.count]
+            else:
+                chosen = entry.gpu_ids
+                if any(gpu in blocked or self._holder[gpu] is not None for gpu in chosen):
+                    blocked.update(chosen)
+                    continue
+            for gpu in chosen:
+                self._holder[gpu] = entry.holder
+                self._held_since_ns[gpu] = time.monotonic_ns()
+            self._waiters.remove(entry)
+            entry.ticket.value = chosen
+            entry.ticket.event.set()
 
     def depth(self, gpu_id: int) -> int:
-        """Workers holding or queued for this GPU."""
         with self._lock:
-            return len(self._waiters[gpu_id]) + (self._holder[gpu_id] is not None)
+            return sum(
+                entry.gpu_ids is None or gpu_id in entry.gpu_ids for entry in self._waiters
+            ) + (self._holder[gpu_id] is not None)
 
     def request_at(self, gpu_id: int, timestamp_ns: int) -> str | None:
-        """The request holding the GPU at ``timestamp_ns``, if any."""
         with self._lock:
             holder, since = self._holder[gpu_id], self._held_since_ns[gpu_id]
             if holder is not None and since is not None and since <= timestamp_ns:

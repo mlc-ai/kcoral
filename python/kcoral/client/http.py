@@ -104,11 +104,15 @@ class Client:
         program: Program,
         *,
         timeout_seconds: float | None = None,
+        gpu_count: int | None = None,
         output_limit_bytes: int | None = None,
     ) -> ProgramResult:
         """Submit a program and decode the values it explicitly returns.
 
         :param program: Program built with the client-side :class:`Program`.
+        :param gpu_count: Run once on 1-8 GPUs. CPU-only calls release the complete
+            set after synchronization; later GPU instructions reacquire it.
+            Omit to use the configured single-GPU workers.
         :param timeout_seconds: Requested execution limit in seconds; ``None``
             uses the server default. The server clamps it to its configured maximum.
         :param output_limit_bytes: Requested captured output limit per stream;
@@ -128,6 +132,14 @@ class Client:
         if not isinstance(program, Program):
             raise TypeError("execute expects a Program")
         options: dict[str, Any] = {}
+        if gpu_count is not None:
+            if (
+                isinstance(gpu_count, bool)
+                or not isinstance(gpu_count, int)
+                or not 1 <= gpu_count <= 8
+            ):
+                raise ValueError("gpu_count must be an integer between 1 and 8")
+            options["gpu_count"] = gpu_count
         if timeout_seconds is not None:
             options["timeout_seconds"] = timeout_seconds
         if output_limit_bytes is not None:

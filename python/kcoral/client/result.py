@@ -58,6 +58,7 @@ class ProgramResult:
     stdout_truncated: bool
     stderr_truncated: bool
     error: dict[str, Any] | None = None
+    gpu_ids: tuple[int, ...] = ()
 
     @property
     def completed(self) -> bool:
@@ -140,6 +141,22 @@ def _parse_program_result(body: dict[str, Any], binary_parts: dict[str, bytes]) 
         if not isinstance(stdout_truncated, bool) or not isinstance(stderr_truncated, bool):
             raise ValueError("output truncation flags must be booleans")
 
+        if ("gpu_ids" in body) != ("gpu_count" in body):
+            raise ValueError("gpu_ids and gpu_count must be reported together")
+        gpu_ids = body.get("gpu_ids", [])
+        if not isinstance(gpu_ids, list) or any(
+            isinstance(gpu, bool) or not isinstance(gpu, int) or gpu < 0 for gpu in gpu_ids
+        ):
+            raise ValueError("gpu_ids must be a list of device indices")
+        if len(set(gpu_ids)) != len(gpu_ids) or len(gpu_ids) > 8:
+            raise ValueError("gpu_ids must contain at most eight distinct devices")
+        if "gpu_count" in body and (
+            isinstance(body["gpu_count"], bool)
+            or not isinstance(body["gpu_count"], int)
+            or body["gpu_count"] != len(gpu_ids)
+            or not gpu_ids
+        ):
+            raise ValueError("gpu_count must match gpu_ids")
         used_parts: set[str] = set()
         # A FAILED program still reports every return that ran before the failure.
         encoded_results = body["results"]
@@ -177,6 +194,7 @@ def _parse_program_result(body: dict[str, Any], binary_parts: dict[str, bytes]) 
         stdout_truncated=stdout_truncated,
         stderr_truncated=stderr_truncated,
         error=error,
+        gpu_ids=tuple(gpu_ids),
     )
 
 

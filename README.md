@@ -117,3 +117,11 @@ Programs contain `upload`, `get_function`, `run` and `return` instructions.
 The [protocol](docs/client-guide/protocol.md) defines requests, results, caching and errors.
 [Tutorials](docs/tutorials/benchmark-kernel.md) cover remote compilation, library
 uploads and separate compilation/execution servers.
+
+### Multi-GPU kernels and scripts
+
+Use `client.execute(program, gpu_count=N)` to run a program on 1–8 GPUs.
+Single- and multi-GPU programs share the same worker and release GPUs for `cpu_only` calls. Both standalone examples execute through `Program.run`:
+[one process controlling all GPUs](examples/multi_gpu_kernel.py) and
+[one worker per GPU](examples/multi_gpu_kernel_multiprocess.py).
+See the [multi-GPU guide](docs/client-guide/writing-a-program.md#run-a-multi-gpu-program).

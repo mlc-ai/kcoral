@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import os
+import platform
 import signal
+import time
+from pathlib import Path
 
 
 def _terminate_process_tree(process, grace_seconds: float) -> None:
@@ -59,3 +63,119 @@ def _environ() -> dict[str, str]:
         return environ
     except Exception:
         return dict(os.environ)  # no libc ``environ`` to read, or it moved as we read
+
+
+def _children(pid: int) -> set[int]:
+    """Read every thread: native libraries can launch children off the main thread."""
+    children: set[int] = set()
+    for task in Path(f"/proc/{pid}/task").glob("*"):
+        try:
+            children.update(map(int, (task / "children").read_text().split()))
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+    return children
+
+
+def _descendants(pid: int) -> set[int]:
+    found: set[int] = set()
+    pending = [pid]
+    while pending:
+        for child in _children(pending.pop()) - found:
+            found.add(child)
+            pending.append(child)
+    return found
+
+
+def _pidfd_open(pid: int) -> int:
+    native = getattr(os, "pidfd_open", None)
+    if native is not None:
+        return native(pid)
+    # Linux x86-64 and AArch64 share these syscall numbers. This fallback also
+    # works when Python or libc was built against headers predating pidfds.
+    if platform.machine() not in ("x86_64", "aarch64"):
+        raise RuntimeError("this platform needs Python with pidfd support")
+    libc = ctypes.CDLL(None, use_errno=True)
+    fd = libc.syscall(434, pid, 0)  # pidfd_open
+    if fd < 0:
+        raise OSError(ctypes.get_errno(), "pidfd_open failed")
+    return fd
+
+
+def _pidfd_signal(fd: int, sig: int) -> None:
+    native = getattr(signal, "pidfd_send_signal", None)
+    if native is not None:
+        native(fd, sig)
+        return
+    if platform.machine() not in ("x86_64", "aarch64"):
+        raise RuntimeError("this platform needs Python with pidfd support")
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.syscall(424, fd, sig, None, 0) != 0:  # pidfd_send_signal
+        raise OSError(ctypes.get_errno(), "pidfd_send_signal failed")
+
+
+def _signal(pid: int, sig: int) -> None:
+    try:
+        fd = _pidfd_open(pid)
+        try:
+            # Pin the identity before checking ancestry, so PID reuse cannot
+            # direct a cleanup signal at another request's process.
+            if pid in _descendants(os.getpid()):
+                _pidfd_signal(fd, sig)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        if exc.errno != errno.ESRCH:
+            raise
+
+
+def _reap() -> None:
+    while True:
+        try:
+            if os.waitpid(-1, os.WNOHANG)[0] == 0:
+                return
+        except ChildProcessError:
+            return
+
+
+def _drain_children(runner, grace: float) -> bool:
+    """Terminate all descendants and reap them; never acknowledge a live tree."""
+    had_children = bool(_descendants(os.getpid()) - {runner.pid})
+    deadline = time.monotonic() + grace
+    signaled: set[int] = set()
+    while True:
+        # multiprocessing owns waitpid for the immediate interpreter.
+        runner.join(timeout=0)
+        if runner.exitcode is not None:
+            _reap()
+        children = _descendants(os.getpid())
+        if not children:
+            runner.join(timeout=0)
+            return had_children
+        for pid in children:
+            if time.monotonic() >= deadline:
+                _signal(pid, signal.SIGKILL)
+            elif pid not in signaled:
+                _signal(pid, signal.SIGTERM)
+                signaled.add(pid)
+        # An uninterruptible process must keep its GPU reservation. Do not
+        # acknowledge cleanup until the complete tree has exited.
+        time.sleep(0.02)
+
+
+def _wait_for_tree_exit(runner, grace: float) -> None:
+    """Allow normal teardown, including adopted multiprocessing helpers."""
+    deadline = time.monotonic() + grace
+    while True:
+        runner.join(timeout=0)
+        if runner.exitcode is not None:
+            _reap()
+            if not _descendants(os.getpid()):
+                return
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(0.02)
+
+
+def _enable_child_subreaper() -> bool:
+    """Adopt orphaned descendants so supervision can confirm complete cleanup."""
+    return ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0

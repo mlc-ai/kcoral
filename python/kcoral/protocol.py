@@ -207,9 +207,14 @@ def expected_tensor_nbytes(dtype: str, shape: list[int]) -> int:
 def _parse_options(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValidationError("'options' must be an object")
-    _check_fields(value, {"timeout_seconds", "output_limit_bytes"}, set(), "options")
+    _check_fields(value, {"timeout_seconds", "output_limit_bytes", "gpu_count"}, set(), "options")
 
     options: dict[str, Any] = {}
+    if "gpu_count" in value:
+        count = value["gpu_count"]
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 8:
+            raise ValidationError("'gpu_count' must be an integer between 1 and 8")
+        options["gpu_count"] = count
     if "timeout_seconds" in value:
         timeout = value["timeout_seconds"]
         if (

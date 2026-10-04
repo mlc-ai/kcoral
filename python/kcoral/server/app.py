@@ -30,7 +30,7 @@ from kcoral.protocol import (
     parse_request,
 )
 from kcoral.runtime.pool import PoolBusy, SubmitOutcome, WorkerPool
-from kcoral.runtime.worker import WorkerCrashed, WorkerTimeout
+from kcoral.runtime.worker import WorkerCleanupError, WorkerCrashed, WorkerTimeout
 from kcoral.schemas import Program, ProgramOutcome
 from kcoral.server.cache import ByteCache, DiskFileCache, _CacheMiss, resolve_blobs
 from kcoral.server.events import EventLogger, _keep_program, _program_shape
@@ -338,6 +338,12 @@ def create_app(
                 headers=headers,
             )
 
+        gpu_count = program.options.get("gpu_count")
+        if gpu_count is not None and (config.device == "cpu" or gpu_count > len(set(config.gpus))):
+            finished(400, finish_reason="invalid_request", error_kind="parse")
+            return _error_response(
+                400, "parse", "gpu_count exceeds this GPU server's configured capacity", request_id
+            )
         program.max_return_bytes = config.max_response_bytes
         timeout = _resolve_timeout(program, config)
         program.options["output_limit_bytes"] = _resolve_output_limit(program, config)
@@ -372,6 +378,14 @@ def create_app(
             response = _error_response(503, "busy", "server saturated", request_id)
             response.headers["Retry-After"] = "1"
             return response
+        except WorkerCleanupError as exc:
+            finished(500, finish_reason="server_error", error_kind="engine", error_message=str(exc))
+            return _error_response(
+                500,
+                "engine",
+                "worker cleanup was not confirmed; affected devices unavailable",
+                request_id,
+            )
         except WorkerTimeout as exc:
             finished(
                 504,
@@ -420,6 +434,7 @@ def create_app(
                 lease_held_ms=exc.lease_held_ms,
                 worker_id=exc.worker_id or "",
                 finish_reason="crashed",
+                gpu_ids=getattr(exc, "gpu_ids", ()),
             )
             crash_exitcode, crash_tail = exc.exitcode, exc.output_tail
         finally:
@@ -460,6 +475,9 @@ def create_app(
             "stdout_truncated": execution.stdout_truncated,
             "stderr_truncated": execution.stderr_truncated,
         }
+        if outcome.gpu_ids:
+            payload["gpu_ids"] = list(outcome.gpu_ids)
+            payload["gpu_count"] = len(outcome.gpu_ids)
         payload["results"] = execution.results
         if execution.status != "COMPLETED":
             payload["error"] = execution.error

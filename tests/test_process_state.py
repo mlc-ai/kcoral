@@ -38,7 +38,7 @@ def runtime(monkeypatch):
     """A GPURuntime with the GPU-touching warm-up stubbed out."""
     monkeypatch.setitem(sys.modules, "tvm_ffi", types.SimpleNamespace())
     monkeypatch.setattr(gpu_runtime, "_warm_up", lambda: None)
-    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 0)
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
     return gpu_runtime.GPURuntime()
 

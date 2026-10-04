@@ -165,7 +165,9 @@ class Sandbox:
     def close(self) -> None:
         self._directory.cleanup()
 
-    def command(self, gpu_id: int | None, *, program: tuple[str, ...] | None = None) -> list[str]:
+    def command(
+        self, gpu_id: int | tuple[int, ...] | None, *, program: tuple[str, ...] | None = None
+    ) -> list[str]:
         command = [
             self.executable,
             "--unshare-all",
@@ -212,10 +214,13 @@ class Sandbox:
         for name in ("null", "zero", "random", "urandom", "full"):
             command += ["--dev-bind", f"/dev/{name}", f"/dev/{name}"]
         if gpu_id is not None:
-            minor = nvml.device_minor_number(gpu_id)
-            device_number = gpu_id if minor is None else minor
-            devices = [
-                Path(f"/dev/nvidia{device_number}"),
+            gpu_ids = (gpu_id,) if isinstance(gpu_id, int) else gpu_id
+            devices = []
+            for gpu in gpu_ids:
+                minor = nvml.device_minor_number(gpu)
+                device_number = gpu if minor is None else minor
+                devices.append(Path(f"/dev/nvidia{device_number}"))
+            devices += [
                 Path("/dev/nvidiactl"),
                 Path("/dev/nvidia-uvm"),
                 Path("/dev/nvidia-uvm-tools"),
@@ -269,7 +274,7 @@ class SandboxProcess:
     descendants that create new process groups.
     """
 
-    def __init__(self, sandbox: Sandbox, child, gpu_id: int | None) -> None:
+    def __init__(self, sandbox: Sandbox, child, gpu_id: int | tuple[int, ...] | None) -> None:
         self._output = bytearray()
         self._started = threading.Event()
         self._start_error: BaseException | None = None
@@ -348,6 +353,13 @@ class RequestState:
         self.threads = set(threading.enumerate())
         self.native_threads = set(os.listdir("/proc/self/task"))
 
+    def has_children(self) -> bool:
+        # /proc is private to this worker. PID 1 is bubblewrap's reaper.
+        own_pid = os.getpid()
+        return any(
+            p.name.isdigit() and int(p.name) not in (1, own_pid) for p in Path("/proc").iterdir()
+        )
+
     def finish(self) -> None:
         sys.path[:] = self.path
         for name, module in list(sys.modules.items()):
@@ -371,11 +383,7 @@ class RequestState:
         if threads := set(os.listdir("/proc/self/task")) - self.native_threads:
             names = [Path(f"/proc/self/task/{tid}/comm").read_text().strip() for tid in threads]
             raise RuntimeError(f"sandbox request left native threads running: {names}")
-        # /proc is private to this worker. PID 1 is bubblewrap's reaper.
-        own_pid = os.getpid()
-        if any(
-            p.name.isdigit() and int(p.name) not in (1, own_pid) for p in Path("/proc").iterdir()
-        ):
+        if self.has_children():
             raise RuntimeError("sandbox request left child processes running")
         for entry in Path("/proc/self/fd").iterdir():
             try:
