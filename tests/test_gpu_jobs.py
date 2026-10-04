@@ -83,9 +83,9 @@ def main():
     assert result.lease_held_ms > 0
 
 
-@pytest.mark.parametrize("name", ["multi_gpu_single_process", "multi_gpu_multiprocess"])
+@pytest.mark.parametrize("name", ["single_process", "multiprocess"])
 def test_examples_defer_execution_until_run(pool, name):
-    example = Path(__file__).parents[1] / "examples" / name / "main.py"
+    example = Path(__file__).parents[1] / "examples" / "multi_gpu" / f"{name}.py"
     program = runpy.run_path(str(example))["build_program"]()
     guard = Program()
     guard.upload(

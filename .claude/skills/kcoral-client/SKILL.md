@@ -264,9 +264,8 @@ full error table are in `docs/client-guide/protocol.md`.
   HTTP error table.
 - `docs/client-guide/writing-a-program.md` — narrative guide: server-side compile vs prebuilt
   library trade-offs, measurement guidance.
-- `examples/first_program/main.py` — runnable: upload a function and tensor, then
+- `examples/basics/first_program.py` — runnable: upload a function and tensor, then
   execute and return the result.
-- `examples/benchmark_kernel/main.py` — TIRx compilation and measurement.
-- `examples/remote_compile/main.py` — remote compilation in four languages.
-- `examples/library_upload/main.py` — client build and library upload.
-- `examples/cpu_compile_gpu_execute/main.py` — CPU build and GPU execution.
+- `examples/benchmark_kernel/benchmark_kernel.py` — CPU-only TIRx compilation and GPU measurement on one server.
+- `examples/cpu_compile/library_upload.py` — client build and library upload.
+- `examples/cpu_compile/cpu_compile_gpu_execute.py` — CPU build and GPU execution.

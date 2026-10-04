@@ -189,8 +189,8 @@ print(result.gpu_ids, result.stdout, result.stderr)
 Two standalone examples call NCCL, NVIDIA's collective communication library,
 and check the sum on every GPU:
 
-- [One process controlling all GPUs](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_single_process/main.py).
-- [One worker process per GPU](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_multiprocess/main.py).
+- [One process controlling all GPUs](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu/single_process.py).
+- [One worker process per GPU](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu/multiprocess.py).
 
 Both include the client Program. Use `--url URL --gpus 2` for remote execution,
 or `--local` for visible local GPUs. The execution machine needs PyTorch with
@@ -337,7 +337,7 @@ For complete programs, browse the repository's
 The tutorials below explain how to use these programs for common workflows.
 
 - [Benchmark a Kernel with KCoral](../tutorials/benchmark-kernel.md): follow
-  `examples/benchmark_kernel/main.py` to compile a kernel, check its output, and
+  `examples/benchmark_kernel/benchmark_kernel.py` to compile a kernel, check its output, and
   measure its execution time.
 - [Remote Compilation](../tutorials/remote-compilation.md): compile on a CPU
   server and run the resulting library on a GPU server.

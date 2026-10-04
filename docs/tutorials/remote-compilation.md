@@ -82,10 +82,10 @@ machine, or replace `127.0.0.1` with each server's reachable address:
 ```bash
 KCORAL_CPU_URL=http://127.0.0.1:8000 \
 KCORAL_GPU_URL=http://127.0.0.1:8001 \
-python examples/cpu_compile_gpu_execute/main.py
+python examples/cpu_compile/cpu_compile_gpu_execute.py
 ```
 
-{download}`Download the complete client <../../examples/cpu_compile_gpu_execute/main.py>`.
+{download}`Download the complete client <../../examples/cpu_compile/cpu_compile_gpu_execute.py>`.
 The downloaded file can be run directly with the same environment variables.
 If both servers run on the client machine, the defaults are
 `http://127.0.0.1:8000` for compilation and `http://127.0.0.1:8001` for execution.
@@ -134,7 +134,7 @@ it. The host function uses TVM FFI's `TensorView` parameters to access tensors.
 The uploaded compiler uses `tvm_ffi.cpp.build_inline` to supply the required
 includes and export wrapper.
 
-```{literalinclude} ../../examples/cpu_compile_gpu_execute/main.py
+```{literalinclude} ../../examples/cpu_compile/cpu_compile_gpu_execute.py
 :language: python
 :start-at: CUDA_SOURCE =
 :end-before: REFERENCE =
@@ -146,7 +146,7 @@ helpers uploaded by each program:
 <div class="code-example">
 <div class="code-example-preview">
 
-```{literalinclude} ../../examples/cpu_compile_gpu_execute/main.py
+```{literalinclude} ../../examples/cpu_compile/cpu_compile_gpu_execute.py
 :language: python
 :start-at: OPERATIONS =
 :end-before: def compile_cuda_binary
@@ -154,9 +154,9 @@ helpers uploaded by each program:
 
 </div>
 <details>
-<summary><span class="code-example-expand">Show full source</span><span class="code-example-collapse">Show less</span>: <code>cpu_compile_gpu_execute/main.py</code></summary>
+<summary><span class="code-example-expand">Show full source</span><span class="code-example-collapse">Show less</span>: <code>cpu_compile/cpu_compile_gpu_execute.py</code></summary>
 
-```{literalinclude} ../../examples/cpu_compile_gpu_execute/main.py
+```{literalinclude} ../../examples/cpu_compile/cpu_compile_gpu_execute.py
 :language: python
 :start-at: OPERATIONS =
 :end-before: def compile_program
@@ -169,7 +169,7 @@ The compilation program uploads that Python and the CUDA source file, selects
 `compile_cuda_binary` with `get_function(..., cpu_only=True)`, passes the file path
 and configuration (`functions=["add_one"]`, `arch`), and returns the library:
 
-```{literalinclude} ../../examples/cpu_compile_gpu_execute/main.py
+```{literalinclude} ../../examples/cpu_compile/cpu_compile_gpu_execute.py
 :language: python
 :pyobject: compile_program
 ```
@@ -187,7 +187,7 @@ measuring the kernel. Its program receives those bytes as its `library` argument
 them with `kind="library"`, selects the exported function, creates input and
 output tensors, and runs the kernel:
 
-```{literalinclude} ../../examples/cpu_compile_gpu_execute/main.py
+```{literalinclude} ../../examples/cpu_compile/cpu_compile_gpu_execute.py
 :language: python
 :pyobject: benchmark_program
 ```
@@ -204,7 +204,7 @@ The client's `main` function brings these steps together. It connects to both
 servers, runs the compilation program, and uses the returned library to run
 the benchmark program:
 
-```{literalinclude} ../../examples/cpu_compile_gpu_execute/main.py
+```{literalinclude} ../../examples/cpu_compile/cpu_compile_gpu_execute.py
 :language: python
 :pyobject: main
 ```

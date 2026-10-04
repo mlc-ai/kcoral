@@ -1,7 +1,7 @@
 """Run a library multi-GPU kernel in ONE process, locally or through KCoral.
 
-Local:  CUDA_VISIBLE_DEVICES=0,1 python examples/multi_gpu_single_process/main.py --local
-Remote: python examples/multi_gpu_single_process/main.py --url http://localhost:8000 --gpus 2
+Local:  CUDA_VISIBLE_DEVICES=0,1 python examples/multi_gpu/single_process.py --local
+Remote: python examples/multi_gpu/single_process.py --url http://localhost:8000 --gpus 2
 Server: kcoral --gpus 0,1 --workers-per-gpu 1
 
 This one file contains the kernel call, correctness checks, and client Program.

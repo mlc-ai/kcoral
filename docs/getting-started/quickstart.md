@@ -37,17 +37,17 @@ and leave this terminal running. The client will connect to
 
 ## Submit the program
 
-In a second terminal, save the following complete program as `main.py`:
+In a second terminal, save the following complete program as `first_program.py`:
 
-```{literalinclude} ../../examples/first_program/main.py
+```{literalinclude} ../../examples/basics/first_program.py
 :language: python
 ```
 
-You can also {download}`download main.py <../../examples/first_program/main.py>`.
+You can also {download}`download first_program.py <../../examples/basics/first_program.py>`.
 Run it from the directory where you saved it:
 
 ```bash
-KCORAL_URL=http://127.0.0.1:8000 python main.py
+KCORAL_URL=http://127.0.0.1:8000 python first_program.py
 ```
 
 Expected output:

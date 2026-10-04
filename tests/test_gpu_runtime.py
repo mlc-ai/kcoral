@@ -3,12 +3,13 @@
 import importlib.util
 import os
 import pathlib
+import runpy
 
 import pytest
 from support.programs import harness_call, python_call
 from support.runtime import UNSHARED_GPU, execute_for_test
 
-from kcoral.protocol import compute_blob_hash
+from kcoral.protocol import compute_blob_hash, parse_program
 from kcoral.schemas import FileUpload, GetFunction, Program, Ref, Return, Run, Upload
 
 pytestmark = pytest.mark.skipif(
@@ -309,6 +310,20 @@ def test_compile_correctness_and_benchmark():
     timing = decode_structural(outcome.results["timing"])
     assert check["passed"] and check["max_abs_err"] == 0
     assert timing["latency_ms_median"] > 0 and timing["repeat"] == 20
+
+
+def test_benchmark_example_compiles_off_gpu_then_checks_and_times_kernel():
+    rt = runtime()
+    example = pathlib.Path(__file__).parents[1] / "examples/benchmark_kernel/benchmark_kernel.py"
+    client_program = runpy.run_path(str(example))["build_program"](rt.target()["arch"])
+    program = parse_program({"instructions": client_program.instructions})
+    program.blob_bytes = client_program._blobs.copy()
+
+    outcome = execute_for_test(program, rt, UNSHARED_GPU)
+    assert outcome.status == "COMPLETED", outcome.error
+    report = decode_structural(outcome.results["report"])
+    assert report["check"]["passed"]
+    assert report["timing"]["latency_ms_median"] > 0
 
 
 CPU_REFERENCE = (

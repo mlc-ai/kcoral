@@ -58,6 +58,6 @@ arrays. `.remote()` raises an exception if execution fails; use `.execute()`
 to receive the full `ProgramResult`, including captured output and error details.
 
 See the [Python API](../python-api/index.rst) for details, or
-{download}`download a tensor example <../../examples/remote_function/main.py>`.
+{download}`download a tensor example <../../examples/basics/remote_function.py>`.
 For more control over individual instructions, see
 [Write a client program](writing-a-program.md).
