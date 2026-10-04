@@ -353,6 +353,13 @@ class RequestState:
         self.threads = set(threading.enumerate())
         self.native_threads = set(os.listdir("/proc/self/task"))
 
+    def has_children(self) -> bool:
+        # /proc is private to this worker. PID 1 is bubblewrap's reaper.
+        own_pid = os.getpid()
+        return any(
+            p.name.isdigit() and int(p.name) not in (1, own_pid) for p in Path("/proc").iterdir()
+        )
+
     def finish(self) -> None:
         sys.path[:] = self.path
         for name, module in list(sys.modules.items()):
@@ -376,11 +383,7 @@ class RequestState:
         if threads := set(os.listdir("/proc/self/task")) - self.native_threads:
             names = [Path(f"/proc/self/task/{tid}/comm").read_text().strip() for tid in threads]
             raise RuntimeError(f"sandbox request left native threads running: {names}")
-        # /proc is private to this worker. PID 1 is bubblewrap's reaper.
-        own_pid = os.getpid()
-        if any(
-            p.name.isdigit() and int(p.name) not in (1, own_pid) for p in Path("/proc").iterdir()
-        ):
+        if self.has_children():
             raise RuntimeError("sandbox request left child processes running")
         for entry in Path("/proc/self/fd").iterdir():
             try:

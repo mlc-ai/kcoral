@@ -1,10 +1,12 @@
 """Real process supervision and scheduling, using a GPU-free execution runtime."""
 
 import json
+import os
 import runpy
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -490,3 +492,133 @@ def test_unconfirmed_transient_cleanup_is_retried_at_shutdown(pool, monkeypatch,
     finally:
         for worker in workers:
             worker.close()
+
+
+@pytest.mark.parametrize("count", [None, 2])
+@pytest.mark.parametrize("ending", ["crash", "supervisor_error", "inherited_pipe"])
+def test_crashed_cpu_phase_waits_for_lease_before_draining_descendants(
+    pool, tmp_path, monkeypatch, count, ending
+):
+    from kcoral.schemas import GetFunction, Ref, Run
+
+    marker, resume, terminated = (tmp_path / name for name in ("child.pid", "resume", "terminated"))
+    workers = []
+    original_run = Worker.run
+
+    def run(worker, *args):
+        workers.append(worker)
+        return original_run(worker, *args)
+
+    monkeypatch.setattr(Worker, "run", run)
+    child = f"""
+import os, signal, time
+from pathlib import Path
+def terminate(*args):
+    Path({str(terminated)!r}).touch()
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, terminate)
+Path({str(marker)!r}).write_text(str(os.getpid()))
+while True:
+    time.sleep(0.01)
+"""
+    launch = (
+        f"if os.fork() == 0:\n        exec({child!r}, {{}})"
+        if ending == "inherited_pipe"
+        else f"subprocess.Popen([sys.executable, '-c', {child!r}], start_new_session=True)"
+    )
+    ending_source = "time.sleep(30)" if ending == "supervisor_error" else "os._exit(17)"
+    program = build(
+        f"""
+def main():
+    import os, subprocess, sys, time
+    from pathlib import Path
+    {launch}
+    while not Path({str(marker)!r}).exists():
+        time.sleep(0.01)
+    return 42
+
+def cpu_phase():
+    import os, time
+    from pathlib import Path
+    while not Path({str(resume)!r}).exists():
+        time.sleep(0.01)
+    {ending_source}
+""",
+        count=count,
+    )
+    program.instructions.extend(
+        [
+            GetFunction("cpu", Ref("module"), "cpu_phase", cpu_only=True),
+            Run("crashed", Ref("cpu"), []),
+        ]
+    )
+    with ThreadPoolExecutor(1) as executor:
+        pending = executor.submit(pool.submit, program, 10)
+        held = ()
+        try:
+            wait_for(marker.exists)
+            held, _ = pool._leases.acquire_count(4, "peer")
+            if ending == "supervisor_error":
+                workers[0]._control.send("invalid command")
+            resume.touch()
+            wait_for(lambda: any(pool._leases.depth(gpu) == 2 for gpu in held))
+            # The peer owns every device while the crashed worker waits. Give
+            # the old supervisor enough time to expose an unauthorized drain.
+            time.sleep(0.3)
+            assert not terminated.exists(), "descendant teardown overlapped the peer's lease"
+            assert Path(f"/proc/{marker.read_text()}").exists()
+        finally:
+            resume.touch()
+            pool._leases.release_many(held, "peer")
+        with pytest.raises(WorkerCrashed) as error:
+            pending.result(timeout=10)
+        assert error.value.exitcode == (-15 if ending == "supervisor_error" else 17)
+    assert terminated.exists()
+    assert not Path(f"/proc/{marker.read_text()}").exists()
+
+
+@dataclass
+class DelayedJobFactory:
+    phase: str
+    marker: str
+    crash: bool = False
+
+    def pause(self, phase):
+        if phase == self.phase and "," in os.environ.get("CUDA_VISIBLE_DEVICES", ""):
+            Path(self.marker).write_text(str(os.getpid()))
+            if self.crash:
+                os._exit(17)
+            time.sleep(30)
+
+    def prepare(self):
+        self.pause("prepare")
+        return self
+
+    def __call__(self):
+        self.pause("initialize")
+        return fake_runtime_factory()
+
+
+@pytest.mark.parametrize("phase", ["prepare", "initialize"])
+@pytest.mark.parametrize("crash", [False, True])
+def test_job_startup_timeout_and_crash_have_distinct_http_statuses(
+    tmp_path, monkeypatch, phase, crash
+):
+    monkeypatch.setattr("kcoral.worker.nvml.device_uuid", lambda _: None)
+    marker = tmp_path / "startup.pid"
+    config = ServerConfig(gpus=[0, 2], workers_per_gpu=1, sandbox="none")
+    app = create_app(config, runtime_factory=DelayedJobFactory(phase, str(marker), crash))
+    with TestClient(app) as client:
+        body = {
+            "instructions": [{"op": "upload", "id": "m", "kind": "module", "source": "pass"}],
+            "options": {"gpu_count": 2, "timeout_seconds": 1},
+        }
+        response = client.post(
+            "/execute", files={"program": (None, json.dumps(body), "application/json")}
+        )
+        assert marker.exists()
+        assert response.status_code == (500 if crash else 504), response.text
+        assert response.json()["error"]["kind"] == ("engine" if crash else "timeout")
+        assert not Path(f"/proc/{marker.read_text()}").exists()
+        assert not app.state.pool._transient_workers
+        assert all(app.state.pool._leases.depth(gpu) == 0 for gpu in (0, 2))

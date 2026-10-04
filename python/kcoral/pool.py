@@ -240,7 +240,6 @@ class WorkerPool:
                     worker = Worker(
                         gpu_ids,
                         self._factory,
-                        spawn_timeout=min(60, timeout),
                         max_requests=1,
                         termination_grace_seconds=self._termination_grace_seconds,
                         events=self._events,
@@ -253,7 +252,7 @@ class WorkerPool:
                         self._transient_workers.add(worker)
                         if self._closing.is_set():
                             worker.begin_shutdown()
-                    worker._spawn()
+                    worker._spawn(timeout=timeout)
                     worker.request_id = request_id
                 except WorkerCleanupError:
                     self._leases.quarantine(gpu_ids)

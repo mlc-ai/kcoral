@@ -566,6 +566,32 @@ def main():
     assert not worker._proc.is_alive()
 
 
+@pytest.mark.parametrize("leave_thread", [False, True])
+def test_surviving_sandbox_children_fail_the_request(worker, leave_thread):
+    root = worker._sandbox.root
+    result = worker.run(
+        parsed(
+            """
+def main(leave_thread):
+    import subprocess, sys, threading, time
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                     start_new_session=True)
+    if leave_thread:
+        threading.Thread(target=lambda: time.sleep(60), daemon=True).start()
+    return 42
+""",
+            [leave_thread],
+        ),
+        10,
+        NoopLeases(),
+    )
+    assert result.execution.status == "FAILED"
+    assert "background processes" in result.execution.error["message"]
+    assert result.retire_reason == "sandbox_cleanup"
+    assert not worker._proc.is_alive()
+    assert not root.exists()
+
+
 @pytest.mark.parametrize("status", ["COMPLETED", "FAILED"])
 def test_parent_workspace_cleanup_preserves_program_outcome(monkeypatch, status):
     worker = Worker.__new__(Worker)

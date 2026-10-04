@@ -195,6 +195,10 @@ def worker_main(
         response = {"__outcome__": outcome, "__retire_reason__": retire_reason}
         if sandbox_cleanup_error is not None:
             response["__sandbox_cleanup_error__"] = sandbox_cleanup_error
+        if request_state is not None:
+            # Thread/file cleanup errors can be reported before the child check.
+            # Track live children independently: namespace exit will kill them.
+            response["__sandbox_children__"] = request_state.has_children()
         conn.send(response)
         if retire_reason is not None:
             return
@@ -294,8 +298,9 @@ class Worker:
     def _lease_key(self):
         return self.gpu_ids if len(self.gpu_ids) > 1 else self.gpu_id
 
-    def _spawn(self) -> None:
+    def _spawn(self, timeout: float | None = None) -> None:
         """Start and fully initialize a worker before it becomes available."""
+        self._startup_deadline = None if timeout is None else time.monotonic() + timeout
         try:
             self._start_process()
             self._initialize_process()
@@ -303,6 +308,26 @@ class Worker:
             self._kill()
             self._log_failure("startup", exc)
             raise
+        finally:
+            self._startup_deadline = None
+
+    def _startup_wait_seconds(self) -> float:
+        deadline = getattr(self, "_startup_deadline", None)
+        return (
+            self._spawn_timeout
+            if deadline is None
+            else min(self._spawn_timeout, max(0, deadline - time.monotonic()))
+        )
+
+    def _raise_startup_timeout(self, phase: str) -> None:
+        deadline = getattr(self, "_startup_deadline", None)
+        error_type = (
+            WorkerTimeout
+            if deadline is not None and time.monotonic() >= deadline
+            else WorkerCrashed
+        )
+        self._kill()
+        raise error_type(f"{self._description()} timed out during {phase}")
 
     def _log_failure(self, phase: str, exc: BaseException) -> None:
         self._events.emit(
@@ -355,9 +380,8 @@ class Worker:
             self.generation += 1
             self.pid = self._proc.pid
         if self._control is not None:
-            if not control.poll(self._spawn_timeout):
-                self._kill()
-                raise WorkerCrashed("worker supervisor timed out during startup")
+            if not control.poll(self._startup_wait_seconds()):
+                self._raise_startup_timeout("supervisor startup")
             status = control.recv()
             if "pid" not in status:
                 raise WorkerCleanupError(f"worker supervisor startup failed: {status}")
@@ -417,7 +441,7 @@ class Worker:
 
     def _await_startup_message(self, phase: str):
         try:
-            deadline = time.monotonic() + self._spawn_timeout
+            deadline = time.monotonic() + self._startup_wait_seconds()
             ready = False
             while time.monotonic() < deadline:
                 if self._closing.is_set():
@@ -435,9 +459,26 @@ class Worker:
             )
             raise WorkerCrashed(f"{self._description()} failed during {phase}: {details}") from exc
         if not ready:
-            self._kill()
-            raise WorkerCrashed(f"{self._description()} timed out during {phase}")
+            self._raise_startup_timeout(phase)
         return msg
+
+    def _poll_response(self, timeout: float) -> bool:
+        control = getattr(self, "_control", None)
+        if control is None:
+            return self._conn.poll(timeout)
+        ready = wait([self._conn, control], timeout=max(0, timeout))
+        if self._conn in ready:
+            return True
+        if control in ready:
+            try:
+                status = control.recv()
+            except _WORKER_PIPE_FAILURES as exc:
+                raise WorkerCleanupError("worker supervisor lost before cleanup completed") from exc
+            # Descendants may have inherited the result pipe, so its EOF is not
+            # sufficient to detect interpreter death. The crash handler obtains
+            # the lease before authorizing the supervisor to drain that tree.
+            raise EOFError(f"worker supervisor requested cleanup: {status}")
+        return False
 
     def run(self, program, timeout: float, leases: GPULeases | NoopLeases) -> WorkerResult:
         """Run a program, servicing its lease requests; kill+respawn on timeout or
@@ -493,7 +534,7 @@ class Worker:
             self._conn.send((program, workspace_dir))
             while True:
                 waited_from = time.monotonic()
-                if not self._conn.poll(remaining):  # no answer by the deadline -> hung
+                if not self._poll_response(remaining):  # no answer by the deadline -> hung
                     timed_out = WorkerTimeout(
                         f"program exceeded {timeout}s in {self._description()}"
                     )
@@ -518,7 +559,9 @@ class Worker:
                             self._abandon_and_respawn(leases, "timeout")
                             raise WorkerTimeout("worker teardown exceeded the execution timeout")
                         if (
-                            status["orphaned"] or status["exitcode"] != 0
+                            status["orphaned"]
+                            or message.get("__sandbox_children__", False)
+                            or status["exitcode"] != 0
                         ) and outcome.status == "COMPLETED":
                             outcome.status = "FAILED"
                             instruction = (
@@ -692,6 +735,13 @@ class Worker:
             self._exit_status = {"exitcode": self._proc.exitcode, "orphaned": False}
             return self._exit_status
         deadline = None if timeout is None else time.monotonic() + timeout
+        if self._exit_status is None:
+            try:
+                # A retiring request still owns its devices. Permit natural
+                # exit followed by descendant cleanup under that same lease.
+                self._control.send("finish")
+            except _WORKER_PIPE_FAILURES:
+                pass  # A terminate request may already have produced the acknowledgement.
         while self._exit_status is None:
             try:
                 remaining = None if deadline is None else max(0, deadline - time.monotonic())
@@ -702,6 +752,8 @@ class Worker:
                 raise WorkerCleanupError("worker supervisor lost before cleanup completed") from exc
             if "pid" in status:
                 self.pid = status["pid"]
+                continue
+            if "__cleanup__" in status:
                 continue
             if "exitcode" not in status:
                 raise WorkerCleanupError(f"worker cleanup failed: {status}")
@@ -911,14 +963,25 @@ def _supervise_worker(control, conn, device, factory, max_requests, capture_dir,
     child_inspection.close()
     conn.close()
     terminating = False
+    cleanup_authorized = False
     inspecting = True
+
+    def receive_command():
+        nonlocal cleanup_authorized, terminating
+        command = control.recv()
+        if command not in ("finish", "terminate"):
+            raise ValueError(f"unknown worker supervisor command: {command!r}")
+        cleanup_authorized = True
+        terminating = command == "terminate"
+
     try:
         control.send({"pid": runner.pid})
         while runner.is_alive():
             ready = wait([control, inspection] if inspecting else [control], timeout=0.02)
             if control in ready:
-                terminating = True
-                break  # terminate or parent disconnected
+                receive_command()
+                if terminating:
+                    break
             if inspection in ready:
                 try:
                     inspection.recv()
@@ -933,21 +996,27 @@ def _supervise_worker(control, conn, device, factory, max_requests, capture_dir,
                     # pipe; keep waiting for its normal exit or termination.
                     inspecting = False
             runner.join(timeout=0)
-        if linux:
-            if not terminating:
-                _wait_for_tree_exit(runner, grace)
-            orphaned = _drain_children(runner, grace)
-        else:
-            _terminate_process_tree(runner, grace)
-            orphaned = False
-        control.send({"exitcode": runner.exitcode, "orphaned": orphaned})
     finally:
-        if linux:
-            _drain_children(runner, grace)
-        elif runner.is_alive():
-            _terminate_process_tree(runner, grace)
-        control.close()
-        inspection.close()
+        try:
+            if not cleanup_authorized:
+                # Crashes and supervisor errors can happen during an off-lease
+                # CPU phase. Even this finally path must wait for the parent to
+                # reacquire the devices before terminating any descendants.
+                control.send({"__cleanup__": "required", "interpreter_exitcode": runner.exitcode})
+                receive_command()
+            if linux:
+                if not terminating:
+                    _wait_for_tree_exit(runner, grace)
+                orphaned = _drain_children(runner, grace)
+            else:
+                _terminate_process_tree(runner, grace)
+                orphaned = False
+            control.send({"exitcode": runner.exitcode, "orphaned": orphaned})
+        finally:
+            # Losing the control pipe before a grant leaves cleanup unconfirmed;
+            # the parent quarantines the devices instead of authorizing reuse.
+            control.close()
+            inspection.close()
 
 
 def _sandbox_main() -> None:
