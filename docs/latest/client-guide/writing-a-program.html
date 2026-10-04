@@ -492,6 +492,32 @@ They describe the request as a whole; use the measurements from your benchmark
 harness or profiler to assess the kernel’s execution time.</p>
 </section>
 </section>
+<section id="run-a-multi-gpu-program">
+<h2>Run a multi-GPU program<a class="headerlink" href="#run-a-multi-gpu-program" title="Link to this heading">¶</a></h2>
+<p>Pass <code class="docutils literal notranslate"><span class="pre">gpu_count=N</span></code> to run the program once with 1–8 GPUs on one server.
+Upload definitions and files, then invoke the entry point with <code class="docutils literal notranslate"><span class="pre">run</span></code>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">fn</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"run_kernel"</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"run_local"</span><span class="p">)</span>
+<span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"execution"</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="n">fn</span><span class="p">)</span>
+<span class="n">program</span><span class="o">.</span><span class="n">return_file</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="s2">"report"</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="s2">"result.json"</span><span class="p">)</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">program</span><span class="p">,</span> <span class="n">gpu_count</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">120</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">gpu_ids</span><span class="p">,</span> <span class="n">result</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span> <span class="n">result</span><span class="o">.</span><span class="n">stderr</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Two standalone examples call NCCL, NVIDIA’s collective communication library,
+and check the sum on every GPU:</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py">One process controlling all GPUs</a>.</p></li>
+<li><p><a class="reference external" href="https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel_multiprocess.py">One worker process per GPU</a>.</p></li>
+</ul>
+<p>Both include the client Program. Use <code class="docutils literal notranslate"><span class="pre">--url</span> <span class="pre">URL</span> <span class="pre">--gpus</span> <span class="pre">2</span></code> for remote execution,
+or <code class="docutils literal notranslate"><span class="pre">--local</span></code> for visible local GPUs. The execution machine needs PyTorch with
+NCCL support. Uploading only loads definitions; <code class="docutils literal notranslate"><span class="pre">run</span></code> starts the computation.
+For <code class="docutils literal notranslate"><span class="pre">multiprocessing.spawn</span></code>, workers must come from an importable <code class="docutils literal notranslate"><span class="pre">.py</span></code> file,
+as in the second example. The script creates its own processes and communication
+group. A <code class="docutils literal notranslate"><span class="pre">cpu_only</span></code> call releases the entire GPU set after synchronization; later
+GPU instructions reacquire the same set. See the <a class="reference internal" href="protocol.html#multi-gpu-execution"><span class="std std-ref">execution protocol</span></a>
+for device visibility, cleanup, and direct-server requirements.</p>
+</section>
 <section id="work-with-tensors-and-files">
 <h2>Work with tensors and files<a class="headerlink" href="#work-with-tensors-and-files" title="Link to this heading">¶</a></h2>
 <p>A program may need tensor inputs or files for its code to read, and it may
@@ -679,6 +705,7 @@ method signatures or the underlying request and response formats.</p></li>
 <li><a class="reference internal" href="#read-results">Read results</a></li>
 </ul>
 </li>
+<li><a class="reference internal" href="#run-a-multi-gpu-program">Run a multi-GPU program</a></li>
 <li><a class="reference internal" href="#work-with-tensors-and-files">Work with tensors and files</a><ul>
 <li><a class="reference internal" href="#create-and-upload-tensors">Create and upload tensors</a></li>
 <li><a class="reference internal" href="#upload-files-and-folders">Upload files and folders</a></li>
@@ -697,7 +724,7 @@ method signatures or the underlying request and response formats.</p></li>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=03e946e1"></script>
+</div><script src="../_static/documentation_options.js?v=662ba41e"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

@@ -400,7 +400,7 @@ duplicate or malformed part names, wrong content types and hashes that do not
 match the supplied bytes. JSON objects reject duplicate keys, unknown fields,
 and non-finite numbers such as NaN and Infinity.</p>
 <p id="options"><strong>Options</strong></p>
-<p>Both <code class="docutils literal notranslate"><span class="pre">options</span></code> fields are optional. Values above either maximum are clamped to it.</p>
+<p>All <code class="docutils literal notranslate"><span class="pre">options</span></code> fields are optional. Timeout and output limits above their maxima are clamped.</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -411,12 +411,17 @@ and non-finite numbers such as NaN and Infinity.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">timeout_seconds</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">gpu_count</span></code></p></td>
+<td><p>integer</p></td>
+<td><p>omitted</p></td>
+<td><p>Use 1–8 GPUs with instruction-level leasing; omission uses a single GPU</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">timeout_seconds</span></code></p></td>
 <td><p>number</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
 <td><p>Worker execution deadline; maximum <code class="docutils literal notranslate"><span class="pre">900</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">output_limit_bytes</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">output_limit_bytes</span></code></p></td>
 <td><p>integer</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1048576</span></code></p></td>
 <td><p>Maximum bytes returned for each of stdout and stderr; maximum <code class="docutils literal notranslate"><span class="pre">16777216</span></code>; <code class="docutils literal notranslate"><span class="pre">0</span></code> disables capture</p></td>
@@ -1021,6 +1026,33 @@ instruction fails.</p>
 </div>
 </section>
 </section>
+<section id="multi-gpu-execution">
+<h2>Multi-GPU execution<a class="headerlink" href="#multi-gpu-execution" title="Link to this heading">¶</a></h2>
+<p>Set <code class="docutils literal notranslate"><span class="pre">options.gpu_count</span></code> to an integer from 1 through 8 to run the program
+<strong>once</strong> on that many GPUs. <code class="docutils literal notranslate"><span class="pre">CUDA_VISIBLE_DEVICES</span></code> exposes the assigned set as
+logical devices <code class="docutils literal notranslate"><span class="pre">0</span></code> through <code class="docutils literal notranslate"><span class="pre">gpu_count</span> <span class="pre">-</span> <span class="pre">1</span></code>; the response’s <code class="docutils literal notranslate"><span class="pre">gpu_ids</span></code> reports
+physical devices. The script owns process creation, communication, and
+synchronization. KCoral does not broadcast instructions or create a communication
+group. Registers belong to the request’s interpreter.</p>
+<p>Single- and multi-GPU programs use the same worker and instruction-level leasing.
+Before a GPU instruction, the worker acquires its complete device set atomically.
+Before <code class="docutils literal notranslate"><span class="pre">cpu_only</span></code> execution it synchronizes all devices and releases the set;
+a later GPU instruction reacquires the <strong>same</strong> devices. Waiting for devices
+does not count against the execution timeout. Releasing a lease permits other
+requests to use the GPUs; it does not move or discard this program’s tensors.
+GPU subprocesses must finish before their <code class="docutils literal notranslate"><span class="pre">run</span></code> returns. Do not mark a GPU
+launcher CPU-only.</p>
+<p>On timeout or crash, the worker cleans up its process tree before abandoning
+its leases. Unverified cleanup makes the affected devices unavailable. Normal
+interpreter teardown remains within the execution deadline; leftover descendants
+are terminated and fail the request. Shutdown cancels queued allocations and
+drains running requests.</p>
+<p>Explicit <code class="docutils literal notranslate"><span class="pre">gpu_count</span></code> requests use a fresh worker with the assigned set;
+omitting the option uses the configured single-GPU workers. This option requires
+Linux and a direct connection to a GPU server; the router does not select by GPU
+count. Counts exceeding server capacity, or requests to a CPU server, fail with
+HTTP 400. See <a class="reference internal" href="writing-a-program.html#run-a-multi-gpu-program"><span class="std std-ref">multi-GPU examples</span></a>.</p>
+</section>
 <section id="upload-caching">
 <h2>Upload Caching<a class="headerlink" href="#upload-caching" title="Link to this heading">¶</a></h2>
 <div class="table-wrapper colwidths-auto docutils container">
@@ -1186,6 +1218,16 @@ body described under <a class="reference internal" href="#errors">Errors</a> ins
 <td><p>number</p></td>
 <td><p>run</p></td>
 <td><p>Holding the GPU — the request’s GPU time</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">gpu_ids</span></code></p></td>
+<td><p>array of integers</p></td>
+<td><p>GPU job</p></td>
+<td><p>Allocated physical devices, in logical-device order</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">gpu_count</span></code></p></td>
+<td><p>integer</p></td>
+<td><p>GPU job</p></td>
+<td><p>Number of allocated devices</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">results</span></code></p></td>
 <td><p>object</p></td>
@@ -1599,6 +1641,7 @@ The same upload/get_function/run shape supports GPU harnesses and compiler tools
 <li><a class="reference internal" href="#return">return</a></li>
 </ul>
 </li>
+<li><a class="reference internal" href="#multi-gpu-execution">Multi-GPU execution</a></li>
 <li><a class="reference internal" href="#upload-caching">Upload Caching</a></li>
 <li><a class="reference internal" href="#response">Response</a><ul>
 <li><a class="reference internal" href="#value-encoding">Value encoding</a></li>
@@ -1617,7 +1660,7 @@ The same upload/get_function/run shape supports GPU harnesses and compiler tools
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=03e946e1"></script>
+</div><script src="../_static/documentation_options.js?v=662ba41e"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

@@ -173,6 +173,34 @@ These metrics can help distinguish a busy server or GPU from a slow program.
 They describe the request as a whole; use the measurements from your benchmark
 harness or profiler to assess the kernel's execution time.
 
+## Run a multi-GPU program
+
+Pass `gpu_count=N` to run the program once with 1–8 GPUs on one server.
+Upload definitions and files, then invoke the entry point with `run`:
+
+```python
+fn = program.get_function(id="run_kernel", module=module, name="run_local")
+program.run(id="execution", fn=fn)
+program.return_file(key="report", path="result.json")
+result = client.execute(program, gpu_count=2, timeout_seconds=120)
+print(result.gpu_ids, result.stdout, result.stderr)
+```
+
+Two standalone examples call NCCL, NVIDIA's collective communication library,
+and check the sum on every GPU:
+
+- [One process controlling all GPUs](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py).
+- [One worker process per GPU](https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel_multiprocess.py).
+
+Both include the client Program. Use `--url URL --gpus 2` for remote execution,
+or `--local` for visible local GPUs. The execution machine needs PyTorch with
+NCCL support. Uploading only loads definitions; `run` starts the computation.
+For `multiprocessing.spawn`, workers must come from an importable `.py` file,
+as in the second example. The script creates its own processes and communication
+group. A `cpu_only` call releases the entire GPU set after synchronization; later
+GPU instructions reacquire the same set. See the [execution protocol](protocol.md#multi-gpu-execution)
+for device visibility, cleanup, and direct-server requirements.
+
 ## Work with tensors and files
 
 A program may need tensor inputs or files for its code to read, and it may
