@@ -43,10 +43,12 @@ def compile_kernel(arch):
             os.environ.pop(key, None)
         else:
             os.environ[key] = previous
-    return "add_one.so"
+    # Keep the executable alive: destroying its CUDA module can call CUDA too.
+    return compiled, "add_one.so"
 
 
-def evaluate(library, src):
+def evaluate(compilation, src):
+    _executable, library = compilation
     module = tvm_ffi.load_module(Path(library).resolve())
     compiled = module["add_one"]
     dst = torch.empty_like(src)
@@ -61,10 +63,10 @@ def build_program(arch: str) -> Program:
     module = program.upload(kind="module", source=SOURCE)
     compile_kernel = program.get_function(module=module, name="compile_kernel", cpu_only=True)
     evaluate = program.get_function(module=module, name="evaluate")
-    library = program.run(fn=compile_kernel, args=[arch])
+    compilation = program.run(fn=compile_kernel, args=[arch])
     values = np.arange(256, dtype=np.float32)
     src = program.upload(kind="tensor", value=values)
-    report = program.run(fn=evaluate, args=[library, src])
+    report = program.run(fn=evaluate, args=[compilation, src])
     program.return_(key="report", value=report)
     return program
 

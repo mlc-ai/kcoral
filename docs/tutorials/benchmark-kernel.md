@@ -59,7 +59,7 @@ The client reads the GPU architecture from `Client.target()` and uploads the
 kernel with separate `compile_kernel` and `evaluate` functions. It selects
 `compile_kernel` with `cpu_only=True`, so compilation releases the GPU for
 other requests. It then uploads the input tensor and calls `evaluate` with
-the compiled library's path. This call keeps GPU access, loads the library, allocates an output tensor,
+the compilation result. This call keeps GPU access, loads the library, allocates an output tensor,
 and checks its result against `src + 1`. It only benchmarks the kernel after
 that check passes. On success, the script prints
 `{'passed': True}` followed by the timing report; otherwise it reports the
@@ -75,8 +75,10 @@ Inside `compile_kernel`, `add_one.specialize(N=256)` supplies the kernel's
 compile-time size. `tvm.compile` uses an explicit CUDA target architecture and
 the `nvcc` subprocess backend, so compilation does not initialize CUDA in the
 worker. It exports the compiled library as
-`add_one.so` in the request's workspace and returns its path. The later GPU
-call loads that library without repeating compilation.
+`add_one.so` in the request's workspace and returns the executable together
+with its path. Keeping the executable alive defers CUDA module cleanup until
+GPU access is available. The later GPU call loads that library without
+repeating compilation.
 
 Inside `evaluate`, `benchmark(compiled, src, dst)` measures GPU activity with
 CUPTI. Keeping compilation and evaluation in separate calls lets the server
