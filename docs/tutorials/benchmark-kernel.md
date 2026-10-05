@@ -16,8 +16,9 @@ program structure for other kernel languages.
 On the server machine, install the
 [GPU worker environment](../getting-started/installation.md#server-system-requirements)
 and [launch the server](../server-guide/launch-the-server.md). This example
-uses TIRx, TVM's Python-embedded kernel language, so the server needs TVM for
-compilation, PyTorch for tensors and correctness checks, and CUPTI for measurement.
+uses TIRx, TVM's Python-embedded kernel language, so the server needs TVM and
+the CUDA toolkit's `nvcc` compiler for CPU compilation, PyTorch for tensors and
+correctness checks, and CUPTI for measurement.
 
 On the client machine, install the
 [KCoral client](../getting-started/installation.md#install-the-client), which
@@ -71,8 +72,9 @@ abridged here and the latency depending on your GPU:
 ```
 
 Inside `compile_kernel`, `add_one.specialize(N=256)` supplies the kernel's
-compile-time size. `tvm.compile` uses an explicit CUDA target architecture,
-so the compiler does not query the GPU. It exports the compiled library as
+compile-time size. `tvm.compile` uses an explicit CUDA target architecture and
+the `nvcc` subprocess backend, so compilation does not initialize CUDA in the
+worker. It exports the compiled library as
 `add_one.so` in the request's workspace and returns its path. The later GPU
 call loads that library without repeating compilation.
 

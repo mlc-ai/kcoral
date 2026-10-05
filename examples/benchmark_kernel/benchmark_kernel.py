@@ -9,6 +9,7 @@ from kcoral import Client, Program
 SOURCE = r"""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import torch
@@ -29,9 +30,19 @@ def compile_kernel(arch):
     # An explicit architecture avoids querying the GPU during compilation.
     target = tvm.target.Target({"kind": "cuda", "arch": arch})
     module = tvm.IRModule({"add_one": add_one.specialize(N=256)})
-    with target:
-        compiled = tvm.compile(module, target=target, tir_pipeline="tirx")
-    compiled.export_library("add_one.so")
+    # NVRTC can initialize CUDA; use the CPU-only nvcc subprocess instead.
+    key = "TVM_CUDA_COMPILE_MODE"
+    previous = os.environ.get(key)
+    os.environ[key] = "nvcc"
+    try:
+        with target:
+            compiled = tvm.compile(module, target=target, tir_pipeline="tirx")
+        compiled.export_library("add_one.so")
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
     return "add_one.so"
 
 
