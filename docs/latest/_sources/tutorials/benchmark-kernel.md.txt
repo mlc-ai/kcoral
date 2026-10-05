@@ -8,8 +8,9 @@ correctness checks, and measurement happen on the server.
 
 The example uses TVM to compile a TIRx kernel on the server's CPU, then
 KCoral's {py:func}`~kcoral.builtins.benchmark` helper to measure it on the GPU.
-You can substitute your own compiler or measurement code and use the same
-program structure for other kernel languages.
+The same compile, check, and benchmark workflow also applies to other kernel
+languages, including CUDA C and CuTeDSL: substitute the kernel source and
+compiler calls while keeping the program structure.
 
 ## Prerequisites
 

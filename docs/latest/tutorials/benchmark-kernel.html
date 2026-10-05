@@ -329,8 +329,9 @@ and retrieve a timing report. The client describes the experiment; compilation,
 correctness checks, and measurement happen on the server.</p>
 <p>The example uses TVM to compile a TIRx kernel on the server’s CPU, then
 KCoral’s <a class="reference internal" href="../python-api/index.html#kcoral.builtins.benchmark" title="kcoral.builtins.benchmark"><code class="xref py py-func docutils literal notranslate"><span class="pre">benchmark()</span></code></a> helper to measure it on the GPU.
-You can substitute your own compiler or measurement code and use the same
-program structure for other kernel languages.</p>
+The same compile, check, and benchmark workflow also applies to other kernel
+languages, including CUDA C and CuTeDSL: substitute the kernel source and
+compiler calls while keeping the program structure.</p>
 <section id="prerequisites">
 <h2>Prerequisites<a class="headerlink" href="#prerequisites" title="Link to this heading">¶</a></h2>
 <p>On the server machine, install the
@@ -725,7 +726,7 @@ They run the tool on the server and retrieve its reports for you.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=a58bc63e"></script>
+</div><script src="../_static/documentation_options.js?v=d905a785"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
