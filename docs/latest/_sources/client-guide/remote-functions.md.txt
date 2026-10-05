@@ -61,3 +61,5 @@ See the [Python API](../python-api/index.rst) for details, or
 {download}`download a tensor example <../../examples/basics/remote_function.py>`.
 For more control over individual instructions, see
 [Write a client program](writing-a-program.md).
+
+This API is inspired by [Modal API](https://modal.com/docs/guide/functions). We appreciate their work on remote GPU execution.
