@@ -30,9 +30,7 @@ The generated layout preserves the versioned documentation URLs:
 Homepage documentation links go directly to `/docs/latest/`. The `/docs/` alias
 retains its meta-refresh redirect and works without JavaScript.
 
-The Documentation workflow builds pull requests and uploads a `documentation-html`
-artifact for review. Download it and serve the extracted directory with
-`python -m http.server 8008` to preview the homepage and latest documentation.
+The Documentation workflow checks that pull requests build successfully.
 After a merge to `main`, a stable version tag push, or a manual run on `main`, it publishes the
 site to this repository's `gh-pages` branch and requests a GitHub Pages build.
 Pull requests do not publish the site.

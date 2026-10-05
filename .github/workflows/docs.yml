@@ -38,14 +38,6 @@ jobs:
             pyproject.toml
       - name: Build the documentation website
         run: python scripts/build_docs.py ${{ github.event_name == 'pull_request' && '--latest-only' || '' }}
-      - name: Upload the pull request preview
-        if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: documentation-html
-          path: _site
-          include-hidden-files: true
-          if-no-files-found: error
       - name: Publish to gh-pages
         if: env.PUBLISH == 'true'
         uses: peaceiris/actions-gh-pages@329bcc8f12caed2cefe5a5b80781499a6f3b361b # v4
