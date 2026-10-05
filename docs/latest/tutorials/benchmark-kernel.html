@@ -323,17 +323,18 @@ output, and how long does it take to run? In this tutorial, you will send a
 small add-one kernel to a KCoral GPU server, check its output against a reference,
 and retrieve a timing report. The client describes the experiment; compilation,
 correctness checks, and measurement happen on the server.</p>
-<p>The first example uses KCoral’s <a class="reference internal" href="../python-api/index.html#kcoral.builtins.compile_tirx" title="kcoral.builtins.compile_tirx"><code class="xref py py-func docutils literal notranslate"><span class="pre">compile_tirx()</span></code></a> and
-<a class="reference internal" href="../python-api/index.html#kcoral.builtins.benchmark" title="kcoral.builtins.benchmark"><code class="xref py py-func docutils literal notranslate"><span class="pre">benchmark()</span></code></a> helpers. Once you
-have followed that flow, you can substitute your own compiler or measurement
-code and use the same program structure for other kernel languages.</p>
+<p>The example uses TVM to compile a TIRx kernel on the server’s CPU, then
+KCoral’s <a class="reference internal" href="../python-api/index.html#kcoral.builtins.benchmark" title="kcoral.builtins.benchmark"><code class="xref py py-func docutils literal notranslate"><span class="pre">benchmark()</span></code></a> helper to measure it on the GPU.
+You can substitute your own compiler or measurement code and use the same
+program structure for other kernel languages.</p>
 <section id="prerequisites">
 <h2>Prerequisites<a class="headerlink" href="#prerequisites" title="Link to this heading">¶</a></h2>
 <p>On the server machine, install the
 <a class="reference internal" href="../getting-started/installation.html#server-system-requirements"><span class="std std-ref">GPU worker environment</span></a>
 and <a class="reference internal" href="../server-guide/launch-the-server.html"><span class="std std-doc">launch the server</span></a>. This example
-uses TIRx, TVM’s Python-embedded kernel language, so the server needs TVM for
-compilation, PyTorch for tensors and correctness checks, and CUPTI for measurement.</p>
+uses TIRx, TVM’s Python-embedded kernel language, so the server needs TVM and
+the CUDA toolkit’s <code class="docutils literal notranslate"><span class="pre">nvcc</span></code> compiler for CPU compilation, PyTorch for tensors and
+correctness checks, and CUPTI for measurement.</p>
 <p>On the client machine, install the
 <a class="reference internal" href="../getting-started/installation.html#install-the-client"><span class="std std-ref">KCoral client</span></a>, which
 includes NumPy for preparing the input array. This example needs no local GPU,
@@ -341,14 +342,14 @@ CUDA toolkit, or TVM installation: the client sends source and data to the serve
 </section>
 <section id="run-a-complete-example">
 <h2>Run a complete example<a class="headerlink" href="#run-a-complete-example" title="Link to this heading">¶</a></h2>
-<p>Start with <code class="docutils literal notranslate"><span class="pre">examples/benchmark_kernel.py</span></code>, which adds one to each of 256
+<p>Start with <code class="docutils literal notranslate"><span class="pre">examples/benchmark_kernel/benchmark_kernel.py</span></code>, which adds one to each of 256
 <code class="docutils literal notranslate"><span class="pre">float32</span></code> values. From the repository checkout, run it against your GPU server:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">KCORAL_URL</span><span class="o">=</span>http://127.0.0.1:8000<span class="w"> </span>python<span class="w"> </span>examples/benchmark_kernel.py
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">KCORAL_URL</span><span class="o">=</span>http://127.0.0.1:8000<span class="w"> </span>python<span class="w"> </span>examples/benchmark_kernel/benchmark_kernel.py
 </pre></div>
 </div>
 <div class="code-example">
 <div class="code-example-preview">
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="sd">"""Compile a TIRx kernel, check its output, and measure GPU activity."""</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="sd">"""Compile on a remote server's CPU, then check and time the kernel on its GPU."""</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 
@@ -359,25 +360,25 @@ CUDA toolkit, or TVM installation: the client sends source and data to the serve
 <span class="n">SOURCE</span> <span class="o">=</span> <span class="sa">r</span><span class="s2">"""</span>
 <span class="s2">from __future__ import annotations</span>
 
+<span class="s2">import os</span>
+<span class="s2">from pathlib import Path</span>
+
 <span class="s2">import torch</span>
+<span class="s2">import tvm</span>
+<span class="s2">import tvm_ffi</span>
 <span class="s2">from tvm.script import tirx as T</span>
-<span class="s2">from kcoral.builtins import compile_tirx, benchmark</span>
+<span class="s2">from kcoral.builtins import benchmark</span>
 
 <span class="s2">@T.jit</span>
 <span class="s2">def add_one(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):</span>
 <span class="s2">    T.device_entry()</span>
 <span class="s2">    i = T.cta_id([N])</span>
-<span class="s2">    t = T.thread_id([1])</span>
-<span class="s2">    B[i] = A[i] + 1.0</span>
-
-
-<span class="s2">def evaluate(src):</span>
 </pre></div>
 </div>
 </div>
 <details>
-<summary><span class="code-example-expand">Show full source</span><span class="code-example-collapse">Show less</span>: <code>benchmark_kernel.py</code></summary>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="sd">"""Compile a TIRx kernel, check its output, and measure GPU activity."""</span>
+<summary><span class="code-example-expand">Show full source</span><span class="code-example-collapse">Show less</span>: <code>benchmark_kernel/benchmark_kernel.py</code></summary>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="sd">"""Compile on a remote server's CPU, then check and time the kernel on its GPU."""</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 
@@ -388,9 +389,14 @@ CUDA toolkit, or TVM installation: the client sends source and data to the serve
 <span class="n">SOURCE</span> <span class="o">=</span> <span class="sa">r</span><span class="s2">"""</span>
 <span class="s2">from __future__ import annotations</span>
 
+<span class="s2">import os</span>
+<span class="s2">from pathlib import Path</span>
+
 <span class="s2">import torch</span>
+<span class="s2">import tvm</span>
+<span class="s2">import tvm_ffi</span>
 <span class="s2">from tvm.script import tirx as T</span>
-<span class="s2">from kcoral.builtins import compile_tirx, benchmark</span>
+<span class="s2">from kcoral.builtins import benchmark</span>
 
 <span class="s2">@T.jit</span>
 <span class="s2">def add_one(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):</span>
@@ -400,29 +406,54 @@ CUDA toolkit, or TVM installation: the client sends source and data to the serve
 <span class="s2">    B[i] = A[i] + 1.0</span>
 
 
-<span class="s2">def evaluate(src):</span>
+<span class="s2">def compile_kernel(arch):</span>
+<span class="s2">    # An explicit architecture avoids querying the GPU during compilation.</span>
+<span class="s2">    target = tvm.target.Target({"kind": "cuda", "arch": arch})</span>
+<span class="s2">    module = tvm.IRModule({"add_one": add_one.specialize(N=256)})</span>
+<span class="s2">    # NVRTC can initialize CUDA; use the CPU-only nvcc subprocess instead.</span>
+<span class="s2">    key = "TVM_CUDA_COMPILE_MODE"</span>
+<span class="s2">    previous = os.environ.get(key)</span>
+<span class="s2">    os.environ[key] = "nvcc"</span>
+<span class="s2">    try:</span>
+<span class="s2">        with target:</span>
+<span class="s2">            compiled = tvm.compile(module, target=target, tir_pipeline="tirx")</span>
+<span class="s2">        compiled.export_library("add_one.so")</span>
+<span class="s2">    finally:</span>
+<span class="s2">        if previous is None:</span>
+<span class="s2">            os.environ.pop(key, None)</span>
+<span class="s2">        else:</span>
+<span class="s2">            os.environ[key] = previous</span>
+<span class="s2">    # Keep the executable alive: destroying its CUDA module can call CUDA too.</span>
+<span class="s2">    return compiled, "add_one.so"</span>
+
+
+<span class="s2">def evaluate(compilation, src):</span>
+<span class="s2">    _executable, library = compilation</span>
+<span class="s2">    module = tvm_ffi.load_module(Path(library).resolve())</span>
+<span class="s2">    compiled = module["add_one"]</span>
 <span class="s2">    dst = torch.empty_like(src)</span>
-<span class="s2">    compiled = compile_tirx(add_one, {"N": src.numel()})</span>
 <span class="s2">    compiled(src, dst)</span>
 <span class="s2">    torch.testing.assert_close(dst, src + 1.0, rtol=1e-2, atol=1e-3)</span>
 <span class="s2">    return {"check": {"passed": True}, "timing": benchmark(compiled, src, dst)}</span>
 <span class="s2">"""</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">build_program</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Program</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">build_program</span><span class="p">(</span><span class="n">arch</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Program</span><span class="p">:</span>
     <span class="n">program</span> <span class="o">=</span> <span class="n">Program</span><span class="p">()</span>
     <span class="n">module</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"module"</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">SOURCE</span><span class="p">)</span>
+    <span class="n">compile_kernel</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"compile_kernel"</span><span class="p">,</span> <span class="n">cpu_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
     <span class="n">evaluate</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">get_function</span><span class="p">(</span><span class="n">module</span><span class="o">=</span><span class="n">module</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"evaluate"</span><span class="p">)</span>
+    <span class="n">compilation</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">compile_kernel</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">arch</span><span class="p">])</span>
     <span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">256</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
     <span class="n">src</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">"tensor"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">values</span><span class="p">)</span>
-    <span class="n">report</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">evaluate</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">src</span><span class="p">])</span>
+    <span class="n">report</span> <span class="o">=</span> <span class="n">program</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="n">evaluate</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">compilation</span><span class="p">,</span> <span class="n">src</span><span class="p">])</span>
     <span class="n">program</span><span class="o">.</span><span class="n">return_</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="s2">"report"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">report</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">program</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">with</span> <span class="n">Client</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"KCORAL_URL"</span><span class="p">,</span> <span class="s2">"http://127.0.0.1:8000"</span><span class="p">))</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
-        <span class="n">result</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">build_program</span><span class="p">(),</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">120</span><span class="p">)</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">build_program</span><span class="p">(</span><span class="n">client</span><span class="o">.</span><span class="n">target</span><span class="p">()[</span><span class="s2">"arch"</span><span class="p">]),</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">120</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">result</span><span class="o">.</span><span class="n">completed</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">SystemExit</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Benchmark failed: </span><span class="si">{</span><span class="n">result</span><span class="o">.</span><span class="n">error</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">results</span><span class="p">[</span><span class="s2">"report"</span><span class="p">][</span><span class="s2">"check"</span><span class="p">])</span>
@@ -435,11 +466,14 @@ CUDA toolkit, or TVM installation: the client sends source and data to the serve
 </div>
 </details>
 </div>
-<p><a class="reference download internal" download="" href="../_downloads/ac7db605b06bf7e92275c76c11634035/benchmark_kernel.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">the</span> <span class="pre">example</span></code></a>.</p>
-<p>The client uploads the kernel and an <code class="docutils literal notranslate"><span class="pre">evaluate</span></code> function, uploads the input
-tensor, and calls <code class="docutils literal notranslate"><span class="pre">evaluate</span></code> on the server. That function allocates an output
-tensor, compiles the kernel, and checks its result against <code class="docutils literal notranslate"><span class="pre">src</span> <span class="pre">+</span> <span class="pre">1</span></code>. It only
-benchmarks the kernel after that check passes. On success, the script prints
+<p><a class="reference download internal" download="" href="../_downloads/0a9eeac1e6369c522344fa9c152aac7d/benchmark_kernel.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">the</span> <span class="pre">example</span></code></a>.</p>
+<p>The client reads the GPU architecture from <code class="docutils literal notranslate"><span class="pre">Client.target()</span></code> and uploads the
+kernel with separate <code class="docutils literal notranslate"><span class="pre">compile_kernel</span></code> and <code class="docutils literal notranslate"><span class="pre">evaluate</span></code> functions. It selects
+<code class="docutils literal notranslate"><span class="pre">compile_kernel</span></code> with <code class="docutils literal notranslate"><span class="pre">cpu_only=True</span></code>, so compilation releases the GPU for
+other requests. It then uploads the input tensor and calls <code class="docutils literal notranslate"><span class="pre">evaluate</span></code> with
+the compilation result. This call keeps GPU access, loads the library, allocates an output tensor,
+and checks its result against <code class="docutils literal notranslate"><span class="pre">src</span> <span class="pre">+</span> <span class="pre">1</span></code>. It only benchmarks the kernel after
+that check passes. On success, the script prints
 <code class="docutils literal notranslate"><span class="pre">{'passed':</span> <span class="pre">True}</span></code> followed by the timing report; otherwise it reports the
 program error. The successful output has this shape, with the timing dictionary
 abridged here and the latency depending on your GPU:</p>
@@ -447,14 +481,17 @@ abridged here and the latency depending on your GPU:</p>
 {'latency_ms_median': &lt;latency&gt;, ...}
 </pre></div>
 </div>
-<p>Inside <code class="docutils literal notranslate"><span class="pre">evaluate</span></code>, <code class="docutils literal notranslate"><span class="pre">compile_tirx(kernel,</span> <span class="pre">bindings)</span></code> specializes a TIRx kernel and compiles it for
-CUDA. <code class="docutils literal notranslate"><span class="pre">bindings</span></code> supplies constexpr values; a <code class="docutils literal notranslate"><span class="pre">PrimFunc</span></code> can be compiled without
-bindings. Compiled executables are cached by structural hash, up to 32 entries
-per process. The helper requires TVM in the worker environment.</p>
-<p><code class="docutils literal notranslate"><span class="pre">benchmark(compiled,</span> <span class="pre">src,</span> <span class="pre">dst)</span></code> measures GPU activity with CUPTI. Both functions
-use the GPU access of the Python call that invokes them. Importing them into a
-module also allows selecting them with <code class="docutils literal notranslate"><span class="pre">get_function</span></code> and calling them in
-separate instructions.</p>
+<p>Inside <code class="docutils literal notranslate"><span class="pre">compile_kernel</span></code>, <code class="docutils literal notranslate"><span class="pre">add_one.specialize(N=256)</span></code> supplies the kernel’s
+compile-time size. <code class="docutils literal notranslate"><span class="pre">tvm.compile</span></code> uses an explicit CUDA target architecture and
+the <code class="docutils literal notranslate"><span class="pre">nvcc</span></code> subprocess backend, so compilation does not initialize CUDA in the
+worker. It exports the compiled library as
+<code class="docutils literal notranslate"><span class="pre">add_one.so</span></code> in the request’s workspace and returns the executable together
+with its path. Keeping the executable alive defers CUDA module cleanup until
+GPU access is available. The later GPU call loads that library without
+repeating compilation.</p>
+<p>Inside <code class="docutils literal notranslate"><span class="pre">evaluate</span></code>, <code class="docutils literal notranslate"><span class="pre">benchmark(compiled,</span> <span class="pre">src,</span> <span class="pre">dst)</span></code> measures GPU activity with
+CUPTI. Keeping compilation and evaluation in separate calls lets the server
+release GPU access for compilation and reacquire it for execution.</p>
 <p>The rest of this tutorial looks at the choices behind that example: where to
 compile, how to overlap CPU and GPU work, and how to check and measure the kernel.</p>
 </section>
@@ -465,26 +502,20 @@ request. You can also compile elsewhere when you want to reuse an existing
 build environment or scale compilation separately from GPU execution.</p>
 <section id="on-a-gpu-server">
 <h3>On a GPU server<a class="headerlink" href="#on-a-gpu-server" title="Link to this heading">¶</a></h3>
-<p>Compiling on the GPU server keeps the client lightweight and gives the compiler
-access to the device it is targeting. Upload your kernel and Python compilation
-code. For TIRx, import
-<code class="docutils literal notranslate"><span class="pre">compile_tirx</span></code> from <code class="docutils literal notranslate"><span class="pre">kcoral.builtins</span></code>. CUDA C, CuTeDSL and Triton can use their own
-compiler APIs. <code class="docutils literal notranslate"><span class="pre">Client.health()</span></code> reports installed versions.</p>
-<p>For a complete example that compiles, checks, and measures kernels in all four
-languages, run this client from the repository checkout:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">KCORAL_URL</span><span class="o">=</span>http://127.0.0.1:8000<span class="w"> </span>python<span class="w"> </span>examples/remote_compile_client.py
-</pre></div>
-</div>
-<p><a class="reference download internal" download="" href="../_downloads/baa5c0918a8733ebf68785336bea879d/remote_compile_client.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">remote_compile_client.py</span></code></a>.</p>
-<p>Compilation can initialize CUDA or load GPU modules. Calls that do this need
-exclusive access to the GPU, just as kernel execution does, so another request
-cannot use that GPU until the call gives up access.</p>
+<p>Compiling on the GPU server keeps the client lightweight and uses the server’s
+installed toolchain. The example above compiles and executes in one request,
+with only the compilation call marked <code class="docutils literal notranslate"><span class="pre">cpu_only=True</span></code>.</p>
+<p>Other compiler APIs can initialize CUDA or load GPU modules, including
+<a class="reference internal" href="../python-api/index.html#kcoral.builtins.compile_tirx" title="kcoral.builtins.compile_tirx"><code class="xref py py-func docutils literal notranslate"><span class="pre">compile_tirx()</span></code></a>. Calls that do this must keep GPU access
+and leave <code class="docutils literal notranslate"><span class="pre">cpu_only</span></code> at its default of <code class="docutils literal notranslate"><span class="pre">False</span></code>. CUDA C, CuTeDSL and Triton can
+use their own compiler APIs with the same distinction between CPU compilation
+and GPU work. <code class="docutils literal notranslate"><span class="pre">Client.health()</span></code> reports installed versions.</p>
 </section>
 <section id="on-the-client">
 <h3>On the client<a class="headerlink" href="#on-the-client" title="Link to this heading">¶</a></h3>
 <p>If you already have the compiler on your client machine, you can keep the build
 local and use the remote GPU for evaluation. The
-<code class="docutils literal notranslate"><span class="pre">examples/library_upload_client.py</span></code> example does this for a
+<code class="docutils literal notranslate"><span class="pre">examples/cpu_compile/library_upload.py</span></code> example does this for a
 CUDA C add-one kernel. It needs the CUDA toolkit, a host C++ compiler, and TVM FFI
 with its C++ build dependencies on the client. See
 <a class="reference internal" href="../getting-started/installation.html#prepare-for-local-compilation-optional"><span class="std std-ref">local compilation setup</span></a>.</p>
@@ -529,10 +560,10 @@ result, and measure it. Compilation has already finished on the client, so the
 server only needs to load and execute the library. See the
 <a class="reference internal" href="../client-guide/protocol.html#library"><span class="std std-ref">library protocol</span></a> for export and linking
 requirements. Run the complete client from the repository checkout:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">KCORAL_URL</span><span class="o">=</span>http://127.0.0.1:8000<span class="w"> </span>python<span class="w"> </span>examples/library_upload_client.py
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">KCORAL_URL</span><span class="o">=</span>http://127.0.0.1:8000<span class="w"> </span>python<span class="w"> </span>examples/cpu_compile/library_upload.py
 </pre></div>
 </div>
-<p><a class="reference download internal" download="" href="../_downloads/bacfcd7e0c1988cfda525593ba5317b7/library_upload_client.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">library_upload_client.py</span></code></a>.</p>
+<p><a class="reference download internal" download="" href="../_downloads/428faa2431810a9681ed150fd1535c39/library_upload.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">cpu_compile/library_upload.py</span></code></a>.</p>
 </section>
 <section id="on-a-cpu-server">
 <h3>On a CPU server<a class="headerlink" href="#on-a-cpu-server" title="Link to this heading">¶</a></h3>
@@ -690,7 +721,7 @@ They run the tool on the server and retrieve its reports for you.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=7ddfe88c"></script>
+</div><script src="../_static/documentation_options.js?v=4e69741b"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

@@ -39,11 +39,11 @@ and leave this terminal running. The client will connect to
 
 In a second terminal, save the following complete program as `first_program.py`:
 
-```{literalinclude} ../../examples/first_program.py
+```{literalinclude} ../../examples/basics/first_program.py
 :language: python
 ```
 
-You can also {download}`download first_program.py <../../examples/first_program.py>`.
+You can also {download}`download first_program.py <../../examples/basics/first_program.py>`.
 Run it from the directory where you saved it:
 
 ```bash

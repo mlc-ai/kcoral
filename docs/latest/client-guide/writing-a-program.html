@@ -506,8 +506,8 @@ Upload definitions and files, then invoke the entry point with <code class="docu
 <p>Two standalone examples call NCCL, NVIDIA’s collective communication library,
 and check the sum on every GPU:</p>
 <ul class="simple">
-<li><p><a class="reference external" href="https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel.py">One process controlling all GPUs</a>.</p></li>
-<li><p><a class="reference external" href="https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu_kernel_multiprocess.py">One worker process per GPU</a>.</p></li>
+<li><p><a class="reference external" href="https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu/single_process.py">One process controlling all GPUs</a>.</p></li>
+<li><p><a class="reference external" href="https://github.com/mlc-ai/kcoral/blob/main/examples/multi_gpu/multiprocess.py">One worker process per GPU</a>.</p></li>
 </ul>
 <p>Both include the client Program. Use <code class="docutils literal notranslate"><span class="pre">--url</span> <span class="pre">URL</span> <span class="pre">--gpus</span> <span class="pre">2</span></code> for remote execution,
 or <code class="docutils literal notranslate"><span class="pre">--local</span></code> for visible local GPUs. The execution machine needs PyTorch with
@@ -633,7 +633,7 @@ and empty directories, but do not preserve original file metadata. See the
 The tutorials below explain how to use these programs for common workflows.</p>
 <ul class="simple">
 <li><p><a class="reference internal" href="../tutorials/benchmark-kernel.html"><span class="std std-doc">Benchmark a Kernel with KCoral</span></a>: follow
-<code class="docutils literal notranslate"><span class="pre">examples/benchmark_kernel.py</span></code> to compile a kernel, check its output, and
+<code class="docutils literal notranslate"><span class="pre">examples/benchmark_kernel/benchmark_kernel.py</span></code> to compile a kernel, check its output, and
 measure its execution time.</p></li>
 <li><p><a class="reference internal" href="../tutorials/remote-compilation.html"><span class="std std-doc">Remote Compilation</span></a>: compile on a CPU
 server and run the resulting library on a GPU server.</p></li>
@@ -724,7 +724,7 @@ method signatures or the underlying request and response formats.</p></li>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=7ddfe88c"></script>
+</div><script src="../_static/documentation_options.js?v=4e69741b"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

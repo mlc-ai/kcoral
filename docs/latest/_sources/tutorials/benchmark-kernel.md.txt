@@ -6,18 +6,19 @@ small add-one kernel to a KCoral GPU server, check its output against a referenc
 and retrieve a timing report. The client describes the experiment; compilation,
 correctness checks, and measurement happen on the server.
 
-The first example uses KCoral's {py:func}`~kcoral.builtins.compile_tirx` and
-{py:func}`~kcoral.builtins.benchmark` helpers. Once you
-have followed that flow, you can substitute your own compiler or measurement
-code and use the same program structure for other kernel languages.
+The example uses TVM to compile a TIRx kernel on the server's CPU, then
+KCoral's {py:func}`~kcoral.builtins.benchmark` helper to measure it on the GPU.
+You can substitute your own compiler or measurement code and use the same
+program structure for other kernel languages.
 
 ## Prerequisites
 
 On the server machine, install the
 [GPU worker environment](../getting-started/installation.md#server-system-requirements)
 and [launch the server](../server-guide/launch-the-server.md). This example
-uses TIRx, TVM's Python-embedded kernel language, so the server needs TVM for
-compilation, PyTorch for tensors and correctness checks, and CUPTI for measurement.
+uses TIRx, TVM's Python-embedded kernel language, so the server needs TVM and
+the CUDA toolkit's `nvcc` compiler for CPU compilation, PyTorch for tensors and
+correctness checks, and CUPTI for measurement.
 
 On the client machine, install the
 [KCoral client](../getting-started/installation.md#install-the-client), which
@@ -26,38 +27,41 @@ CUDA toolkit, or TVM installation: the client sends source and data to the serve
 
 ## Run a complete example
 
-Start with `examples/benchmark_kernel.py`, which adds one to each of 256
+Start with `examples/benchmark_kernel/benchmark_kernel.py`, which adds one to each of 256
 `float32` values. From the repository checkout, run it against your GPU server:
 
 ```bash
-KCORAL_URL=http://127.0.0.1:8000 python examples/benchmark_kernel.py
+KCORAL_URL=http://127.0.0.1:8000 python examples/benchmark_kernel/benchmark_kernel.py
 ```
 
 <div class="code-example">
 <div class="code-example-preview">
 
-```{literalinclude} ../../examples/benchmark_kernel.py
+```{literalinclude} ../../examples/benchmark_kernel/benchmark_kernel.py
 :language: python
 :lines: 1-24
 ```
 
 </div>
 <details>
-<summary><span class="code-example-expand">Show full source</span><span class="code-example-collapse">Show less</span>: <code>benchmark_kernel.py</code></summary>
+<summary><span class="code-example-expand">Show full source</span><span class="code-example-collapse">Show less</span>: <code>benchmark_kernel/benchmark_kernel.py</code></summary>
 
-```{literalinclude} ../../examples/benchmark_kernel.py
+```{literalinclude} ../../examples/benchmark_kernel/benchmark_kernel.py
 :language: python
 ```
 
 </details>
 </div>
 
-{download}`Download the example <../../examples/benchmark_kernel.py>`.
+{download}`Download the example <../../examples/benchmark_kernel/benchmark_kernel.py>`.
 
-The client uploads the kernel and an `evaluate` function, uploads the input
-tensor, and calls `evaluate` on the server. That function allocates an output
-tensor, compiles the kernel, and checks its result against `src + 1`. It only
-benchmarks the kernel after that check passes. On success, the script prints
+The client reads the GPU architecture from `Client.target()` and uploads the
+kernel with separate `compile_kernel` and `evaluate` functions. It selects
+`compile_kernel` with `cpu_only=True`, so compilation releases the GPU for
+other requests. It then uploads the input tensor and calls `evaluate` with
+the compilation result. This call keeps GPU access, loads the library, allocates an output tensor,
+and checks its result against `src + 1`. It only benchmarks the kernel after
+that check passes. On success, the script prints
 `{'passed': True}` followed by the timing report; otherwise it reports the
 program error. The successful output has this shape, with the timing dictionary
 abridged here and the latency depending on your GPU:
@@ -67,15 +71,18 @@ abridged here and the latency depending on your GPU:
 {'latency_ms_median': <latency>, ...}
 ```
 
-Inside `evaluate`, `compile_tirx(kernel, bindings)` specializes a TIRx kernel and compiles it for
-CUDA. `bindings` supplies constexpr values; a `PrimFunc` can be compiled without
-bindings. Compiled executables are cached by structural hash, up to 32 entries
-per process. The helper requires TVM in the worker environment.
+Inside `compile_kernel`, `add_one.specialize(N=256)` supplies the kernel's
+compile-time size. `tvm.compile` uses an explicit CUDA target architecture and
+the `nvcc` subprocess backend, so compilation does not initialize CUDA in the
+worker. It exports the compiled library as
+`add_one.so` in the request's workspace and returns the executable together
+with its path. Keeping the executable alive defers CUDA module cleanup until
+GPU access is available. The later GPU call loads that library without
+repeating compilation.
 
-`benchmark(compiled, src, dst)` measures GPU activity with CUPTI. Both functions
-use the GPU access of the Python call that invokes them. Importing them into a
-module also allows selecting them with `get_function` and calling them in
-separate instructions.
+Inside `evaluate`, `benchmark(compiled, src, dst)` measures GPU activity with
+CUPTI. Keeping compilation and evaluation in separate calls lets the server
+release GPU access for compilation and reacquire it for execution.
 
 The rest of this tutorial looks at the choices behind that example: where to
 compile, how to overlap CPU and GPU work, and how to check and measure the kernel.
@@ -88,30 +95,21 @@ build environment or scale compilation separately from GPU execution.
 
 ### On a GPU server
 
-Compiling on the GPU server keeps the client lightweight and gives the compiler
-access to the device it is targeting. Upload your kernel and Python compilation
-code. For TIRx, import
-`compile_tirx` from `kcoral.builtins`. CUDA C, CuTeDSL and Triton can use their own
-compiler APIs. `Client.health()` reports installed versions.
+Compiling on the GPU server keeps the client lightweight and uses the server's
+installed toolchain. The example above compiles and executes in one request,
+with only the compilation call marked `cpu_only=True`.
 
-For a complete example that compiles, checks, and measures kernels in all four
-languages, run this client from the repository checkout:
-
-```bash
-KCORAL_URL=http://127.0.0.1:8000 python examples/remote_compile_client.py
-```
-
-{download}`Download remote_compile_client.py <../../examples/remote_compile_client.py>`.
-
-Compilation can initialize CUDA or load GPU modules. Calls that do this need
-exclusive access to the GPU, just as kernel execution does, so another request
-cannot use that GPU until the call gives up access.
+Other compiler APIs can initialize CUDA or load GPU modules, including
+{py:func}`~kcoral.builtins.compile_tirx`. Calls that do this must keep GPU access
+and leave `cpu_only` at its default of `False`. CUDA C, CuTeDSL and Triton can
+use their own compiler APIs with the same distinction between CPU compilation
+and GPU work. `Client.health()` reports installed versions.
 
 ### On the client
 
 If you already have the compiler on your client machine, you can keep the build
 local and use the remote GPU for evaluation. The
-`examples/library_upload_client.py` example does this for a
+`examples/cpu_compile/library_upload.py` example does this for a
 CUDA C add-one kernel. It needs the CUDA toolkit, a host C++ compiler, and TVM FFI
 with its C++ build dependencies on the client. See
 [local compilation setup](../getting-started/installation.md#prepare-for-local-compilation-optional).
@@ -120,7 +118,7 @@ Its `build_library` function writes the CUDA source to a temporary directory,
 compiles it for the supplied GPU architecture, and reads the resulting shared
 library as bytes:
 
-```{literalinclude} ../../examples/library_upload_client.py
+```{literalinclude} ../../examples/cpu_compile/library_upload.py
 :language: python
 :pyobject: build_library
 ```
@@ -128,7 +126,7 @@ library as bytes:
 Here, `SOURCE` is the example's CUDA code, including a TVM FFI export for
 `add_one`. The client reads the remote GPU's architecture before building:
 
-```{literalinclude} ../../examples/library_upload_client.py
+```{literalinclude} ../../examples/cpu_compile/library_upload.py
 :language: python
 :start-at:         arch = client.target()
 :end-at:             library = build_library(arch, directory)
@@ -137,7 +135,7 @@ Here, `SOURCE` is the example's CUDA code, including a TVM FFI export for
 
 The program then uploads the compiled bytes and selects the exported function:
 
-```{literalinclude} ../../examples/library_upload_client.py
+```{literalinclude} ../../examples/cpu_compile/library_upload.py
 :language: python
 :start-at:     module = program.upload(kind="library"
 :end-at:     kernel = program.get_function(module=module, name="add_one")
@@ -151,10 +149,10 @@ server only needs to load and execute the library. See the
 requirements. Run the complete client from the repository checkout:
 
 ```bash
-KCORAL_URL=http://127.0.0.1:8000 python examples/library_upload_client.py
+KCORAL_URL=http://127.0.0.1:8000 python examples/cpu_compile/library_upload.py
 ```
 
-{download}`Download library_upload_client.py <../../examples/library_upload_client.py>`.
+{download}`Download cpu_compile/library_upload.py <../../examples/cpu_compile/library_upload.py>`.
 
 ### On a CPU server
 
