@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=https://www.coderabbit.ai/integrations/schema.v2.json
+language: en-US
+early_access: false
+inheritance: false
+tone_instructions: >-
+  Be concise and specific. Prioritize actionable correctness, security, concurrency,
+  and performance regressions. Explain the failing scenario; avoid speculative
+  findings, style-only feedback, and duplicating Ruff or formatting checks.
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  allow_author_approval: false
+  high_level_summary: false
+  review_status: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  poem: false
+  in_progress_fortune: false
+  suggested_labels: false
+  auto_apply_labels: false
+  suggested_reviewers: false
+  auto_assign_reviewers: false
+  fail_commit_status: false
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    # Bound review noise and usage on frequently updated PRs. Resume on demand.
+    auto_pause_after_reviewed_commits: 5
+    drafts: false
+    # The default branch (main) is always included; no additional target branches.
+    base_branches: []
+    ignore_title_keywords:
+      - "[skip ai review]"
+  path_filters:
+    - "!Cargo.lock"
+    - "!uv.lock"
+    - "!python/kcoral/server/_generated/**"
+    - "!docs/_static/brand/**"
+  path_instructions:
+    - path: "**/*"
+      instructions: >-
+        KCoral executes client-supplied programs on trusted, isolated networks.
+        Intentional remote execution is part of the API, not by itself a new
+        vulnerability. Review changes for regressions against the documented
+        trust model, isolation, resource bounds, cleanup, and protocol contracts.
+        Report concrete failures introduced by the diff and cite affected code.
+    - path: "python/kcoral/runtime/**"
+      instructions: >-
+        Check GPU lease ownership, single- and multi-GPU scheduling, CPU-only
+        transitions, cancellation, timeouts, worker death, and descendant cleanup.
+        Check that failure paths release capacity and cannot leave a GPU leased
+        forever. Compilation may initialize CUDA; do not assume it is CPU-only.
+    - path: "python/kcoral/server/**"
+      instructions: >-
+        Check bounded request and response handling, multipart validation,
+        content hashes, cache pinning and eviction, filesystem races, backpressure,
+        cancellation, and tunnel reconnection. Keep blocking work off the event
+        loop and preserve the protocol in docs/client-guide/protocol.md.
+    - path: "python/kcoral/support/**"
+      instructions: >-
+        Check sandbox mounts, path and symlink handling, spawn failures, temporary
+        directory cleanup, and process lifetime. Preserve documented behavior when
+        bubblewrap is unavailable and avoid broadening access to host resources.
+    - path: "python/kcoral/client/**"
+      instructions: >-
+        Check HTTP protocol compatibility, cache-miss retry semantics, response
+        validation, and resource closure. Never replay a possibly executed program
+        automatically after an ambiguous transport failure.
+    - path: "rust/kcoral/**"
+      instructions: >-
+        Check node and slot identity, admission and capacity accounting, bounded
+        streaming, cancellation safety, shutdown, supervisor child cleanup, and
+        the unknown-outcome boundary after request bytes reach an execution slot.
+        Keep the protobuf contract compatible with the Python tunnel and review
+        changes to the source .proto instead of generated bindings.
+    - path: "tests/**"
+      instructions: >-
+        Prefer deterministic tests for observable failures, especially resource
+        release and protocol compatibility. Distinguish CPU process/protocol
+        coverage from real GPU lease and CUDA behavior; simulated workers do not
+        prove GPU correctness. Avoid timing-based assertions when synchronization
+        can express the requirement.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Check token permissions, fork PR trust boundaries, secret exposure, and
+        release/deployment conditions. Do not run untrusted PR code with privileged
+        credentials. Preserve existing build, docs, and publishing behavior.
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    simplify:
+      enabled: false
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+
+chat:
+  auto_reply: false
+  # External contributors still receive automatic reviews.
+  allow_non_org_members: false
+
+knowledge_base:
+  opt_out: true
+  web_search:
+    enabled: false
+  automatic_linking_mode: disabled
+  linked_repositories: []
+
+issue_enrichment:
+  auto_enrich:
+    enabled: false
+  planning:
+    enabled: false
