@@ -71,7 +71,7 @@ h2 { font-size: 32px; font-weight: 630; line-height: 1.2; letter-spacing: -.9px;
 .flow-node strong { display: flex; align-items: center; justify-content: center; gap: 9px; margin-top: 16px; font-size: 26px; font-weight: 600; letter-spacing: -.6px; }
 .node-description { display: block; margin-top: 13px; color: #bed4e4; font-size: 11px; line-height: 1.6; }
 .service-node { border-color: #6996b8; background: #1d3e59; box-shadow: 0 0 32px #329ddd12; }
-.engine-mark { width: 15px; height: 15px; border-radius: 4px 8px 4px 8px; background: #ff8b70; box-shadow: 5px 5px 0 -1px #5fb5e6; margin-right: 4px; }
+.engine-logo { width: 6em; height: auto; }
 .flow-link { display: flex; flex-direction: column; align-items: center; gap: 6px; padding-inline: 8px; text-align: center; color: #b4c9db; font: 10px/1.5 var(--mono); }
 .protocol-wire > a { color: #ffad99; font-size: 11px; }
 .protocol-wire > a:hover { color: #ffd5c9; text-decoration: underline; text-underline-offset: 4px; }
