@@ -10,6 +10,7 @@ KCoral executes GPU benchmark programs remotely. It manages GPU and node resourc
 <p align="center">
   <a href="https://kcoral.mlc.ai/"><strong>Website</strong></a> ·
   <a href="https://kcoral.mlc.ai/docs/"><strong>Documentation</strong></a> ·
+  <a href="https://blog.mlc.ai/2026/10/05/kcoral-lightweight-benchmark-server-for-agentic-gpu-programming"><strong>Blog</strong></a> ·
   <a href="docs/getting-started/quickstart.md"><strong>Quickstart</strong></a> ·
   <a href="docs/client-guide/writing-a-program.md"><strong>Write a client program</strong></a> ·
   <a href="docs/client-guide/protocol.md"><strong>KCoral Protocol</strong></a>
