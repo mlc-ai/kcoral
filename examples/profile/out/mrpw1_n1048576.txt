@@ -1,0 +1,11 @@
+n=1048576 (4 MiB/tensor), NVIDIA GeForce RTX 2070
+first request after server start: 436.2 ms
+                             min        p5    median       p95       max      mean
+e2e local (ms)             1.408     1.487     1.532     3.399     5.165     1.789
+e2e local_proc (ms)     1742.113  1756.649  1772.797  1807.906  1832.682  1776.934
+e2e kcoral_warm (ms)     340.640   347.680   381.091   390.768   392.284   375.565
+e2e kcoral_cold (ms)     370.225   372.528   404.770   421.172   439.308   402.161
+kernel local (us)         33.472    33.472    33.504    33.504    33.504    33.490
+kernel kcoral (us)        33.472    33.472    33.472    33.504    33.504    33.483
+kcoral_warm breakdown medians (ms): client_build_ms=9.03, queue_ms=0.01, elapsed_ms=360.50, lease_wait_ms=0.02, lease_held_ms=342.84
+kcoral_cold breakdown medians (ms): client_build_ms=8.70, queue_ms=0.01, elapsed_ms=357.60, lease_wait_ms=0.02, lease_held_ms=341.51
