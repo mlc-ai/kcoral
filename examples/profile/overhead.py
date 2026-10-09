@@ -1,4 +1,4 @@
-"""Compare a vector_add job run locally against the same job run through KCoral.
+"""Q1-Q4: a vector_add job run locally vs. the same job run through KCoral.
 
 Measured (each repeated --trials times, interleaved so drift affects all modes alike):
 
@@ -101,7 +101,7 @@ def main():
     parser.add_argument("--n", type=int, default=1 << 20, help="elements per float32 vector")
     parser.add_argument("--trials", type=int, default=50)
     parser.add_argument("--kernel-trials", type=int, default=30)
-    parser.add_argument("--out", default="results.json")
+    parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
     import torch

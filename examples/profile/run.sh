@@ -1,16 +1,27 @@
 #!/usr/bin/env bash
-# Full reproduction: install the locked environment, then for each server
-# configuration start a local KCoral GPU server, run bench.py for each vector
-# size, and stop the server.
+# Reproduce the experiments in REPORT.md on one local GPU.
 #
-#   ./run.sh [GPU_ID] [PORT]        (defaults: GPU 0, port 8765)
+#   ./run.sh [-g GPU_ID] [-p PORT] [STEP...]      (defaults: GPU 0, port 8765, all steps)
 #
-# Outputs go to examples/profile/out/: env.txt, mrpw<M>_n<N>.{json,txt}, summary.md
-# and server logs.
+#   overhead     Q1-Q4  overhead.py for 3 sizes x {fresh, reused} workers  (~40 min)
+#   throughput   Q5     throughput.py for {fresh, reused} workers          (~8 min)
+#   discussion          exit_time.py and reuse_state.py                    (~2 min)
+#   figures             report.py: REPORT.md figures and tables from out/
+#
+# Results (JSON), server logs and env.txt go to out/, which is not committed.
 set -euo pipefail
 
-GPU="${1:-0}"
-PORT="${2:-8765}"
+GPU=0
+PORT=8765
+while getopts g:p: opt; do
+  case "$opt" in
+    g) GPU="$OPTARG" ;;
+    p) PORT="$OPTARG" ;;
+    *) exit 1 ;;
+  esac
+done
+shift $((OPTIND - 1))
+STEPS=" ${*:-overhead throughput discussion figures} "
 URL="http://127.0.0.1:$PORT"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(git -C "$HERE" rev-parse --show-toplevel)"
@@ -19,17 +30,19 @@ mkdir -p "$OUT"
 cd "$REPO"
 
 uv sync --locked --group server --python 3.12
+PY=(.venv/bin/python)
 
 # Local runs and the server must use the same physical GPU (nvidia-smi index).
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 
 {
+  echo "== $(date -u +%FT%TZ) steps:$STEPS"
   nvidia-smi --query-gpu=index,name,driver_version,memory.total,pcie.link.gen.max,pcie.link.width.current --format=csv
   lscpu | grep -E 'Model name|^CPU\(s\)'
   grep PRETTY_NAME /etc/os-release
   uname -r
   git rev-parse HEAD
-} >"$OUT/env.txt"
+} >>"$OUT/env.txt"
 
 SERVER=""
 CACHE=""
@@ -40,26 +53,52 @@ stop_server() {
 }
 trap stop_server EXIT
 
-# --max-requests-per-worker: 1 is the server default (fresh worker process per
-# request); 0 reuses workers. Everything else uses server defaults, plus a
-# private disk cache so earlier runs cannot pre-populate it.
-for MRPW in 1 0; do
+# start_server NAME [server options...]: server defaults plus a private disk
+# cache, so earlier runs cannot pre-populate it.
+start_server() {
+  local name="$1"
+  shift
   CACHE="$(mktemp -d)"
   .venv/bin/kcoral server --gpus "$GPU" --host 127.0.0.1 --port "$PORT" \
-    --max-requests-per-worker "$MRPW" --disk-cache-dir "$CACHE" \
-    --log-dir "$OUT/logs" >"$OUT/server_mrpw$MRPW.log" 2>&1 &
+    --disk-cache-dir "$CACHE" --log-dir "$OUT/logs" "$@" >"$OUT/server_$name.log" 2>&1 &
   SERVER=$!
   until curl -fs "$URL/health" >/dev/null; do
-    kill -0 "$SERVER" || { tail -n 30 "$OUT/server_mrpw$MRPW.log"; exit 1; }
+    kill -0 "$SERVER" || { tail -n 30 "$OUT/server_$name.log"; exit 1; }
     sleep 1
   done
-  grep -h pool_ready "$OUT/server_mrpw$MRPW.log" >>"$OUT/env.txt"
+  echo "$name: $(grep -h pool_ready "$OUT/server_$name.log")" >>"$OUT/env.txt"
+}
 
-  for N in 1024 1048576 16777216; do  # 4 KiB, 4 MiB, 64 MiB per float32 tensor
-    CUDA_VISIBLE_DEVICES="$GPU" .venv/bin/python "$HERE/bench.py" --url "$URL" --n "$N" \
-      --out "$OUT/mrpw${MRPW}_n$N.json" | tee "$OUT/mrpw${MRPW}_n$N.txt"
+# --max-requests-per-worker: 1 (server default) gives every request a fresh
+# worker process; 0 reuses workers.
+declare -A MRPW=([fresh]=1 [reused]=0)
+
+if [[ "$STEPS" == *" overhead "* ]]; then
+  for MODE in fresh reused; do
+    start_server "$MODE" --max-requests-per-worker "${MRPW[$MODE]}"
+    for N in 1024 1048576 16777216; do  # 4 KiB, 4 MiB, 64 MiB per float32 tensor
+      CUDA_VISIBLE_DEVICES="$GPU" "${PY[@]}" "$HERE/overhead.py" --url "$URL" --n "$N" \
+        --out "$OUT/overhead_${MODE}_n$N.json"
+    done
+    stop_server
   done
-  stop_server
-done
+fi
 
-.venv/bin/python "$HERE/summarize.py" >"$OUT/summary.md"
+if [[ "$STEPS" == *" throughput "* ]]; then
+  for MODE in fresh reused; do
+    start_server "$MODE" --max-requests-per-worker "${MRPW[$MODE]}"
+    "${PY[@]}" "$HERE/throughput.py" --url "$URL" --out "$OUT/throughput_$MODE.json"
+    stop_server
+  done
+fi
+
+if [[ "$STEPS" == *" discussion "* ]]; then
+  CUDA_VISIBLE_DEVICES="$GPU" "${PY[@]}" "$HERE/exit_time.py" --out "$OUT/exit_time.json"
+  start_server reuse_probe --workers-per-gpu 1 --max-requests-per-worker 0
+  "${PY[@]}" "$HERE/reuse_state.py" --url "$URL" --out "$OUT/reuse_state.json"
+  stop_server
+fi
+
+if [[ "$STEPS" == *" figures "* ]]; then
+  uv run --no-project --with matplotlib==3.10.7 python "$HERE/report.py"
+fi
