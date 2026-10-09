@@ -79,12 +79,15 @@ Kernel latency (CUPTI median of each run), µs: median [min, max]
   reused workers and ~335 ms with the default fresh workers. With fresh workers, the
   response waits while the retired worker exits under the GPU lease (Python/CUDA teardown;
   `_wait_for_exit` in `runtime/worker.py`). Replacing a worker took 3.3 s (median;
-  `worker_retired` → `worker_ready`). That is outside these timings, but more than 8
-  back-to-back requests within that window would queue.
-- **Tensor size adds overhead.** At 64 MiB per tensor with reused workers, a request with cached inputs
-  adds ~0.9 s over local (46 ms). The time goes to the client hashing 128 MiB of inputs
-  (136 ms), the server moving data outside the lease (elapsed − lease held ≈ 490 ms),
-  and returning the 64 MiB result (~175 ms).
+  `worker_retired` → `worker_ready`). This benchmark waits for replacements, so they are
+  excluded. Replacements overlap, and only their CUDA initialization runs one at a time
+  per GPU. In a separate quick check, a client sending fresh-mode requests back to back
+  got ~0.5 s per request after the first 8 (about 2 req/s). With a single worker, each
+  request queued ~3.1 s.
+- **Tensor size adds overhead.** At 64 MiB per tensor with reused workers, a request with
+  cached inputs adds ~0.9 s over local (46 ms). The time goes to the client hashing
+  128 MiB of inputs (136 ms), the server moving data outside the lease (elapsed − lease
+  held ≈ 490 ms), and returning the 64 MiB result (~175 ms).
 - **New inputs cost an upload.** With new tensor contents, the extra `CACHE_MISS` round
   trip and upload add 4–6 ms (4 KiB), 21–24 ms (4 MiB) and 355–415 ms (64 MiB) to the
   median. The first request after server start (one sample per run) was 7–140 ms slower
