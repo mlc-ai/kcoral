@@ -1,6 +1,6 @@
 End-to-end wall time per job, ms: median [min, max]
 
-| workers | tensor | local | local, new process | KCoral warm | KCoral cold | first request |
+| workers | tensor | local | local, new process | KCoral, cached inputs | KCoral, new inputs | first request |
 |---|---|---|---|---|---|---|
 | fresh | 4 KiB | 0.34 [0.10, 0.39] | 1779 [1718, 1814] | 337.9 [315.6, 343.4] | 344.1 [324.9, 350.2] | 351 |
 | fresh | 4 MiB | 1.53 [1.41, 5.17] | 1773 [1742, 1833] | 381.1 [340.6, 392.3] | 404.8 [370.2, 439.3] | 436 |
@@ -9,7 +9,7 @@ End-to-end wall time per job, ms: median [min, max]
 | reused | 4 MiB | 1.62 [1.39, 4.44] | 1733 [1710, 1753] | 55.5 [41.5, 98.5] | 76.3 [53.1, 94.3] | 111 |
 | reused | 64 MiB | 46.31 [46.04, 47.33] | 1909 [1889, 1938] | 934.7 [907.1, 1063.9] | 1289.8 [1196.5, 1402.4] | 1430 |
 
-Warm KCoral request breakdown, ms (medians)
+KCoral request breakdown with cached inputs, ms (medians)
 
 | workers | tensor | client build | server elapsed | lease held | rest (HTTP, decode) |
 |---|---|---|---|---|---|

@@ -4,8 +4,8 @@ Measured (each repeated --trials times, interleaved so drift affects all modes a
 
   e2e local         in-process: numpy -> GPU, a + b, GPU -> numpy (warm CUDA context)
   e2e local_proc    the same job in a fresh `python` process (import torch + CUDA init)
-  e2e kcoral_warm   client.execute with tensors already in the server blob cache
-  e2e kcoral_cold   client.execute with new tensor contents (CACHE_MISS, then upload)
+  e2e kcoral_cached client.execute with tensors already in the server blob cache
+  e2e kcoral_new    client.execute with new tensor contents (CACHE_MISS, then upload)
   kernel local/kcoral   GPU time of a + b from kcoral.builtins.benchmark (CUPTI)
 
 Before each KCoral request the script waits until every worker is ready, so
@@ -124,14 +124,14 @@ def main():
         subprocess.run([sys.executable, "-c", PROC_JOB, SOURCE, str(args.n)], check=True)
         return (time.perf_counter() - t0) * 1e3
 
-    e2e = {m: [] for m in ("local", "local_proc", "kcoral_warm", "kcoral_cold")}
-    breakdown = {m: [] for m in ("kcoral_warm", "kcoral_cold")}
+    e2e = {m: [] for m in ("local", "local_proc", "kcoral_cached", "kcoral_new")}
+    breakdown = {m: [] for m in ("kcoral_cached", "kcoral_new")}
     kernel = {"local": [], "kcoral": []}
 
     with Client(args.url) as client:
         health = client.health()
         capacity = health["load"]["request_capacity"]
-        # The first request of the run uploads `a` and `b`; later warm trials hit the cache.
+        # The first request of the run uploads `a` and `b`; later cached-input trials hit it.
         wait_all_workers_ready(client, capacity)
         first_wall, first_breakdown = kcoral_job(client, a, b)
         local_job()  # warm the local CUDA context and caching allocator
@@ -141,14 +141,14 @@ def main():
             e2e["local_proc"].append(local_proc_job())
             wait_all_workers_ready(client, capacity)
             wall, s = kcoral_job(client, a, b)
-            e2e["kcoral_warm"].append(wall)
-            breakdown["kcoral_warm"].append(s)
+            e2e["kcoral_cached"].append(wall)
+            breakdown["kcoral_cached"].append(s)
             fresh_a = np.random.default_rng(1000 + i).random(args.n, dtype=np.float32)
             fresh_b = np.random.default_rng(2000 + i).random(args.n, dtype=np.float32)
             wait_all_workers_ready(client, capacity)
             wall, s = kcoral_job(client, fresh_a, fresh_b)
-            e2e["kcoral_cold"].append(wall)
-            breakdown["kcoral_cold"].append(s)
+            e2e["kcoral_new"].append(wall)
+            breakdown["kcoral_new"].append(s)
             print(f"e2e trial {i + 1}/{args.trials}", file=sys.stderr, end="\r")
 
         program = Program()

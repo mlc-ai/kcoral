@@ -3,9 +3,9 @@ first request after server start: 110.9 ms
                              min        p5    median       p95       max      mean
 e2e local (ms)             1.388     1.544     1.623     3.450     4.440     1.883
 e2e local_proc (ms)     1709.885  1716.951  1733.261  1748.733  1753.488  1733.820
-e2e kcoral_warm (ms)      41.460    47.421    55.538    64.624    98.473    55.912
-e2e kcoral_cold (ms)      53.087    62.111    76.317    91.924    94.299    76.232
+e2e kcoral_cached (ms)      41.460    47.421    55.538    64.624    98.473    55.912
+e2e kcoral_new (ms)      53.087    62.111    76.317    91.924    94.299    76.232
 kernel local (us)         33.504    33.504    33.504    33.536    33.536    33.509
 kernel kcoral (us)        33.568    33.569    33.600    33.600    33.600    33.596
-kcoral_warm breakdown medians (ms): client_build_ms=8.77, queue_ms=0.01, elapsed_ms=25.84, lease_wait_ms=0.02, lease_held_ms=15.74
-kcoral_cold breakdown medians (ms): client_build_ms=8.57, queue_ms=0.01, elapsed_ms=23.85, lease_wait_ms=0.02, lease_held_ms=15.18
+kcoral_cached breakdown medians (ms): client_build_ms=8.77, queue_ms=0.01, elapsed_ms=25.84, lease_wait_ms=0.02, lease_held_ms=15.74
+kcoral_new breakdown medians (ms): client_build_ms=8.57, queue_ms=0.01, elapsed_ms=23.85, lease_wait_ms=0.02, lease_held_ms=15.18

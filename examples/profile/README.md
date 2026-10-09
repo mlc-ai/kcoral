@@ -7,8 +7,8 @@ it directly? This example runs `c = a + b` (float32, PyTorch) both ways on the s
 |---|---|
 | local | in-process, warm CUDA context: numpy → GPU, `a + b`, GPU → numpy |
 | local, new process | the same job in a fresh `python` (includes `import torch` and CUDA init) |
-| KCoral warm | build `Program` + `client.execute`: upload tensors, run, return `c` (input blobs already cached) |
-| KCoral cold | the same, with new tensor contents: `CACHE_MISS`, then the blobs are uploaded |
+| KCoral, cached inputs | build `Program` + `client.execute`: upload tensors, run, return `c` (input blobs already cached) |
+| KCoral, new inputs | the same, with new tensor contents: `CACHE_MISS`, then the blobs are uploaded |
 | kernel | GPU time of `a + b` from `kcoral.builtins.benchmark` (CUPTI, 100 warmup + 1000 timed runs), locally and in KCoral |
 
 The modes are interleaved in each trial: 50 end-to-end trials and 30 kernel trials per
@@ -38,7 +38,7 @@ another job was running on GPU 0.
 
 End-to-end time per job, ms: median [min, max]
 
-| workers | tensor | local | local, new process | KCoral warm | KCoral cold | first request |
+| workers | tensor | local | local, new process | KCoral, cached inputs | KCoral, new inputs | first request |
 |---|---|---|---|---|---|---|
 | fresh | 4 KiB | 0.34 [0.10, 0.39] | 1779 [1718, 1814] | 337.9 [315.6, 343.4] | 344.1 [324.9, 350.2] | 351 |
 | fresh | 4 MiB | 1.53 [1.41, 5.17] | 1773 [1742, 1833] | 381.1 [340.6, 392.3] | 404.8 [370.2, 439.3] | 436 |
@@ -47,9 +47,9 @@ End-to-end time per job, ms: median [min, max]
 | reused | 4 MiB | 1.62 [1.39, 4.44] | 1733 [1710, 1753] | 55.5 [41.5, 98.5] | 76.3 [53.1, 94.3] | 111 |
 | reused | 64 MiB | 46.31 [46.04, 47.33] | 1909 [1889, 1938] | 934.7 [907.1, 1063.9] | 1289.8 [1196.5, 1402.4] | 1430 |
 
-Breakdown of a warm KCoral request, ms (medians). "client build" includes hashing the
-input blobs (SHA-256). "server elapsed" and "lease held" are the `ProgramResult`
-fields. "rest" is wall time minus build minus elapsed: HTTP and decoding the response.
+Breakdown of a KCoral request with cached inputs, ms (medians). "client build" includes
+hashing the input blobs (SHA-256). "server elapsed" and "lease held" are the
+`ProgramResult` fields. "rest" is wall time minus build minus elapsed: HTTP and decoding the response.
 
 | workers | tensor | client build | server elapsed | lease held | rest |
 |---|---|---|---|---|---|
@@ -81,14 +81,14 @@ Kernel latency (CUPTI median of each run), µs: median [min, max]
   `_wait_for_exit` in `runtime/worker.py`). Replacing a worker took 3.3 s (median;
   `worker_retired` → `worker_ready`). That is outside these timings, but more than 8
   back-to-back requests within that window would queue.
-- **Tensor size adds overhead.** At 64 MiB per tensor with reused workers, a warm request
+- **Tensor size adds overhead.** At 64 MiB per tensor with reused workers, a request with cached inputs
   adds ~0.9 s over local (46 ms). The time goes to the client hashing 128 MiB of inputs
   (136 ms), the server moving data outside the lease (elapsed − lease held ≈ 490 ms),
   and returning the 64 MiB result (~175 ms).
-- **Cold start = blob upload.** With new tensor contents, the extra `CACHE_MISS` round
+- **New inputs cost an upload.** With new tensor contents, the extra `CACHE_MISS` round
   trip and upload add 4–6 ms (4 KiB), 21–24 ms (4 MiB) and 355–415 ms (64 MiB) to the
   median. The first request after server start (one sample per run) was 7–140 ms slower
-  than the cold median. There is no large startup cost, because workers start with a ready
+  than the new-input median. There is no large startup cost, because workers start with a ready
   CUDA context.
 - A KCoral request is still faster than starting a new local Python process
   (~1.7–1.9 s), which pays for `import torch` and CUDA init.
