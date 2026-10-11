@@ -172,7 +172,12 @@ def parse_args(tool, argv, *, validate=None, profiling=False):
         name, separator, value = entry.partition("=")
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
             parser.error("environment variable names must be identifiers")
-        if name in {"CUDA_VISIBLE_DEVICES", "KCORAL_DIR"}:
+        if name in {
+            "CUDA_VISIBLE_DEVICES",
+            "HIP_VISIBLE_DEVICES",
+            "ROCR_VISIBLE_DEVICES",
+            "KCORAL_DIR",
+        }:
             parser.error(f"{name} is managed by the remote worker")
         if not separator:
             if name not in os.environ:

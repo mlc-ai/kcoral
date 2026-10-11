@@ -90,12 +90,19 @@ Example response from a GPU server with two workers:
     "requests_waiting": 3
   },
   "target": {"arch": "sm_100a"},
-  "versions": {"torch": "2.14.0+cu132", "cuda": "13.2", "tvm_ffi": "0.1.13.post2"}
+  "versions": {"torch": "2.14.0+cu132", "cuda": "13.2", "tvm_ffi": "0.1.13.post2"},
+  "capabilities": {
+    "backend": "cuda",
+    "timing": "cupti",
+    "cpu_only_check": "at_entry",
+    "profilers": ["ncu", "compute-sanitizer"]
+  }
 }
 ```
 
 Version strings above are illustrative; use the values returned by your server.
-The GPU runtime reports `torch`, `cuda` (the CUDA version used to build PyTorch),
+The GPU runtime reports `torch`, `cuda` (the CUDA version used to build PyTorch)
+or `hip` on ROCm,
 and available `tvm`, `tvm_ffi`, `triton`, `cutlass` and `flashinfer` versions.
 Optional entries can be absent; this is not an inventory of every installed
 compiler or command-line tool. CPU servers report the available `tvm_ffi` version.
@@ -111,6 +118,12 @@ compiler or command-line tool. CPU servers report the available `tvm_ffi` versio
 | `load.requests_waiting` | integer | Requests awaiting assignment at this endpoint |
 | `target` | object | Compilation target, including `arch` on a GPU server; empty on a CPU server |
 | `versions` | object | Runtime and toolchain version strings |
+| `capabilities.backend` | string | `cuda`, `rocm`, or `cpu` on a CPU server (which reports no other capability) |
+| `capabilities.timing` | string | `benchmark`'s method: `cupti`, or `trace` (ROCprofiler through the PyTorch profiler) |
+| `capabilities.cpu_only_check` | string | `at_entry`: a `cpu_only` function's GPU call is stopped as it is made; `torch_at_entry`: torch GPU operations are stopped as they are made, other GPU calls are reported once the function returns |
+| `capabilities.profilers` | array | Remote profiling tools installed for `kcoral run` |
+
+A Router does not forward `capabilities`.
 
 Direct-server capacity counts workers, excluding background replacements, and
 becomes zero during shutdown. Router capacity counts execution connections on

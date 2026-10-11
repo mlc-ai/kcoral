@@ -15,7 +15,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -34,7 +34,7 @@ from kcoral.runtime.worker import WorkerCleanupError, WorkerCrashed, WorkerTimeo
 from kcoral.schemas import Program, ProgramOutcome
 from kcoral.server.cache import ByteCache, DiskFileCache, _CacheMiss, resolve_blobs
 from kcoral.server.events import EventLogger, _keep_program, _program_shape
-from kcoral.support import sandbox
+from kcoral.support import sandbox, vendor
 
 _TRACEBACK_LIMIT = 8192
 _MESSAGE_LIMIT = 2048
@@ -218,6 +218,7 @@ def create_app(
                 raise asyncio.CancelledError
 
     app = FastAPI(title="KCoral", version=__version__, lifespan=lifespan)
+    capabilities = vendor.capabilities(config.device)
 
     @app.get("/health", response_model=HealthResponse)
     async def health(request: Request) -> dict[str, object]:
@@ -231,6 +232,7 @@ def create_app(
             "load": pool.load(),
             "target": pool.target(),
             "versions": pool.versions(),
+            "capabilities": capabilities,
         }
 
     @app.get("/internal/worker-status", include_in_schema=False)
@@ -614,6 +616,9 @@ class HealthResponse(BaseModel):
     load: RequestLoad
     target: dict[str, str] = Field(description="Compilation target.")
     versions: dict[str, str] = Field(description="Installed runtime and toolchain versions.")
+    capabilities: dict[str, Any] = Field(
+        description="GPU backend, benchmark timing method, cpu_only check and remote profilers."
+    )
 
 
 logger = logging.getLogger("uvicorn.error")

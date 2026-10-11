@@ -29,8 +29,7 @@ from typing import Any
 from kcoral.errors import ExecutionError, GPUAccessViolation
 from kcoral.runtime import python as process_state
 from kcoral.runtime.python import LoadedPythonModule, materialize_module
-from kcoral.support import sandbox
-from kcoral.support.cuda import _cuda_error_api
+from kcoral.support import sandbox, vendor
 
 # Libraries already dlopened by this worker, keyed by the SHA-256 of their bytes.
 # Purely a memoization — every request carries the bytes it needs. Bounded because
@@ -115,7 +114,14 @@ class GPURuntime:
 
     def device_uuid(self) -> str | None:
         """The card this worker actually got, for the parent to check."""
-        return describe_device_uuid()
+        identity = describe_device_uuid()
+        if identity is None and vendor.strict_identity():
+            # /dev/kfd serves every GPU, so an unidentified worker could be on any.
+            raise RuntimeError(
+                "cannot read the GPU's PCI address from torch, which a ROCm worker "
+                "needs to confirm its card; use a torch build that reports pci_bus_id"
+            )
+        return identity
 
     def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any:
         return _materialize_tensor(data, dtype, shape)
@@ -135,6 +141,11 @@ class GPURuntime:
     def forbid_gpu(self) -> Iterator[None]:
         """Fail the guarded call once it has entered any CUDA runtime or driver API.
         Best effort: the call is seen from inside, and a child process not at all."""
+        if vendor.backend() == "rocm":
+            # Outermost wins: the torch-level report carries the call site.
+            with _forbid_gpu_tensors(), _forbid_gpu_traced():
+                yield
+            return
         try:
             from cupti import cupti
         except ImportError as exc:
@@ -204,13 +215,13 @@ class GPURuntime:
                     torch.cuda.synchronize(device)
 
     def take_last_error(self) -> str | None:
-        """Consume CUDA's thread-local last error, if one is pending.
+        """Consume the CUDA/HIP thread-local last error, if one is pending.
 
         Some invalid launches do not enqueue work and therefore are not reported
         by ``synchronize``. Leaving that error behind makes an unrelated CUDA API
         call in the next request report it instead.
         """
-        return _cuda_error_api().take_last_error()
+        return vendor.take_last_error()
 
     def reset(self) -> None:
         import torch
@@ -245,6 +256,98 @@ class GPURuntime:
             self._cupti_guard_used = False
 
 
+@contextmanager
+def _forbid_gpu_tensors() -> Iterator[None]:
+    """Stop any torch operation on a GPU tensor or device as it is dispatched, at
+    its call site: CUPTI's behavior, for the torch calls that make up most GPU use
+    on ROCm. HIP called outside torch is left to :func:`_forbid_gpu_traced`."""
+    import torch
+    from torch.utils._python_dispatch import TorchDispatchMode
+    from torch.utils._pytree import tree_flatten
+
+    def on_gpu(value: Any) -> bool:
+        if isinstance(value, torch.Tensor):
+            return value.device.type == "cuda"
+        return isinstance(value, torch.device) and value.type == "cuda"
+
+    violation: GPUAccessViolation | None = None
+
+    class Watch(TorchDispatchMode):
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            nonlocal violation
+            kwargs = kwargs or {}
+            if any(on_gpu(leaf) for leaf in tree_flatten((args, kwargs))[0]):
+                detected_at_ns = time.monotonic_ns()
+                frames = traceback.extract_stack()[:-1]  # below this mode
+                if violation is None:
+                    violation = GPUAccessViolation(
+                        f"torch {func}",
+                        _call_site(frames),
+                        "".join(traceback.format_list(frames)),
+                        detected_at_ns,
+                    )
+                raise violation  # before the operation reaches HIP
+            return func(*args, **kwargs)
+
+    try:
+        with Watch():
+            yield
+    finally:
+        if violation is not None:  # even if the function caught it
+            raise violation
+
+
+@contextmanager
+def _forbid_gpu_traced() -> Iterator[None]:
+    """The ROCm counterpart of the CUPTI guard: trace the call with the PyTorch
+    profiler (ROCprofiler underneath) and fail if the trace holds any HIP API call
+    or GPU activity. Weaker than CUPTI: the call is reported after it returns, not
+    stopped at entry, its call site is unknown, and only HIP calls the tracer
+    records are seen."""
+    from torch.autograd import DeviceType
+    from torch.profiler import ProfilerActivity, profile, record_function
+
+    marker = "kcoral::cpu_only"
+    trace = profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA])
+    try:
+        trace.start()
+    except Exception as exc:
+        raise ExecutionError(
+            "unavailable", f"the profiler cannot watch for HIP calls: {exc}"
+        ) from exc
+    try:
+        started_ns = time.monotonic_ns()
+        with record_function(marker):
+            yield
+    finally:
+        trace.stop()
+        # The profiler's own start and stop synchronize the device, so only HIP
+        # calls inside the marked range, on the trace's clock, are the function's.
+        events = trace.profiler.kineto_results.events()
+        window = next(
+            (
+                (int(e.start_ns()), int(e.start_ns()) + int(e.duration_ns()))
+                for e in events
+                if e.name() == marker and e.device_type() == DeviceType.CPU
+            ),
+            None,
+        )
+        first: tuple[int, str] | None = None
+        for event in events if window is not None else ():
+            name, start = event.name(), int(event.start_ns())
+            if (
+                event.device_type() == DeviceType.CPU
+                and name.startswith(("hip", "cuda"))
+                and window[0] <= start <= window[1]
+                and (first is None or start < first[0])
+            ):
+                first = (start, name)
+        if first is not None:
+            detected_at_ns = started_ns + (first[0] - window[0])
+            location = "an unknown call site (ROCm reports it after the call)"
+            raise GPUAccessViolation(first[1], location, "", detected_at_ns)
+
+
 def _call_site(frames: list[traceback.FrameSummary]) -> str:
     """Where the program's own code made the call: the innermost uploaded frame,
     else the innermost one outside this package."""
@@ -273,13 +376,31 @@ def _warm_up() -> None:
         # device API on first use.
         import tvm
 
-        tvm.runtime.empty((1,), "float32", tvm.cuda(0))
+        device = tvm.rocm(0) if vendor.backend() == "rocm" else tvm.cuda(0)
+        tvm.runtime.empty((1,), "float32", device)
     except Exception:
         pass  # tvm is optional
+    if vendor.backend() == "rocm":
+        _warm_up_profiler()
     # The imports above live as long as the worker; freezing them out of the
     # collector's reach is what keeps the `gc.collect()` in `reset()` cheap.
     gc.collect()
     gc.freeze()
+
+
+def _warm_up_profiler() -> None:
+    """Spend Kineto's first ROCm session at startup. That session records no GPU
+    activity and places HIP calls off the trace's clock, which would make the
+    first benchmark fall back to event timing and a cpu_only check miss calls."""
+    try:
+        import torch
+        from torch.profiler import ProfilerActivity, profile
+
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]):
+            torch.zeros(1, device="cuda").add_(1)
+            torch.cuda.synchronize()
+    except Exception:
+        pass  # benchmark and the cpu_only check report their own failures
 
 
 def _require_torch_and_ffi() -> None:
@@ -291,6 +412,7 @@ def _require_torch_and_ffi() -> None:
             "The GPU runtime requires torch and tvm_ffi in the worker environment "
             f"(full tvm is optional). Importing them failed: {exc!r}"
         ) from exc
+    vendor.require_matching_torch()
 
 
 def _materialize_tensor(data: bytes, dtype_name: str, shape: list[int]) -> Any:
@@ -321,6 +443,15 @@ def describe_target() -> dict[str, str]:
     """The compilation target of the visible GPU."""
     import torch
 
+    if vendor.backend() == "rocm":
+        # e.g. "gfx942:sramecc+:xnack-"; the feature flags follow the arch name.
+        arch, _, features = torch.cuda.get_device_properties(0).gcnArchName.partition(":")
+        # As below: cached while startup is serialized, for later cpu_only builds.
+        os.environ.setdefault("TVM_FFI_ROCM_ARCH_LIST", arch)
+        target = {"arch": arch}
+        if features:
+            target["features"] = features
+        return target
     major, minor = torch.cuda.get_device_capability()
     # Cache the compiler spelling while worker startup is serialized. A later
     # cpu_only compile must not query the CUDA driver after dropping its lease.
@@ -343,6 +474,8 @@ def _describe_versions() -> dict[str, str]:
     versions = {"torch": torch.__version__}
     if torch.version.cuda:
         versions["cuda"] = torch.version.cuda
+    if getattr(torch.version, "hip", None):
+        versions["hip"] = torch.version.hip
     for name in ("tvm", "tvm_ffi", "triton"):
         try:
             versions[name] = __import__(name).__version__
@@ -360,13 +493,9 @@ def _describe_versions() -> dict[str, str]:
 
 
 def describe_device_uuid() -> str | None:
-    """The visible GPU's UUID; None where torch cannot name one."""
-    import torch
-
-    try:
-        return str(torch.cuda.get_device_properties(0).uuid)
-    except Exception:  # no such attribute on older torch, or no visible device
-        return None
+    """The visible GPU's identity (a UUID, or a PCI address on ROCm); None where
+    torch cannot name it."""
+    return vendor.describe_device_identity()
 
 
 def _materialize_library(data: bytes) -> LoadedLibrary:

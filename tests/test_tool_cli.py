@@ -74,6 +74,8 @@ def test_shared_options_and_native_argument_boundary(monkeypatch, capsys):
         ("python", "-e CUDA_VISIBLE_DEVICES=0 -- check.py"),
         ("ncu", "--out reports -- --export=custom -- python check.py"),
         ("run-iket", "--out reports -- profile"),
+        ("rocprofv3", "--out reports -- -d elsewhere -- python check.py"),
+        ("rocprofv3", "--out reports -- --output-file=x -- python check.py"),
     ],
 )
 def test_invalid_tool_options(monkeypatch, tool, arguments):
@@ -143,7 +145,7 @@ def test_shell_returns_files_on_failure(remote, tmp_path):
     assert (out / "result/empty").is_dir()
 
 
-@pytest.mark.parametrize("tool", ["compute-sanitizer", "ncu", "run-iket"])
+@pytest.mark.parametrize("tool", ["compute-sanitizer", "ncu", "run-iket", "rocprofv3"])
 def test_native_tools_and_profiler_reports(remote, tmp_path, capsys, tool):
     executable = tmp_path / tool
     executable.write_text(
@@ -156,6 +158,9 @@ print(json.dumps(args))
 if Path(sys.argv[0]).name == 'ncu':
     assert os.environ['NCU_PROFILE'] == '1'
     Path(args[args.index('--export') + 1]).write_bytes(b'report')
+elif Path(sys.argv[0]).name == 'rocprofv3':
+    out = Path(args[args.index('--output-directory') + 1])
+    (out / 'capture_kernel_stats.csv').write_text('Name,Calls')
 elif Path(sys.argv[0]).name == 'run-iket':
     out = Path(args[args.index('--output-dir') + 1])
     out.mkdir()  # IKET requires a directory that does not already exist.
@@ -170,6 +175,7 @@ sys.exit(3)
         "compute-sanitizer": ["--tool", "racecheck"],
         "ncu": ["--set", "basic", "--"],
         "run-iket": ["profile", "--"],
+        "rocprofv3": ["--"],
     }[tool]
     if tool != "compute-sanitizer":
         options += ["--out", str(out)]
@@ -181,6 +187,9 @@ sys.exit(3)
     elif tool == "ncu":
         assert arguments[:2] == ["--config-file", "0"]
         assert (out / "capture.ncu-rep").read_bytes() == b"report"
+    elif tool == "rocprofv3":
+        assert arguments[4:8] == ["--kernel-trace", "--stats", "--output-format", "csv"]
+        assert (out / "capture_kernel_stats.csv").read_text() == "Name,Calls"
     else:
         assert (out / "trace.json").read_text() == "{}"
 

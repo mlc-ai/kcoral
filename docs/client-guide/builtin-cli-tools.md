@@ -11,6 +11,7 @@ Choose a tool for the task you want to perform:
 | --- | --- |
 | [python](#python) | Run a Python script, module, or inline command with the worker's interpreter. |
 | [ncu](#ncu) | Collect NVIDIA Nsight Compute kernel performance reports. |
+| [rocprofv3](#rocprofv3) | Collect AMD ROCprofiler kernel traces and statistics. |
 | [run-iket](#run-iket) | Collect instrumented kernel execution timelines. |
 | [compute-sanitizer](#compute-sanitizer) | Find CUDA memory-access and synchronization errors. |
 | [shell](#shell) | Run a shell script, uploaded executable, or program installed on the worker. |
@@ -327,6 +328,30 @@ ncu --import artifacts/ncu/capture.ncu-rep
 | Hard timeout | Can prevent the report from being returned. |
 
 For native help without creating a report, run `kcoral run shell -- ncu --help`.
+
+## rocprofv3
+
+ROCprofiler traces kernels and API calls on AMD GPUs (ROCm servers). The worker
+needs `rocprofv3` on its `PATH`.
+
+```text
+kcoral run rocprofv3 [KCoral options] --out DIRECTORY -- [rocprofv3 options] -- APPLICATION [arguments]
+```
+
+Options and separators work as for [ncu](#ncu). Without native options KCoral
+collects `--kernel-trace --stats --output-format csv`, which is readable without
+ROCm tools. KCoral selects the output location, so `--output-directory`/`-d` and
+`--output-file`/`-o` are rejected; files are named `capture` plus rocprofv3's
+suffixes, for example `capture_kernel_stats.csv`.
+
+```bash
+kcoral run rocprofv3 --send experiment --out artifacts/rocprof \
+  -- -- python experiment/capture.py
+kcoral run rocprofv3 --send experiment --out artifacts/rocprof-trace \
+  -- --kernel-trace --hip-runtime-trace --output-format pftrace -- python experiment/capture.py
+```
+
+The run fails with a missing-artifact message if rocprofv3 wrote no files.
 See the [Nsight Compute CLI manual](https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html)
 for section sets, filters, replay, and platform requirements.
 

@@ -20,6 +20,7 @@ from kcoral.runtime.lease import GPULeases, GPUUnavailable, NoopLeases
 from kcoral.runtime.pool import PoolBusy, WorkerPool
 from kcoral.runtime.worker import Worker, WorkerCleanupError, WorkerCrashed, WorkerTimeout
 from kcoral.server.app import create_app
+from kcoral.support import vendor
 
 
 def wait_for(predicate, timeout=10):
@@ -44,9 +45,20 @@ def build(source, args=(), *, count=2):
     return parsed
 
 
+@pytest.fixture(autouse=True)
+def cuda_backend(monkeypatch):
+    """These tests schedule fake runtimes on fake GPU ids and read the CUDA
+    visibility variable, so they use the CUDA backend even on an AMD host.
+    Through the environment, so spawned workers agree."""
+    monkeypatch.setenv(vendor.ENVIRONMENT, "cuda")
+    vendor.backend.cache_clear()
+    yield
+    vendor.backend.cache_clear()
+
+
 @pytest.fixture
 def pool(monkeypatch):
-    monkeypatch.setattr("kcoral.runtime.worker.nvml.device_uuid", lambda _: None)
+    monkeypatch.setattr("kcoral.support.cuda.device_uuid", lambda _: None)
     with_pool = WorkerPool(
         [0, 2, 4, 6],
         fake_runtime_factory,
@@ -183,7 +195,7 @@ def test_interpreter_finalizers_use_the_execution_deadline(
 
         if not shutil.which("bwrap"):
             pytest.skip("bubblewrap is not installed")
-    monkeypatch.setattr("kcoral.runtime.worker.nvml.device_uuid", lambda _: None)
+    monkeypatch.setattr("kcoral.support.cuda.device_uuid", lambda _: None)
     worker = Worker(
         gpus,
         fake_runtime_factory,
@@ -614,7 +626,7 @@ class DelayedJobFactory:
 def test_job_startup_timeout_and_crash_have_distinct_http_statuses(
     tmp_path, monkeypatch, phase, crash
 ):
-    monkeypatch.setattr("kcoral.runtime.worker.nvml.device_uuid", lambda _: None)
+    monkeypatch.setattr("kcoral.support.cuda.device_uuid", lambda _: None)
     marker = tmp_path / "startup.pid"
     config = ServerConfig(gpus=[0, 2], workers_per_gpu=1, sandbox="none")
     app = create_app(config, runtime_factory=DelayedJobFactory(phase, str(marker), crash))

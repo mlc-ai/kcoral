@@ -28,7 +28,10 @@ def add_one(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.
 
 def compile_kernel(arch):
     # An explicit architecture avoids querying the GPU during compilation.
-    target = tvm.target.Target({"kind": "cuda", "arch": arch})
+    if arch.startswith("gfx"):  # an AMD GPU on a ROCm server
+        target = tvm.target.Target({"kind": "rocm", "mcpu": arch})
+    else:
+        target = tvm.target.Target({"kind": "cuda", "arch": arch})
     module = tvm.IRModule({"add_one": add_one.specialize(N=256)})
     # NVRTC can initialize CUDA; use the CPU-only nvcc subprocess instead.
     key = "TVM_CUDA_COMPILE_MODE"

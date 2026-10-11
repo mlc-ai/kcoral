@@ -20,7 +20,7 @@ import threading
 from pathlib import Path
 from types import ModuleType
 
-from kcoral.support import cuda as nvml
+from kcoral.support import vendor
 
 WORKSPACE = "/work"
 PRIVATE = ".kcoral"
@@ -129,6 +129,8 @@ def _environment() -> dict[str, str]:
         "TRITON_CACHE_DIR": f"{private}/triton",
         "TORCH_EXTENSIONS_DIR": f"{private}/extensions",
         "TVM_FFI_CACHE_DIR": f"{private}/cache/tvm-ffi",
+        "MIOPEN_USER_DB_PATH": f"{private}/cache/miopen",
+        "MIOPEN_CUSTOM_CACHE_DIR": f"{private}/cache/miopen",
         "PYTHONDONTWRITEBYTECODE": "1",
     }
 
@@ -188,7 +190,6 @@ class Sandbox:
                 "/lib",
                 "/lib64",
                 "/sys",
-                "/opt/nvidia/nsight-compute",
                 "/etc/ld.so.cache",
                 "/etc/ld.so.conf",
                 "/etc/ld.so.conf.d",
@@ -197,6 +198,11 @@ class Sandbox:
             )
             if Path(p).exists()
         ]
+        for runtime_path in map(Path, vendor.runtime_paths()):
+            if runtime_path.exists():
+                # Also at its resolved location (/opt/rocm -> /opt/rocm-7.x), which
+                # library search paths and RPATHs may name instead.
+                paths += dict.fromkeys((runtime_path, runtime_path.resolve()))
         paths += [Path(sys.prefix), Path(sys.base_prefix), package_path]
         paths += list(self.readonly_paths)
         seen: set[Path] = set()
@@ -215,20 +221,9 @@ class Sandbox:
             command += ["--dev-bind", f"/dev/{name}", f"/dev/{name}"]
         if gpu_id is not None:
             gpu_ids = (gpu_id,) if isinstance(gpu_id, int) else gpu_id
-            devices = []
-            for gpu in gpu_ids:
-                minor = nvml.device_minor_number(gpu)
-                device_number = gpu if minor is None else minor
-                devices.append(Path(f"/dev/nvidia{device_number}"))
-            devices += [
-                Path("/dev/nvidiactl"),
-                Path("/dev/nvidia-uvm"),
-                Path("/dev/nvidia-uvm-tools"),
-            ]
             # Bind device nodes individually: a writable host directory here
             # would also permit ordinary files outside the workspace.
-            devices.extend(Path("/dev/nvidia-caps").glob("nvidia-cap*"))
-            for path in devices:
+            for path in vendor.device_nodes(tuple(gpu_ids)):
                 if path.exists():
                     command += ["--dev-bind", str(path), str(path)]
         for target, link in (

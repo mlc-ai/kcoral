@@ -1,0 +1,12 @@
+# Server dependencies for ROCm workers: the `server` extra without its CUDA-only
+# packages (nvidia-cutlass-dsl, cupti-python, flashinfer-python). torch and
+# Triton come from the PyTorch ROCm index; see Dockerfile.rocm.dev.
+fastapi>=0.110
+grpcio>=1.66.2
+protobuf>=5.27.2
+uvicorn>=0.29
+apache-tvm-ffi[cpp]>=0.1.14.post0
+httpx>=0.27
+numpy>=1.24
+ml_dtypes>=0.5
+pytest>=8

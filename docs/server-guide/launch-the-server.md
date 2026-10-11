@@ -212,6 +212,7 @@ worker exclusive access to its GPU while it executes or measures GPU work.
 | `--host` | `127.0.0.1` | `KCORAL_SERVER_HOST` | Listening address |
 | `--port` | `8000` | `KCORAL_SERVER_PORT` | Listening port |
 | `--device` | `gpu` | `KCORAL_SERVER_DEVICE` | Worker mode: `gpu` or `cpu` |
+| `--backend` | `auto` | `KCORAL_GPU_BACKEND` | GPU vendor runtime: `auto`, `cuda` or `rocm` |
 | `--gpus` | `0` | `KCORAL_SERVER_GPUS` | Comma-separated physical GPU IDs |
 | `--num-workers` | `1` | — | Worker count in CPU mode |
 | `--workers-per-gpu` | `8` | — | Workers per GPU in GPU mode |
@@ -228,6 +229,38 @@ target architecture. CPU mode ignores `--gpus` and uses `--num-workers` instead.
 The default replaces a worker after each request, giving the next request a
 fresh process and GPU context. Reusing workers can reduce replacement overhead,
 but reset and poison detection cannot contain every effect of invalid GPU code.
+
+### AMD GPUs (experimental)
+
+`--backend auto` picks `rocm` when the installed torch is a ROCm build. On
+ROCm, `--gpus` indexes GPUs in ROCm runtime order (the order `rocminfo` lists
+them), and workers are pinned with `ROCR_VISIBLE_DEVICES`. A worker that cannot
+confirm it came up on its assigned card, by PCI address, is refused. With
+bubblewrap, a worker sees `/dev/kfd` and only its own `/dev/dri/renderD*` nodes.
+
+Install the ROCm build of torch first, then the packages in
+`docker/requirements.rocm.txt`, then KCoral with `--no-deps`: the `server`
+extra pins CUDA-only packages. `docker/Dockerfile.rocm.dev` does this, and
+`docker compose --profile rocm up kcoral-rocm` runs it.
+
+Differences from CUDA workers:
+
+- `benchmark` measures the same first-to-last GPU activity spans from a
+  ROCprofiler trace taken through the PyTorch profiler (`"timing": "trace"`).
+  If that trace records no GPU activity, it falls back to stream events
+  (`"timing": "events"`, `activities_stable` is `null`).
+- A `cpu_only` function's torch operations on the GPU are stopped as they are
+  made, at their call site. Other HIP calls, such as a Triton launch, are found
+  in a ROCprofiler trace and reported after the function returns, without a
+  call site; CUPTI stops every CUDA call as it is made.
+- `compile_tirx` targets TVM's `rocm` target, which needs `apache-tvm` built
+  with ROCm support; NVIDIA-specific schedules may not lower.
+- CUDA C uploads compile as HIP C++ with ROCm's clang, for the worker's `gfx*`
+  architecture; `compile_cuda_binary` takes `arch` such as `gfx942`.
+- `kcoral run rocprofv3` replaces `ncu`; CuTe DSL, `ncu` and
+  `compute-sanitizer` are unavailable.
+- The reported target is the `gfx*` architecture, for example `gfx942`.
+- `/health` reports these differences under `capabilities`.
 
 ### Time and size limits
 

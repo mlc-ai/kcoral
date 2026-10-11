@@ -11,11 +11,28 @@ from support.runtime import UNSHARED_GPU, execute_for_test
 
 from kcoral.protocol import compute_blob_hash, parse_program
 from kcoral.schemas import FileUpload, GetFunction, Program, Ref, Return, Run, Upload
+from kcoral.support import vendor
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("KCORAL_GPU_TEST") != "1",
     reason="GPU integration test requires KCORAL_GPU_TEST=1",
 )
+ROCM = vendor.backend() == "rocm"
+cuda_only = pytest.mark.skipif(ROCM, reason="exercises an NVIDIA-only feature")
+rocm_only = pytest.mark.skipif(not ROCM, reason="exercises the ROCm backend")
+needs_tirx = pytest.mark.skipif(
+    ROCM and importlib.util.find_spec("tvm") is None,
+    reason="TIRx on ROCm needs apache-tvm built with ROCm support",
+)
+
+
+def tvm_target(arch):
+    """An explicit TVM target for a health ``arch``: ``sm_*`` or ROCm's ``gfx*``."""
+    import tvm
+
+    if arch.startswith("gfx"):
+        return tvm.target.Target({"kind": "rocm", "mcpu": arch})
+    return tvm.target.Target({"kind": "cuda", "arch": arch})
 
 
 def test_uploaded_tensor_has_independent_storage():
@@ -77,6 +94,9 @@ void add_one(tvm::ffi::TensorView x, tvm::ffi::TensorView y) {
 
 MULTI_ENTRY_CUDA_KERNEL = r"""
 #include <tvm/ffi/extra/c_env_api.h>
+#if defined(__HIP_PLATFORM_AMD__)
+typedef hipStream_t cudaStream_t;
+#endif
 
 __global__ void add_value_kernel(const float* x, float* y, int n, float value) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -125,25 +145,26 @@ void tmem_roundtrip(tvm::ffi::TensorView out) {
 def build_library(source, entry, tmp_path):
     """Compile CUDA C the way a client would, off the server, and return the bytes."""
     import tvm_ffi.cpp
-    from support.cuda import _cuda_arch_list
+    from support.cuda import _arch_variable, _cuda_arch_list, _portable_source
     from tvm_ffi.cpp import extension
 
-    os.environ.setdefault("TVM_FFI_CUDA_ARCH_LIST", _cuda_arch_list())
+    os.environ.setdefault(_arch_variable(), _cuda_arch_list())
     cu = tmp_path / f"{entry}.cu"
-    cu.write_text(extension._decorate_with_tvm_ffi(source, {entry: ""}))
+    cu.write_text(extension._decorate_with_tvm_ffi(_portable_source(source), {entry: ""}))
     return pathlib.Path(tvm_ffi.cpp.build(name=entry, cuda_files=[str(cu)])).read_bytes()
 
 
 def build_multi_entry_library(source, entries, tmp_path):
     """Build one TVM-FFI library that exports every name in ``entries``."""
     import tvm_ffi.cpp
-    from support.cuda import _cuda_arch_list
+    from support.cuda import _arch_variable, _cuda_arch_list, _portable_source
     from tvm_ffi.cpp import extension
 
-    os.environ.setdefault("TVM_FFI_CUDA_ARCH_LIST", _cuda_arch_list())
+    os.environ.setdefault(_arch_variable(), _cuda_arch_list())
     name = "multi_entry_" + "_".join(entries)
     cu = tmp_path / f"{name}.cu"
-    cu.write_text(extension._decorate_with_tvm_ffi(source, dict.fromkeys(entries, "")))
+    exports = dict.fromkeys(entries, "")
+    cu.write_text(extension._decorate_with_tvm_ffi(_portable_source(source), exports))
     return pathlib.Path(tvm_ffi.cpp.build(name=name, cuda_files=[str(cu)])).read_bytes()
 
 
@@ -157,7 +178,7 @@ def build_tirx_library(tmp_path):
     runtime = GPURuntime()
     module = runtime.load_module(PRIM_KERNEL.replace("def main(", "def add_one("))
     prim_func = runtime.get_function(module, "add_one")
-    target = tvm.target.Target({"kind": "cuda", "arch": describe_target()["arch"]})
+    target = tvm_target(describe_target()["arch"])
     with target:  # the tirx pipeline reads the arch from Target.current()
         executable = tvm.compile(
             tvm.IRModule({"add_one": prim_func}), target=target, tir_pipeline="tirx"
@@ -303,6 +324,7 @@ def main(shape):
     )
 
 
+@needs_tirx
 def test_compile_correctness_and_benchmark():
     outcome = execute_for_test(tirx_benchmark_program(), runtime(), UNSHARED_GPU)
     assert outcome.status == "COMPLETED", outcome.error
@@ -312,6 +334,7 @@ def test_compile_correctness_and_benchmark():
     assert timing["latency_ms_median"] > 0 and timing["repeat"] == 20
 
 
+@needs_tirx
 def test_benchmark_example_compiles_off_gpu_then_checks_and_times_kernel():
     rt = runtime()
     example = pathlib.Path(__file__).parents[1] / "examples/benchmark_kernel/benchmark_kernel.py"
@@ -352,6 +375,7 @@ def cpu_only_call(source, gpu_runtime):
     )
 
 
+@cuda_only
 def test_a_cpu_only_function_is_checked_against_the_cuda_api():
     gpu_runtime = runtime()
     host = cpu_only_call(CPU_REFERENCE, gpu_runtime)
@@ -369,6 +393,33 @@ def test_a_cpu_only_function_is_checked_against_the_cuda_api():
     # CUPTI is shared with the test harness: each leaves it usable by the other.
     timed = execute_for_test(tirx_benchmark_program(), gpu_runtime, UNSHARED_GPU)
     assert timed.status == "COMPLETED", timed.error
+    assert cpu_only_call(CUDA_IN_CPU_ONLY, gpu_runtime).error["kind"] == "gpu_access"
+
+
+@rocm_only
+def test_a_cpu_only_function_is_checked_against_the_hip_api():
+    """The ROCm guard stops a torch operation on the GPU at its call site."""
+    gpu_runtime = runtime()
+    host = cpu_only_call(CPU_REFERENCE, gpu_runtime)
+    assert host.status == "COMPLETED", host.error
+    assert host.results["value"]["value"] == sum(i * i for i in range(256))
+
+    device = cpu_only_call(CUDA_IN_CPU_ONLY, gpu_runtime)
+    assert device.status == "FAILED"
+    error = device.error
+    assert error["kind"] == "gpu_access" and error["instruction_id"] == "value"
+    assert error["cuda_call"].startswith("torch aten.")
+    assert error["location"].startswith("<uploaded:") and error["location"].endswith(" in main")
+    assert "torch.zeros" in error["traceback"]
+
+    # The guard's trace leaves the profiler usable for the benchmark timer.
+    import torch
+
+    from kcoral.builtins import benchmark
+
+    tensor = torch.zeros(4096, device="cuda")
+    timing = benchmark(lambda: tensor.add_(1.0), {"warmup": 1, "repeat": 3})
+    assert timing["timing"] == "trace" and timing["activities_stable"]
     assert cpu_only_call(CUDA_IN_CPU_ONLY, gpu_runtime).error["kind"] == "gpu_access"
 
 
@@ -492,6 +543,7 @@ def test_cuda_c_nvcc_error_is_compile_failure_and_names_the_mistake():
     assert "undeclared_symbol" in outcome.error["message"]
 
 
+@cuda_only
 def test_cuda_c_runs_on_the_arch_specific_target():
     """A plain sm_100 target cannot even assemble tcgen05, so building and running
     this kernel is what proves the worker selects sm_100a."""
@@ -648,6 +700,7 @@ def main(shape):
     assert decode_structural(outcome.results["timing"])["latency_ms_median"] > 0
 
 
+@needs_tirx
 def test_prebuilt_tirx_library_runs(tmp_path):
     """An export_library artifact carries its device code as an embedded blob, so
     this is the path that needs the TVM CUDA runtime loader registered."""
@@ -900,6 +953,7 @@ def test_python_syntax_error_is_parse_failure():
     assert outcome.error["instruction_index"] == 0
 
 
+@needs_tirx
 def test_tirx_error_is_parse_failure():
     bad_kernel = KERNEL.replace("B[i] = A[i] + 1.0", "B[i] = A[i] + undefined_symbol")
     outcome = execute_for_test(
@@ -917,6 +971,7 @@ def test_tirx_error_is_parse_failure():
     assert outcome.error["instruction_index"] == 4
 
 
+@needs_tirx
 def test_prim_func_kernel_compiles_directly():
     outcome = execute_for_test(
         Program(
@@ -949,6 +1004,7 @@ def main(shape):
     assert outcome.status == "COMPLETED"
 
 
+@needs_tirx
 def test_timing_returned_before_a_correctness_failure_is_kept():
     """Returning timing before the check keeps the benchmark when the kernel is wrong."""
     wrong = KERNEL.replace("A[i] + 1.0", "A[i] + 2.0")
@@ -1108,6 +1164,7 @@ def test_popped_candidate_modules_do_not_survive_the_request():
     assert leaked < 512 * 1024**2, f"{leaked / 1024**2:.0f} MiB not reclaimed across 4 candidates"
 
 
+@needs_tirx
 def test_compile_tirx_reuses_an_already_compiled_kernel():
     from kcoral import builtins as tirx
 

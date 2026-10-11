@@ -49,6 +49,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="worker type: gpu or cpu (default: gpu)",
     )
     parser.add_argument(
+        "--backend",
+        choices=("auto", "cuda", "rocm"),
+        default=os.environ.get("KCORAL_GPU_BACKEND", "auto"),
+        help="GPU vendor runtime: auto follows the installed torch build (default: auto)",
+    )
+    parser.add_argument(
         "--gpus",
         default=os.environ.get("KCORAL_SERVER_GPUS", "0"),
         help="comma-separated physical GPU ids; used only with --device gpu (default: 0)",
@@ -199,6 +205,10 @@ def main(argv: list[str] | None = None) -> None:
 def serve(args: argparse.Namespace) -> None:
     """Run the Python server in the current process."""
     config = config_from_args(args)
+    from kcoral.support import vendor
+
+    # Exported before any worker spawns, so workers resolve the same backend.
+    vendor.select(args.backend)
     if config.device == "gpu":
         _warn_if_visible_devices_set()
     uvicorn, create_app, shutdown_server = server_components()
@@ -222,12 +232,15 @@ def server_components():
 def _warn_if_visible_devices_set() -> None:
     """A worker overwrites it with the card ``--gpus`` gave it, so setting it
     here selects nothing and only misleads."""
-    if os.environ.get("CUDA_VISIBLE_DEVICES"):
-        print(
-            "warning: CUDA_VISIBLE_DEVICES is set but does not restrict this server; "
-            "workers are pinned by --gpus (physical GPU ids). Unset it to avoid confusion.",
-            file=sys.stderr,
-        )
+    from kcoral.support import vendor
+
+    for name in vendor.visibility_variables():
+        if os.environ.get(name):
+            print(
+                f"warning: {name} is set but does not restrict this server; "
+                "workers are pinned by --gpus (physical GPU ids). Unset it to avoid confusion.",
+                file=sys.stderr,
+            )
 
 
 # Advanced routed-node options. Rust owns their types, defaults and validation.

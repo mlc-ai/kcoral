@@ -21,6 +21,7 @@ from kcoral.runtime.pool import WorkerPool
 from kcoral.runtime.python import cpu_runtime_factory
 from kcoral.runtime.worker import Worker, WorkerCrashed, WorkerResult, WorkerTimeout
 from kcoral.server.events import EventLogger
+from kcoral.support import cuda, vendor
 from kcoral.support import sandbox as sandboxing
 from kcoral.support.sandbox import Sandbox
 
@@ -121,8 +122,9 @@ def test_optional_nsight_installation(monkeypatch, tmp_path, require_bubblewrap,
 
 @pytest.mark.parametrize("minor, expected", [(6, "/dev/nvidia6"), (None, "/dev/nvidia0")])
 def test_gpu_mount_uses_device_minor_number(monkeypatch, minor, expected):
+    monkeypatch.setattr(vendor, "backend", lambda: "cuda")
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/bwrap")
-    monkeypatch.setattr(sandboxing.nvml, "device_minor_number", lambda gpu: minor)
+    monkeypatch.setattr(cuda, "device_minor_number", lambda gpu: minor)
     original_exists = Path.exists
     monkeypatch.setattr(
         Path,
@@ -151,8 +153,9 @@ def test_direct_worker_reports_bubblewrap_launch_failure(monkeypatch):
 
 
 def test_multi_gpu_mounts_include_only_the_assigned_device_minors(monkeypatch):
+    monkeypatch.setattr(vendor, "backend", lambda: "cuda")
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/bwrap")
-    monkeypatch.setattr(sandboxing.nvml, "device_minor_number", {0: 6, 2: 4}.__getitem__)
+    monkeypatch.setattr(cuda, "device_minor_number", {0: 6, 2: 4}.__getitem__)
     original_exists = Path.exists
     nodes = {f"/dev/nvidia{i}" for i in range(8)}
     monkeypatch.setattr(Path, "exists", lambda path: str(path) in nodes or original_exists(path))
