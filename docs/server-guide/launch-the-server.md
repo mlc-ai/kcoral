@@ -257,8 +257,9 @@ Differences from CUDA workers:
   with ROCm support; NVIDIA-specific schedules may not lower.
 - CUDA C uploads compile as HIP C++ with ROCm's clang, for the worker's `gfx*`
   architecture; `compile_cuda_binary` takes `arch` such as `gfx942`.
-- `kcoral run rocprofv3` replaces `ncu`; CuTe DSL, `ncu` and
-  `compute-sanitizer` are unavailable.
+- `kcoral run rocprof-compute` (hardware counters) and `kcoral run rocprofv3`
+  (kernel traces) replace `ncu`; CuTe DSL, `ncu` and `compute-sanitizer` are
+  unavailable.
 - The reported target is the `gfx*` architecture, for example `gfx942`.
 - `/health` reports these differences under `capabilities`.
 

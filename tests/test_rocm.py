@@ -185,7 +185,7 @@ def test_capabilities_describe_the_backend(monkeypatch):
         "backend": "rocm",
         "timing": "trace",
         "cpu_only_check": "torch_at_entry",
-        "profilers": ["rocprofv3"],
+        "profilers": ["rocprofv3", "rocprof-compute"],
     }
     monkeypatch.setattr(vendor, "backend", lambda: "cuda")
     assert vendor.capabilities("gpu")["profilers"] == ["ncu", "compute-sanitizer", "run-iket"]

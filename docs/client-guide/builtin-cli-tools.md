@@ -12,6 +12,7 @@ Choose a tool for the task you want to perform:
 | [python](#python) | Run a Python script, module, or inline command with the worker's interpreter. |
 | [ncu](#ncu) | Collect NVIDIA Nsight Compute kernel performance reports. |
 | [rocprofv3](#rocprofv3) | Collect AMD ROCprofiler kernel traces and statistics. |
+| [rocprof-compute](#rocprof-compute) | Collect and analyze AMD hardware-counter profiles per kernel. |
 | [run-iket](#run-iket) | Collect instrumented kernel execution timelines. |
 | [compute-sanitizer](#compute-sanitizer) | Find CUDA memory-access and synchronization errors. |
 | [shell](#shell) | Run a shell script, uploaded executable, or program installed on the worker. |
@@ -352,6 +353,50 @@ kcoral run rocprofv3 --send experiment --out artifacts/rocprof-trace \
 ```
 
 The run fails with a missing-artifact message if rocprofv3 wrote no files.
+
+## rocprof-compute
+
+ROCm Compute Profiler (formerly Omniperf) collects hardware counters for each
+kernel and analyzes them: memory and cache throughput, occupancy, instruction
+mix and stalls. It is the AMD counterpart of [ncu](#ncu). The worker needs
+`rocprof-compute`, or `omniperf` on releases before ROCm 6.2, and a GPU whose
+performance counters the worker may read; virtualized or shared GPUs can block
+them.
+
+```text
+kcoral run rocprof-compute [KCoral options] --out DIRECTORY -- [profile options] -- APPLICATION [arguments]
+```
+
+Options and separators work as for [ncu](#ncu). Native options are passed to
+`rocprof-compute profile`; without any, KCoral passes `--no-roof`, which skips
+the roofline benchmark. KCoral names and places the workload, so `--name`/`-n`
+and `--path`/`-p` are rejected. The tool profiles the application, which runs
+it several times to collect every counter group, then runs `rocprof-compute
+analyze` on the worker:
+
+```bash
+kcoral run rocprof-compute --send experiment --out artifacts/rocprof-compute \
+  -- -- python experiment/capture.py
+kcoral run rocprof-compute --send experiment --out artifacts/rocprof-compute-k \
+  -- --no-roof --kernel my_kernel -- python experiment/capture.py
+```
+
+For `--out artifacts/rocprof-compute`, the results are:
+
+```text
+artifacts/rocprof-compute/analysis.txt    # the analyze report
+artifacts/rocprof-compute/workload/...    # raw counter data, for a local analyze
+```
+
+Re-run the analysis locally, for example with different filters, by pointing
+`rocprof-compute analyze -p` at the directory under `workload` that holds
+`pmc_perf.csv`.
+
+| Result or failure | Behavior or check |
+| --- | --- |
+| Profiler or application exits non-zero | Returns its exit status, downloads any partial workload, and skips the analysis. |
+| No `pmc_perf.csv` written | Fails with a missing-artifact message. Counters are often unavailable to the worker; use [rocprofv3](#rocprofv3), which needs none for kernel traces. |
+| Empty analysis | Reports `analysis.txt` missing; the workload is still downloaded. |
 See the [Nsight Compute CLI manual](https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html)
 for section sets, filters, replay, and platform requirements.
 

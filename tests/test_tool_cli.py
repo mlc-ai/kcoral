@@ -76,6 +76,8 @@ def test_shared_options_and_native_argument_boundary(monkeypatch, capsys):
         ("run-iket", "--out reports -- profile"),
         ("rocprofv3", "--out reports -- -d elsewhere -- python check.py"),
         ("rocprofv3", "--out reports -- --output-file=x -- python check.py"),
+        ("rocprof-compute", "--out reports -- -p elsewhere -- python check.py"),
+        ("rocprof-compute", "--out reports -- --name=x -- python check.py"),
     ],
 )
 def test_invalid_tool_options(monkeypatch, tool, arguments):
@@ -145,7 +147,9 @@ def test_shell_returns_files_on_failure(remote, tmp_path):
     assert (out / "result/empty").is_dir()
 
 
-@pytest.mark.parametrize("tool", ["compute-sanitizer", "ncu", "run-iket", "rocprofv3"])
+@pytest.mark.parametrize(
+    "tool", ["compute-sanitizer", "ncu", "run-iket", "rocprofv3", "rocprof-compute"]
+)
 def test_native_tools_and_profiler_reports(remote, tmp_path, capsys, tool):
     executable = tmp_path / tool
     executable.write_text(
@@ -158,6 +162,14 @@ print(json.dumps(args))
 if Path(sys.argv[0]).name == 'ncu':
     assert os.environ['NCU_PROFILE'] == '1'
     Path(args[args.index('--export') + 1]).write_bytes(b'report')
+elif Path(sys.argv[0]).name == 'rocprof-compute' and args[0] == 'analyze':
+    sys.stdout.write('analysis of ' + Path(args[args.index('-p') + 1]).name)
+    sys.exit(0)
+elif Path(sys.argv[0]).name == 'rocprof-compute':
+    data = Path(args[args.index('-p') + 1]) / 'MI300'
+    data.mkdir(parents=True)
+    (data / 'pmc_perf.csv').write_text('Dispatch_ID')
+    sys.exit(0)  # analyze runs only after a successful profile
 elif Path(sys.argv[0]).name == 'rocprofv3':
     out = Path(args[args.index('--output-directory') + 1])
     (out / 'capture_kernel_stats.csv').write_text('Name,Calls')
@@ -176,10 +188,12 @@ sys.exit(3)
         "ncu": ["--set", "basic", "--"],
         "run-iket": ["profile", "--"],
         "rocprofv3": ["--"],
+        "rocprof-compute": ["--"],
     }[tool]
     if tool != "compute-sanitizer":
         options += ["--out", str(out)]
-    assert cli.main(tool, [*options, "--", *native, "python", "check.py", "a b"]) == 3
+    expected = 0 if tool == "rocprof-compute" else 3
+    assert cli.main(tool, [*options, "--", *native, "python", "check.py", "a b"]) == expected
     arguments = json.loads(capsys.readouterr().out)
     assert arguments[-3:] == ["python", "check.py", "a b"]
     if tool == "compute-sanitizer":
@@ -187,6 +201,11 @@ sys.exit(3)
     elif tool == "ncu":
         assert arguments[:2] == ["--config-file", "0"]
         assert (out / "capture.ncu-rep").read_bytes() == b"report"
+    elif tool == "rocprof-compute":
+        assert arguments[:5] == ["profile", "-n", "capture", "-p", arguments[4]]
+        assert arguments[5] == "--no-roof"
+        assert (out / "workload/MI300/pmc_perf.csv").read_text() == "Dispatch_ID"
+        assert (out / "analysis.txt").read_text().endswith("analysis of MI300")
     elif tool == "rocprofv3":
         assert arguments[4:8] == ["--kernel-trace", "--stats", "--output-format", "csv"]
         assert (out / "capture_kernel_stats.csv").read_text() == "Name,Calls"

@@ -61,7 +61,10 @@ def module() -> ModuleType:
 
 
 # Remote profiling tools by vendor (``kcoral run TOOL``), as found on PATH.
-_PROFILERS = {"cuda": ("ncu", "compute-sanitizer", "run-iket"), "rocm": ("rocprofv3",)}
+_PROFILERS = {
+    "cuda": (("ncu",), ("compute-sanitizer",), ("run-iket",)),
+    "rocm": (("rocprofv3",), ("rocprof-compute", "omniperf")),  # tool, then executables
+}
 
 
 def capabilities(device: str) -> dict[str, object]:
@@ -81,7 +84,7 @@ def capabilities(device: str) -> dict[str, object]:
         "backend": name,
         "timing": "trace" if rocm else "cupti",
         "cpu_only_check": "torch_at_entry" if rocm else "at_entry",
-        "profilers": [tool for tool in _PROFILERS[name] if shutil.which(tool)],
+        "profilers": [names[0] for names in _PROFILERS[name] if any(map(shutil.which, names))],
     }
 
 
