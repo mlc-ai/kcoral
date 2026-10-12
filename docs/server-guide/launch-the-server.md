@@ -232,11 +232,16 @@ but reset and poison detection cannot contain every effect of invalid GPU code.
 
 ### AMD GPUs (experimental)
 
-`--backend auto` picks `rocm` when the installed torch is a ROCm build. On
+`--backend auto` picks `rocm` when the installed torch is a ROCm build. ROCm GPU
+servers must run with `--sandbox none`: bubblewrap isolation does not yet work
+for ROCm workers (HIP finds no GPU inside the sandbox), so the server refuses to
+start with it rather than run unisolated. On
 ROCm, `--gpus` indexes GPUs in ROCm runtime order (the order `rocminfo` lists
 them), and workers are pinned with `ROCR_VISIBLE_DEVICES`. A worker that cannot
 confirm it came up on its assigned card, by PCI address, is refused. With
-bubblewrap, a worker sees `/dev/kfd` and only its own `/dev/dri/renderD*` nodes.
+bubblewrap, a worker would see `/dev/kfd` and only its own `/dev/dri/renderD*`
+nodes. Outside bubblewrap, exposing only those two files confines ROCm to the
+assigned GPU (verified on MI355X in SPX mode); the sandbox itself is pending.
 
 Install the ROCm build of torch first, then the packages in
 `docker/requirements.rocm.txt`, then KCoral with `--no-deps`: the `server`

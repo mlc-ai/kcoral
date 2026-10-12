@@ -88,6 +88,21 @@ def capabilities(device: str) -> dict[str, object]:
     }
 
 
+def require_gpu_sandbox_support() -> None:
+    """Refuse bubblewrap for ROCm GPU workers rather than start unisolated.
+
+    On 8x MI355X, ROCm enumerated no GPUs inside KCoral's sandbox although the
+    worker could open /dev/kfd and its render node, and the same two device
+    files sufficed outside it. Until that is resolved, isolation must be turned
+    off explicitly, never silently.
+    """
+    if backend() == "rocm":
+        raise RuntimeError(
+            "bubblewrap isolation does not yet support ROCm GPU workers (HIP finds no GPU "
+            "inside the sandbox); start the server with --sandbox none"
+        )
+
+
 def require_matching_torch() -> None:
     """Refuse a worker whose torch was built for the other vendor."""
     import torch

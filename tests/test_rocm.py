@@ -190,3 +190,11 @@ def test_capabilities_describe_the_backend(monkeypatch):
     monkeypatch.setattr(vendor, "backend", lambda: "cuda")
     assert vendor.capabilities("gpu")["profilers"] == ["ncu", "compute-sanitizer", "run-iket"]
     assert vendor.capabilities("cpu") == {"backend": "cpu"}
+
+
+def test_rocm_gpu_workers_refuse_bubblewrap(monkeypatch):
+    monkeypatch.setattr(vendor, "backend", lambda: "rocm")
+    with pytest.raises(RuntimeError, match="--sandbox none"):
+        vendor.require_gpu_sandbox_support()
+    monkeypatch.setattr(vendor, "backend", lambda: "cuda")
+    vendor.require_gpu_sandbox_support()

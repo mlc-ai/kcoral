@@ -89,6 +89,7 @@ def test_direct_worker_reports_missing_bubblewrap(monkeypatch):
 
 @pytest.mark.parametrize("installed", [False, True])
 def test_optional_nsight_installation(monkeypatch, tmp_path, require_bubblewrap, installed):
+    monkeypatch.setattr(vendor, "backend", lambda: "cuda")  # an NVIDIA toolkit path
     installation = Path("/opt/nvidia/nsight-compute")
     (tmp_path / "ncu").write_text("echo synthetic-ncu\n")
     original_exists, original_resolve = Path.exists, Path.resolve
@@ -847,6 +848,8 @@ def main(cache):
 def gpu_sandbox(require_bubblewrap, tmp_path):
     if os.environ.get("KCORAL_GPU_TEST") != "1":
         pytest.skip("requires KCORAL_GPU_TEST=1 and an externally locked idle GPU")
+    if vendor.backend() == "rocm":
+        pytest.skip("bubblewrap does not yet support ROCm GPU workers")
     from kcoral.runtime.gpu import gpu_runtime_factory
 
     gpu_id = int(os.environ.get("KCORAL_SANDBOX_GPU", "0"))

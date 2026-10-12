@@ -112,6 +112,8 @@ def create_app(
         )
         try:
             app.state.sandbox = config.sandbox
+            if config.sandbox == "bubblewrap" and config.device == "gpu":
+                vendor.require_gpu_sandbox_support()
             if config.sandbox == "bubblewrap":
                 try:
                     sandbox.probe(

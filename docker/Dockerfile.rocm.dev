@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # A development server for AMD GPUs. Match ROCM_VERSION to the host driver and
 # TORCH_INDEX_URL to a PyTorch ROCm wheel index for that release, e.g.
 #   docker build -f docker/Dockerfile.rocm.dev \
@@ -24,34 +22,50 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
-        bubblewrap \
         ca-certificates \
+        curl \
         g++ \
+        libcap-dev \
+        meson \
+        pkg-config \
         python3 \
         python3-venv \
+        xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# KCoral's sandbox needs bubblewrap >= 0.8 (--disable-userns); Ubuntu 22.04 ships 0.6.1.
+RUN curl -fsSL -o /tmp/bubblewrap.tar.xz \
+        https://github.com/containers/bubblewrap/releases/download/v0.11.0/bubblewrap-0.11.0.tar.xz \
+    && echo '988fd6b232dafa04b8b8198723efeaccdb3c6aa9c1c7936219d5791a8b7a8646  /tmp/bubblewrap.tar.xz' \
+        | sha256sum -c - \
+    && mkdir /tmp/bubblewrap \
+    && tar -xJf /tmp/bubblewrap.tar.xz -C /tmp/bubblewrap --strip-components=1 \
+    && meson setup /tmp/bubblewrap/build /tmp/bubblewrap --prefix=/usr/local -Dman=disabled \
+    && meson compile -C /tmp/bubblewrap/build \
+    && meson install -C /tmp/bubblewrap/build \
+    && rm -rf /tmp/bubblewrap /tmp/bubblewrap.tar.xz \
+    && bwrap --help | grep -q -- --disable-userns
 
 COPY --from=uv /uv /uvx /bin/
 
 WORKDIR /workspace/kcoral
 
 # torch from the ROCm index brings its matching pytorch-triton-rocm.
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv venv /opt/venv \
+RUN uv venv /opt/venv \
     && uv pip install --index-url "$TORCH_INDEX_URL" torch
 
 COPY docker/requirements.rocm.txt /tmp/requirements.rocm.txt
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install -r /tmp/requirements.rocm.txt
+RUN uv pip install -r /tmp/requirements.rocm.txt
 
 # --no-deps: the `server` extra would replace the ROCm torch with a CUDA build.
 COPY pyproject.toml setup.py MANIFEST.in README.md ./
 COPY python ./python
-RUN --mount=type=cache,target=/root/.cache/uv \
-    SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0+rocm.dev uv pip install --no-deps -e .
+RUN SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0+rocm.dev uv pip install --no-deps -e .
 
 ENV KCORAL_SERVER_HOST=0.0.0.0
 
 EXPOSE 8000
 
-CMD ["python", "-m", "kcoral", "server", "--backend", "rocm"]
+# bubblewrap does not yet support ROCm GPU workers; the server refuses it, so
+# isolation is turned off explicitly here.
+CMD ["python", "-m", "kcoral", "server", "--backend", "rocm", "--sandbox", "none"]
