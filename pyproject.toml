@@ -29,6 +29,7 @@ server = [
   "cupti-python>=13.0.1",
   "flashinfer-python>=0.6.17",
 ]
+modal = ["modal>=1.6.1"]
 
 [project.scripts]
 kcoral = "kcoral.__main__:main"

@@ -45,6 +45,7 @@ class ServerConfig:
     workers_per_gpu: int = 8
     max_requests_per_worker: int = 1  # fresh process/context per request; 0 = unlimited
     sandbox: str = "bubblewrap"  # "none" explicitly disables filesystem isolation
+    sandbox_required: bool = False  # abort startup rather than falling back when unavailable
     sandbox_readonly_paths: list[Path] = field(default_factory=list)
     worker_termination_grace_seconds: float = 5.0  # SIGTERM-to-SIGKILL window on kill
     max_request_bytes: int = 256 * 1024**2  # 256 MB request cap
@@ -52,6 +53,8 @@ class ServerConfig:
     output_limit_bytes: int = 1024**2  # per-request stdout/stderr capture cap
     max_output_limit_bytes: int = 16 * 1024**2  # cap on a client-requested limit
     device: str = "gpu"
+    backend: str = "local"
+    modal_url: str | None = None
     num_workers: int = 1  # CPU workers; ignored in GPU mode
     router_endpoint: str | None = None  # enables outbound gRPC data slots
     node_id: str | None = None

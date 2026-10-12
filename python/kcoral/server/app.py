@@ -72,18 +72,28 @@ def create_app(
     config = config or ServerConfig()
     if config.device not in ("cpu", "gpu"):
         raise ValueError(f"device must be 'cpu' or 'gpu', got {config.device!r}")
+    if config.backend not in ("local", "modal"):
+        raise ValueError(f"backend must be 'local' or 'modal', got {config.backend!r}")
+    if config.backend == "modal" and config.device != "gpu":
+        raise ValueError("the Modal backend requires GPU workers")
+    if config.backend == "modal" and not config.modal_url:
+        raise ValueError("the Modal backend requires modal_url")
     if config.disk_cache_capacity_mbytes < 0:
         raise ValueError("disk cache capacity must be non-negative")
     if config.sandbox not in ("none", "bubblewrap"):
         raise ValueError("sandbox must be 'none' or 'bubblewrap'")
     if config.sandbox_readonly_paths and config.sandbox == "none":
         raise ValueError("sandbox_readonly_paths requires sandbox='bubblewrap'")
-    worker_gpus = config.gpus if config.device == "gpu" else []
+    if config.backend == "modal" and config.sandbox_readonly_paths:
+        raise ValueError("sandbox_readonly_paths are not supported by the Modal backend")
+    worker_gpus = config.gpus if config.device == "gpu" and config.backend == "local" else []
     cpu_workers = config.num_workers if config.device == "cpu" else None
     worker_count = (
-        cpu_workers if cpu_workers is not None else len(worker_gpus) * config.workers_per_gpu
+        1
+        if config.backend == "modal"
+        else (cpu_workers if cpu_workers is not None else len(worker_gpus) * config.workers_per_gpu)
     )
-    if runtime_factory is None:
+    if runtime_factory is None and config.backend == "local":
         if config.device == "cpu":
             from kcoral.runtime.python import cpu_runtime_factory
 
@@ -111,14 +121,16 @@ def create_app(
             config.disk_cache_dir, config.disk_cache_capacity_mbytes * 1024**2
         )
         try:
-            app.state.sandbox = config.sandbox
-            if config.sandbox == "bubblewrap":
+            app.state.sandbox = "none" if config.backend == "modal" else config.sandbox
+            if config.backend == "local" and config.sandbox == "bubblewrap":
                 try:
                     sandbox.probe(
                         list(worker_gpus) if config.device == "gpu" else [None],
                         tuple(config.sandbox_readonly_paths),
                     )
                 except sandbox.SandboxUnavailable as exc:
+                    if config.sandbox_required:
+                        raise
                     app.state.sandbox = "none"
                     message = (
                         "bubblewrap could not start; filesystem isolation is disabled "
@@ -132,17 +144,25 @@ def create_app(
                         message=message,
                     )
                     warnings.warn(message, RuntimeWarning, stacklevel=2)
-            app.state.pool = WorkerPool(
-                worker_gpus,
-                runtime_factory,
-                termination_grace_seconds=config.worker_termination_grace_seconds,
-                workers_per_gpu=config.workers_per_gpu,
-                max_requests_per_worker=config.max_requests_per_worker,
-                cpu_workers=cpu_workers,
-                events=events,
-                sandbox=app.state.sandbox,
-                sandbox_readonly_paths=tuple(config.sandbox_readonly_paths),
-            )
+            if config.backend == "modal":
+                from kcoral.runtime.modal_pool import ModalPool
+
+                app.state.pool = ModalPool(
+                    url=config.modal_url,
+                    max_response_bytes=config.max_response_bytes,
+                )
+            else:
+                app.state.pool = WorkerPool(
+                    worker_gpus,
+                    runtime_factory,
+                    termination_grace_seconds=config.worker_termination_grace_seconds,
+                    workers_per_gpu=config.workers_per_gpu,
+                    max_requests_per_worker=config.max_requests_per_worker,
+                    cpu_workers=cpu_workers,
+                    events=events,
+                    sandbox=app.state.sandbox,
+                    sandbox_readonly_paths=tuple(config.sandbox_readonly_paths),
+                )
         except BaseException as exc:
             events.emit(
                 "server_start_failed",
@@ -227,7 +247,7 @@ def create_app(
             "status": "ok",
             "instance_id": request.app.state.instance_id,
             "started_at": request.app.state.started_at,
-            "gpu_count": len(set(worker_gpus)),
+            "gpu_count": 1 if config.backend == "modal" else len(set(worker_gpus)),
             "load": pool.load(),
             "target": pool.target(),
             "versions": pool.versions(),
@@ -339,7 +359,8 @@ def create_app(
             )
 
         gpu_count = program.options.get("gpu_count")
-        if gpu_count is not None and (config.device == "cpu" or gpu_count > len(set(config.gpus))):
+        gpu_capacity = 1 if config.backend == "modal" else len(set(config.gpus))
+        if gpu_count is not None and (config.device == "cpu" or gpu_count > gpu_capacity):
             finished(400, finish_reason="invalid_request", error_kind="parse")
             return _error_response(
                 400, "parse", "gpu_count exceeds this GPU server's configured capacity", request_id
