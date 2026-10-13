@@ -91,15 +91,20 @@ def capabilities(device: str) -> dict[str, object]:
 def require_gpu_sandbox_support() -> None:
     """Refuse bubblewrap for ROCm GPU workers rather than start unisolated.
 
-    On 8x MI355X, ROCm enumerated no GPUs inside KCoral's sandbox although the
-    worker could open /dev/kfd and its render node, and the same two device
-    files sufficed outside it. Until that is resolved, isolation must be turned
-    off explicitly, never silently.
+    ROCm learns which GPUs exist from the KFD topology in sysfs and acts on all
+    of them: given only its own render node, a sandboxed worker still sets a
+    memory policy on the other GPUs and fails (``hipErrorNoDevice``). Docker
+    avoids this with a device cgroup, which makes the other GPUs' topology
+    entries unreadable (EPERM), and ROCm skips those. Bubblewrap sets no device
+    cgroup, and topology mounts cannot reproduce that error (validated on 8x
+    MI355X). Until workers get their own device cgroup, isolation must be
+    turned off explicitly, never silently.
     """
     if backend() == "rocm":
         raise RuntimeError(
-            "bubblewrap isolation does not yet support ROCm GPU workers (HIP finds no GPU "
-            "inside the sandbox); start the server with --sandbox none"
+            "bubblewrap isolation does not yet support ROCm GPU workers: ROCm needs a "
+            "per-worker device cgroup, which bubblewrap does not set; start the server "
+            "with --sandbox none"
         )
 
 

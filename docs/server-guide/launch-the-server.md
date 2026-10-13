@@ -233,15 +233,20 @@ but reset and poison detection cannot contain every effect of invalid GPU code.
 ### AMD GPUs (experimental)
 
 `--backend auto` picks `rocm` when the installed torch is a ROCm build. ROCm GPU
-servers must run with `--sandbox none`: bubblewrap isolation does not yet work
-for ROCm workers (HIP finds no GPU inside the sandbox), so the server refuses to
-start with it rather than run unisolated. On
+servers must run with `--sandbox none`, and refuse bubblewrap rather than run
+unisolated. ROCm discovers GPUs from the KFD topology under `/sys` and acts on
+every GPU listed there, even ones whose device files a sandbox hides, so a
+sandboxed worker fails to initialize. Docker confines ROCm with a device cgroup,
+which makes other GPUs' topology entries unreadable; bubblewrap sets no device
+cgroup. Supporting the sandbox needs a per-worker device cgroup (which requires
+a writable, delegated cgroup subtree and BPF privileges) or a ROCm change. On
 ROCm, `--gpus` indexes GPUs in ROCm runtime order (the order `rocminfo` lists
 them), and workers are pinned with `ROCR_VISIBLE_DEVICES`. A worker that cannot
 confirm it came up on its assigned card, by PCI address, is refused. With
 bubblewrap, a worker would see `/dev/kfd` and only its own `/dev/dri/renderD*`
-nodes. Outside bubblewrap, exposing only those two files confines ROCm to the
-assigned GPU (verified on MI355X in SPX mode); the sandbox itself is pending.
+nodes. A container started with only those devices confines ROCm to that GPU
+(verified on MI355X in SPX mode), so per-GPU containers are the way to isolate
+ROCm GPUs from each other today.
 
 Install the ROCm build of torch first, from the PyTorch index matching your ROCm
 release, then KCoral with the `rocm` extra. That extra never installs torch, so
