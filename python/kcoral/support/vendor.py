@@ -88,24 +88,31 @@ def capabilities(device: str) -> dict[str, object]:
     }
 
 
-def require_gpu_sandbox_support() -> None:
-    """Refuse bubblewrap for ROCm GPU workers rather than start unisolated.
+def require_gpu_sandbox_support(
+    gpu_ids: list[int] | tuple[int, ...], readonly_paths: tuple[Path, ...] = ()
+) -> None:
+    """Refuse bubblewrap for ROCm GPU workers that could not use their GPU there,
+    rather than start them unisolated or let them fail.
 
-    ROCm learns which GPUs exist from the KFD topology in sysfs and acts on all
-    of them: given only its own render node, a sandboxed worker still sets a
-    memory policy on the other GPUs and fails (``hipErrorNoDevice``). Docker
-    avoids this with a device cgroup, which makes the other GPUs' topology
-    entries unreadable (EPERM), and ROCm skips those. Bubblewrap sets no device
-    cgroup, and topology mounts cannot reproduce that error (validated on 8x
-    MI355X). Until workers get their own device cgroup, isolation must be
-    turned off explicitly, never silently.
+    ROCm learns which GPUs exist from the KFD topology in sysfs and, through
+    ROCm 7.0, acts on all of them: given only its own render node, a sandboxed
+    worker sets a memory policy on another GPU and fails (``hipErrorNoDevice``).
+    libhsakmt's ``hsakmt_fmm_init_process_apertures`` skips unusable GPUs when
+    acquiring VMs but not when setting memory policies. It works when a device
+    cgroup hides the other GPUs (a container given only these GPUs) or with a
+    libhsakmt that skips them there too, so probe each GPU in a real sandbox.
     """
-    if backend() == "rocm":
-        raise RuntimeError(
-            "bubblewrap isolation does not yet support ROCm GPU workers: ROCm needs a "
-            "per-worker device cgroup, which bubblewrap does not set; start the server "
-            "with --sandbox none"
-        )
+    if backend() != "rocm":
+        return
+    for gpu in dict.fromkeys(gpu_ids):
+        problem = module().sandbox_problem(gpu, tuple(readonly_paths))
+        if problem is not None:
+            raise RuntimeError(
+                f"bubblewrap isolation cannot be used for ROCm GPU {gpu}: {problem}. "
+                "ROCm acts on every GPU it can read in the KFD topology; run the server "
+                "in a container given only its GPUs, use a libhsakmt that skips unusable "
+                "GPUs, or start the server with --sandbox none"
+            )
 
 
 def require_matching_torch() -> None:

@@ -192,9 +192,63 @@ def test_capabilities_describe_the_backend(monkeypatch):
     assert vendor.capabilities("cpu") == {"backend": "cpu"}
 
 
-def test_rocm_gpu_workers_refuse_bubblewrap(monkeypatch):
+def test_rocm_gpu_workers_refuse_bubblewrap_when_the_probe_fails(monkeypatch):
+    probed = []
+
+    def problem(gpu, readonly):
+        probed.append(gpu)
+        return "HIP found 0 GPUs inside the sandbox, not 1" if gpu == 5 else None
+
     monkeypatch.setattr(vendor, "backend", lambda: "rocm")
-    with pytest.raises(RuntimeError, match="--sandbox none"):
-        vendor.require_gpu_sandbox_support()
+    monkeypatch.setattr(rocm, "sandbox_problem", problem)
+    vendor.require_gpu_sandbox_support([0, 1, 1])
+    assert probed == [0, 1]
+    with pytest.raises(RuntimeError, match=r"GPU 5: HIP found 0 GPUs.*--sandbox none"):
+        vendor.require_gpu_sandbox_support([0, 5])
+
+
+def test_cuda_never_probes_the_sandbox(monkeypatch):
     monkeypatch.setattr(vendor, "backend", lambda: "cuda")
-    vendor.require_gpu_sandbox_support()
+    monkeypatch.setattr(rocm, "sandbox_problem", lambda *_: pytest.fail("probed"))
+    vendor.require_gpu_sandbox_support([0])
+
+
+class _Completed:
+    def __init__(self, stdout, returncode=0, stderr=""):
+        self.stdout, self.returncode, self.stderr = stdout, returncode, stderr
+
+
+@pytest.mark.parametrize(
+    "stdout, expected",
+    [
+        ('{"count": 1, "pci": "0001:05:02"}', None),
+        ('{"count": 0, "pci": null}', "HIP found 0 GPUs"),
+        ('{"count": 1, "pci": "0000:c1:00"}', "HIP saw PCI 0000:c1:00"),
+        ("", "the HIP probe failed"),
+    ],
+)
+def test_sandbox_probe_requires_exactly_the_assigned_card(topology, monkeypatch, stdout, expected):
+    import subprocess
+
+    from kcoral.support import sandbox as sandboxing
+
+    class FakeSandbox:
+        def __init__(self, readonly):
+            pass
+
+        def command(self, gpu, program):
+            return ["bwrap", "--", *program]
+
+        def close(self):
+            pass
+
+    environments = []
+    monkeypatch.setattr(sandboxing, "Sandbox", FakeSandbox)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, **kw: environments.append(kw["env"]) or _Completed(stdout),
+    )
+    problem = rocm.sandbox_problem(1)
+    assert problem is None if expected is None else expected in problem
+    assert environments[0]["ROCR_VISIBLE_DEVICES"] == "1"  # GPU 1 has no unique id

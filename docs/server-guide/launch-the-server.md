@@ -232,14 +232,21 @@ but reset and poison detection cannot contain every effect of invalid GPU code.
 
 ### AMD GPUs (experimental)
 
-`--backend auto` picks `rocm` when the installed torch is a ROCm build. ROCm GPU
-servers must run with `--sandbox none`, and refuse bubblewrap rather than run
-unisolated. ROCm discovers GPUs from the KFD topology under `/sys` and acts on
-every GPU listed there, even ones whose device files a sandbox hides, so a
-sandboxed worker fails to initialize. Docker confines ROCm with a device cgroup,
-which makes other GPUs' topology entries unreadable; bubblewrap sets no device
-cgroup. Supporting the sandbox needs a per-worker device cgroup (which requires
-a writable, delegated cgroup subtree and BPF privileges) or a ROCm change. On
+`--backend auto` picks `rocm` when the installed torch is a ROCm build.
+
+ROCm discovers GPUs from the KFD topology under `/sys` and, through ROCm 7.0,
+acts on every GPU it can read there, even ones whose device files a sandbox
+hides, so a sandboxed worker usually fails to initialize. Before starting
+bubblewrap workers, a ROCm server therefore runs HIP inside a real sandbox for
+each configured GPU and refuses to start unless HIP sees exactly that card. The
+check passes in two situations:
+
+- the server runs in a container given only its GPUs' devices, whose device
+  cgroup makes other GPUs' topology entries unreadable, which ROCm skips;
+- ROCm's `libhsakmt` skips unusable GPUs when it sets memory policies (a
+  candidate patch, not in any ROCm release yet).
+
+Otherwise start ROCm servers with `--sandbox none`; the ROCm image does. On
 ROCm, `--gpus` indexes GPUs in ROCm runtime order (the order `rocminfo` lists
 them), and workers are pinned with `ROCR_VISIBLE_DEVICES`. A worker that cannot
 confirm it came up on its assigned card, by PCI address, is refused. With

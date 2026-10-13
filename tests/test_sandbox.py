@@ -848,14 +848,18 @@ def main(cache):
 def gpu_sandbox(require_bubblewrap, tmp_path):
     if os.environ.get("KCORAL_GPU_TEST") != "1":
         pytest.skip("requires KCORAL_GPU_TEST=1 and an externally locked idle GPU")
-    if vendor.backend() == "rocm":
-        pytest.skip("bubblewrap does not yet support ROCm GPU workers")
     from kcoral.runtime.gpu import gpu_runtime_factory
 
     gpu_id = int(os.environ.get("KCORAL_SANDBOX_GPU", "0"))
     readonly = tuple(
         Path(p) for p in os.environ.get("KCORAL_SANDBOX_READONLY_PATHS", "").split(os.pathsep) if p
     )
+    if vendor.backend() == "rocm":
+        from kcoral.support import rocm
+
+        problem = rocm.sandbox_problem(gpu_id, readonly)
+        if problem is not None:  # the server would refuse bubblewrap here
+            pytest.skip(f"ROCm cannot use GPU {gpu_id} in this sandbox: {problem}")
     sandboxing.probe([gpu_id], readonly)
     events = EventLogger(tmp_path / "events", console=True)
     instance = Worker(

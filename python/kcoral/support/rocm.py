@@ -223,3 +223,73 @@ def _hip_error_api() -> _HIPErrorAPI:
 
 def take_last_error() -> str | None:
     return _hip_error_api().take_last_error()
+
+
+# Run inside a worker's sandbox: what HIP actually sees there.
+_SANDBOX_PROBE = """
+import json, torch
+count = torch.cuda.device_count()
+pci = None
+if count == 1:
+    p = torch.cuda.get_device_properties(0)
+    pci = f"{p.pci_domain_id:04x}:{p.pci_bus_id:02x}:{p.pci_device_id:02x}"
+print(json.dumps({"count": count, "pci": pci}))
+"""
+
+
+def sandbox_problem(
+    gpu_id: int, readonly_paths: tuple[Path, ...] = (), timeout: float = 180.0
+) -> str | None:
+    """Why a bubblewrap worker could not use this GPU, or None if it can.
+
+    ROCm finds GPUs through the KFD topology and, before ROCm 7.x is patched,
+    fails when a GPU listed there has no render node in the sandbox. It works
+    where the device cgroup already hides the other GPUs (a container given
+    only this GPU) or with a libhsakmt that skips unusable GPUs. Rather than
+    guess which applies, run HIP in the real sandbox command and check it sees
+    exactly this card. Returns None when bubblewrap cannot start at all, which
+    the server's generic sandbox check reports.
+    """
+    import json
+    import subprocess
+    import sys
+
+    from kcoral.support.sandbox import Sandbox
+
+    env = dict(os.environ)
+    for key, value in visible_devices_env(device_selector(gpu_id)).items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
+    try:
+        sandbox = Sandbox(readonly_paths)
+    except (OSError, ValueError):
+        return None  # no usable bubblewrap: not a ROCm problem
+    try:
+        command = sandbox.command(gpu_id, program=(sys.executable, "-c", _SANDBOX_PROBE))
+        result = subprocess.run(
+            command,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            start_new_session=True,
+        )
+    except subprocess.TimeoutExpired:
+        return f"HIP did not initialize within {timeout:.0f}s inside the sandbox"
+    except OSError:
+        return None
+    finally:
+        sandbox.close()
+    try:
+        seen = json.loads(result.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        tail = (result.stderr or result.stdout).strip()[-300:]
+        return f"the HIP probe failed inside the sandbox (exit {result.returncode}): {tail}"
+    if seen["count"] != 1:
+        return f"HIP found {seen['count']} GPUs inside the sandbox, not 1"
+    if identity_key(seen["pci"]) != identity_key(device_identity(gpu_id)):
+        return f"HIP saw PCI {seen['pci']} inside the sandbox, not {device_identity(gpu_id)}"
+    return None
