@@ -243,10 +243,18 @@ bubblewrap, a worker would see `/dev/kfd` and only its own `/dev/dri/renderD*`
 nodes. Outside bubblewrap, exposing only those two files confines ROCm to the
 assigned GPU (verified on MI355X in SPX mode); the sandbox itself is pending.
 
-Install the ROCm build of torch first, then the packages in
-`docker/requirements.rocm.txt`, then KCoral with `--no-deps`: the `server`
-extra pins CUDA-only packages. `docker/Dockerfile.rocm.dev` does this, and
-`docker compose --profile rocm up kcoral-rocm` runs it.
+Install the ROCm build of torch first, from the PyTorch index matching your ROCm
+release, then KCoral with the `rocm` extra. That extra never installs torch, so
+it cannot replace the ROCm build; the `server` and `cuda` extras would, because
+they pull CUDA torch and NVIDIA packages from PyPI:
+
+```bash
+pip install --index-url https://download.pytorch.org/whl/rocm7.0 torch
+pip install 'kcoral[rocm]'
+```
+
+`docker/Dockerfile.rocm.dev` does the same with `docker/requirements.rocm.txt`,
+and `docker compose --profile rocm up kcoral-rocm` runs it.
 
 Differences from CUDA workers:
 

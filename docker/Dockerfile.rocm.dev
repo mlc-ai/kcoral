@@ -21,6 +21,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     VIRTUAL_ENV=/opt/venv \
     KCORAL_GPU_BACKEND=rocm
 
+# libdrm looks for amdgpu.ids under /opt/amdgpu; the link silences its warning in
+# the unsandboxed server only (the sandbox does not expose /opt/amdgpu yet).
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         ca-certificates \
