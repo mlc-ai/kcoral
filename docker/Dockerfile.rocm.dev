@@ -16,6 +16,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
+    UV_NO_CACHE=1 \
     UV_PYTHON_DOWNLOADS=0 \
     VIRTUAL_ENV=/opt/venv \
     KCORAL_GPU_BACKEND=rocm
@@ -31,7 +32,9 @@ RUN apt-get update \
         python3 \
         python3-venv \
         xz-utils \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/amdgpu/share \
+    && ln -s /usr/share/libdrm /opt/amdgpu/share/libdrm
 
 # KCoral's sandbox needs bubblewrap >= 0.8 (--disable-userns); Ubuntu 22.04 ships 0.6.1.
 RUN curl -fsSL -o /tmp/bubblewrap.tar.xz \

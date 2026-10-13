@@ -14,9 +14,39 @@ dependencies = [
   "ml_dtypes>=0.5", # the bfloat16 and float8 scalar types numpy lacks
 ]
 
-# The base install supports clients and, in Linux wheels, the Rust router. The server extra
-# supplies both GPU execution and CPU compilation dependencies.
+# The base install supports clients and, in Linux wheels, the Rust router.
+# `server-common` is vendor-neutral. `cuda` and `rocm` are complete server
+# environments for one backend; `server` remains the CUDA-compatible legacy name.
 [project.optional-dependencies]
+server-common = [
+  "fastapi>=0.110",
+  "grpcio>=1.66.2",
+  "protobuf>=5.27.2",
+  "uvicorn>=0.29",
+  "torch>=2.14",
+  "apache-tvm-ffi[cpp]>=0.1.14.post0",
+]
+cuda = [
+  "fastapi>=0.110",
+  "grpcio>=1.66.2",
+  "protobuf>=5.27.2",
+  "uvicorn>=0.29",
+  "torch>=2.14",
+  "apache-tvm>=0.27.0",
+  "apache-tvm-ffi[cpp]>=0.1.14.post0",
+  "nvidia-cutlass-dsl[cu13]==4.7.0",
+  "cupti-python>=13.0.1",
+  "flashinfer-python>=0.6.17",
+]
+rocm = [
+  "fastapi>=0.110",
+  "grpcio>=1.66.2",
+  "protobuf>=5.27.2",
+  "uvicorn>=0.29",
+  "torch>=2.14",
+  "apache-tvm-ffi[cpp]>=0.1.14.post0",
+  "amdsmi>=7.0",
+]
 server = [
   "fastapi>=0.110",
   "grpcio>=1.66.2",
