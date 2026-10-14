@@ -1,0 +1,18 @@
+--- a/libhsakmt/src/fmm.c
++++ b/libhsakmt/src/fmm.c
+@@ -2878,6 +2878,15 @@
+ 			if (!IS_CANONICAL_ADDR(process_apertures[i].gpuvm_limit))
+ 				continue;
+ 
++			/* Like the aperture loop above, skip GPUs the kernel
++			 * reports but this process cannot use (no accessible
++			 * render node, so no VM was acquired). Setting their
++			 * memory policy fails with ESRCH and would abort
++			 * initialization for the GPUs that are usable.
++			 */
++			if (gpu_mem_find_by_gpu_id(process_apertures[i].gpu_id) < 0)
++				continue;
++
+ 			/* Set memory policy to match the SVM apertures */
+ 			alt_base = (uintptr_t)svm.dgpu_alt_aperture->base;
+ 			alt_size = VOID_PTRS_SUB(svm.dgpu_alt_aperture->limit,

@@ -245,7 +245,9 @@ check passes in two situations:
   cgroup makes other GPUs' topology entries unreadable, which ROCm skips;
 - ROCm's `libhsakmt` skips unusable GPUs when it sets memory policies. No ROCm
   release does yet (checked through 7.0.2); a three-line patch to
-  `hsakmt_fmm_init_process_apertures` does.
+  `hsakmt_fmm_init_process_apertures` does. `docker/rocm-libhsakmt-patch/`
+  contains the patch, a Dockerfile that rebuilds the ROCm runtime with it on
+  top of the ROCm image, and a validation script.
 
 Both were verified on 8× MI355X with ROCm 7.0.0: every sandboxed worker saw
 exactly one GPU with its own PCI address and only its own render node, and
