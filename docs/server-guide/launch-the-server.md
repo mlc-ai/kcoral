@@ -234,22 +234,20 @@ but reset and poison detection cannot contain every effect of invalid GPU code.
 
 `--backend auto` picks `rocm` when the installed torch is a ROCm build.
 
-ROCm discovers GPUs from the KFD topology under `/sys` and, through ROCm 7.0,
-acts on every GPU it can read there, even ones whose device files a sandbox
-hides, so a sandboxed worker usually fails to initialize. Before starting
-bubblewrap workers, a ROCm server therefore runs HIP inside a real sandbox for
-each configured GPU and refuses to start unless HIP sees exactly that card. The
-check passes in two situations:
+As on NVIDIA, a sandboxed ROCm worker sees `/dev/kfd` and only its own
+`/dev/dri/renderD*` nodes, so one server can drive several GPUs with each
+worker confined to its own. Through ROCm 7.0.2, though, ROCm's `libhsakmt`
+acts on every GPU in the KFD topology under `/sys`, including ones whose render
+node the sandbox hides, and the worker fails to initialize. A three-line patch
+to `hsakmt_fmm_init_process_apertures` makes it skip those GPUs.
+`docker/rocm-libhsakmt-patch/` contains the patch, a Dockerfile that rebuilds
+the ROCm runtime with it on top of the ROCm image, and a validation script.
 
-- the server runs in a container given only its GPUs' devices, whose device
-  cgroup makes other GPUs' topology entries unreadable, which ROCm skips;
-- ROCm's `libhsakmt` skips unusable GPUs when it sets memory policies. No ROCm
-  release does yet (checked through 7.0.2); a three-line patch to
-  `hsakmt_fmm_init_process_apertures` does. `docker/rocm-libhsakmt-patch/`
-  contains the patch, a Dockerfile that rebuilds the ROCm runtime with it on
-  top of the ROCm image, and a validation script.
+Before starting bubblewrap workers, a ROCm server runs HIP inside a real
+sandbox for each configured GPU and refuses to start unless HIP sees exactly
+that card, so an unpatched runtime is refused rather than run unisolated.
 
-Both were verified on 8× MI355X with ROCm 7.0.0: every sandboxed worker saw
+With the patch, on 8× MI355X with ROCm 7.0.0, every sandboxed worker saw
 exactly one GPU with its own PCI address and only its own render node, and
 NCCL jobs spanning 2, 4 and 8 GPUs ran through sandboxed workers. ROCm workers
 also get `/etc/passwd` read-only, which PyTorch's compiler cache needs to look
@@ -258,11 +256,7 @@ up the user.
 Otherwise start ROCm servers with `--sandbox none`; the ROCm image does. On
 ROCm, `--gpus` indexes GPUs in ROCm runtime order (the order `rocminfo` lists
 them), and workers are pinned with `ROCR_VISIBLE_DEVICES`. A worker that cannot
-confirm it came up on its assigned card, by PCI address, is refused. With
-bubblewrap, a worker would see `/dev/kfd` and only its own `/dev/dri/renderD*`
-nodes. A container started with only those devices confines ROCm to that GPU
-(verified on MI355X in SPX mode), so per-GPU containers are the way to isolate
-ROCm GPUs from each other today.
+confirm it came up on its assigned card, by PCI address, is refused.
 
 Install the ROCm build of torch first, from the PyTorch index matching your ROCm
 release, then KCoral with the `rocm` extra. That extra never installs torch, so

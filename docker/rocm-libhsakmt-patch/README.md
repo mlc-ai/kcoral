@@ -92,9 +92,9 @@ address.
 KCoral does not need this patch to stay safe. A ROCm server probes HIP inside
 a real sandbox for each configured GPU at startup (`rocm.sandbox_problem`) and
 enables bubblewrap only if every probe sees exactly its card; otherwise it
-refuses and says to use `--sandbox none`. With an unpatched ROCm it keeps
-refusing; with this patch, or in a container given only its GPUs, it allows
-bubblewrap.
+refuses and says to use this patch or `--sandbox none`. With an unpatched ROCm
+it refuses; with this patch it allows bubblewrap for any number of GPUs in one
+container, as on NVIDIA.
 
 ## Upstreaming
 

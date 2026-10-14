@@ -242,13 +242,12 @@ def sandbox_problem(
 ) -> str | None:
     """Why a bubblewrap worker could not use this GPU, or None if it can.
 
-    ROCm finds GPUs through the KFD topology and, before ROCm 7.x is patched,
-    fails when a GPU listed there has no render node in the sandbox. It works
-    where the device cgroup already hides the other GPUs (a container given
-    only this GPU) or with a libhsakmt that skips unusable GPUs. Rather than
-    guess which applies, run HIP in the real sandbox command and check it sees
-    exactly this card. Returns None when bubblewrap cannot start at all, which
-    the server's generic sandbox check reports.
+    ROCm finds GPUs through the KFD topology and, through ROCm 7.0.2, fails
+    when a GPU listed there has no render node in the sandbox; a libhsakmt
+    that skips unusable GPUs (docker/rocm-libhsakmt-patch) fixes it. Rather
+    than detect the runtime version, run HIP in the real sandbox command and
+    check it sees exactly this card. Returns None when bubblewrap cannot start
+    at all, which the server's generic sandbox check reports.
     """
     import json
     import subprocess
