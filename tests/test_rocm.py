@@ -65,6 +65,12 @@ def test_device_nodes_expose_only_assigned_render_nodes(topology):
     assert rocm.device_nodes((1,)) == [Path("/dev/kfd"), Path("/dev/dri/renderD136")]
 
 
+def test_rocm_runtime_paths_include_the_system_user_database():
+    # Torch Inductor calls getpass.getuser() when the profiler creates its cache.
+    # Without passwd, a sandboxed warm-up fails halfway and poisons later imports.
+    assert "/etc/passwd" in rocm.RUNTIME_PATHS
+
+
 def test_missing_topology_has_no_agents(tmp_path):
     assert rocm.agents.__wrapped__(tmp_path / "absent") == ()
 

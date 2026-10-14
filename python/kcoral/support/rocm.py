@@ -25,7 +25,7 @@ STRICT_IDENTITY = True
 # ROCr filters devices below HIP, so HIP's own variables would then index the
 # filtered set. Clear them rather than let a value the server inherited apply.
 VISIBILITY_VARIABLES = ("ROCR_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES")
-RUNTIME_PATHS = ("/opt/rocm",)
+RUNTIME_PATHS = ("/opt/rocm", "/etc/passwd")
 
 
 @dataclass(frozen=True)

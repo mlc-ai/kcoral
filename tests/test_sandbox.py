@@ -733,9 +733,19 @@ def main():
             pending.result()
     for entry in processes:
         try:
-            assert os.readlink(entry / "ns/pid") != namespace
+            current = os.readlink(entry / "ns/pid")
         except FileNotFoundError:
-            pass  # exited or zombie: neither can access the next workspace
+            continue  # exited
+        if current == namespace:
+            try:
+                state = next(
+                    line
+                    for line in (entry / "status").read_text().splitlines()
+                    if line.startswith("State:")
+                ).split()[1]
+            except FileNotFoundError:
+                continue  # exited while inspected
+            assert state == "Z"  # zombie: cannot access the next workspace
     assert not root.exists()
 
 
