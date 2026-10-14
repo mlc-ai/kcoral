@@ -243,8 +243,15 @@ check passes in two situations:
 
 - the server runs in a container given only its GPUs' devices, whose device
   cgroup makes other GPUs' topology entries unreadable, which ROCm skips;
-- ROCm's `libhsakmt` skips unusable GPUs when it sets memory policies (a
-  candidate patch, not in any ROCm release yet).
+- ROCm's `libhsakmt` skips unusable GPUs when it sets memory policies. No ROCm
+  release does yet (checked through 7.0.2); a three-line patch to
+  `hsakmt_fmm_init_process_apertures` does.
+
+Both were verified on 8× MI355X with ROCm 7.0.0: every sandboxed worker saw
+exactly one GPU with its own PCI address and only its own render node, and
+NCCL jobs spanning 2, 4 and 8 GPUs ran through sandboxed workers. ROCm workers
+also get `/etc/passwd` read-only, which PyTorch's compiler cache needs to look
+up the user.
 
 Otherwise start ROCm servers with `--sandbox none`; the ROCm image does. On
 ROCm, `--gpus` indexes GPUs in ROCm runtime order (the order `rocminfo` lists
