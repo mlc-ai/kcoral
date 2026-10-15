@@ -240,12 +240,14 @@ worker confined to its own. Through ROCm 7.0.2, though, ROCm's `libhsakmt`
 acts on every GPU in the KFD topology under `/sys`, including ones whose render
 node the sandbox hides, and the worker fails to initialize. A three-line patch
 to `hsakmt_fmm_init_process_apertures` makes it skip those GPUs.
-`docker/rocm-libhsakmt-patch/` contains the patch, a Dockerfile that rebuilds
-the ROCm runtime with it on top of the ROCm image, and a validation script.
+The patch is in `docker/rocm-libhsakmt-patch/`, and `docker/Dockerfile.rocm.dev`
+always rebuilds the ROCm runtime with it, so the ROCm image runs bubblewrap
+workers by default.
 
-Before starting bubblewrap workers, a ROCm server runs HIP inside a real
-sandbox for each configured GPU and refuses to start unless HIP sees exactly
-that card, so an unpatched runtime is refused rather than run unisolated.
+Outside that image the ROCm runtime is unpatched. Sandboxed workers then fail to
+start with "HIP found no GPU inside the bubblewrap sandbox"; apply the same
+build steps to your ROCm, or start the server with `--sandbox none`. Either way
+workers never run unisolated by accident.
 
 With the patch, on 8× MI355X with ROCm 7.0.0, every sandboxed worker saw
 exactly one GPU with its own PCI address and only its own render node, and
@@ -253,8 +255,7 @@ NCCL jobs spanning 2, 4 and 8 GPUs ran through sandboxed workers. ROCm workers
 also get `/etc/passwd` read-only, which PyTorch's compiler cache needs to look
 up the user.
 
-Otherwise start ROCm servers with `--sandbox none`; the ROCm image does. On
-ROCm, `--gpus` indexes GPUs in ROCm runtime order (the order `rocminfo` lists
+On ROCm, `--gpus` indexes GPUs in ROCm runtime order (the order `rocminfo` lists
 them), and workers are pinned with `ROCR_VISIBLE_DEVICES`. A worker that cannot
 confirm it came up on its assigned card, by PCI address, is refused.
 
@@ -269,7 +270,9 @@ pip install 'kcoral[rocm]'
 ```
 
 `docker/Dockerfile.rocm.dev` does the same with `docker/requirements.rocm.txt`,
-and `docker compose --profile rocm up kcoral-rocm` runs it.
+and `docker compose --profile rocm up kcoral-rocm` runs it with the Docker
+options bubblewrap needs (`SYS_ADMIN` and `NET_ADMIN` capabilities, and
+`seccomp`, `apparmor` and `systempaths` unconfined, as validated on MI355X).
 
 Differences from CUDA workers:
 

@@ -88,33 +88,6 @@ def capabilities(device: str) -> dict[str, object]:
     }
 
 
-def require_gpu_sandbox_support(
-    gpu_ids: list[int] | tuple[int, ...], readonly_paths: tuple[Path, ...] = ()
-) -> None:
-    """Refuse bubblewrap for ROCm GPU workers that could not use their GPU there,
-    rather than start them unisolated or let them fail.
-
-    ROCm learns which GPUs exist from the KFD topology in sysfs and, through
-    ROCm 7.0, acts on all of them: given only its own render node, a sandboxed
-    worker sets a memory policy on another GPU and fails (``hipErrorNoDevice``).
-    libhsakmt's ``hsakmt_fmm_init_process_apertures`` skips unusable GPUs when
-    acquiring VMs but not when setting memory policies. A libhsakmt that skips
-    them there too (docker/rocm-libhsakmt-patch) works, so probe each GPU in a
-    real sandbox rather than trust the runtime version.
-    """
-    if backend() != "rocm":
-        return
-    for gpu in dict.fromkeys(gpu_ids):
-        problem = module().sandbox_problem(gpu, tuple(readonly_paths))
-        if problem is not None:
-            raise RuntimeError(
-                f"bubblewrap isolation cannot be used for ROCm GPU {gpu}: {problem}. "
-                "ROCm acts on every GPU in the KFD topology; use a libhsakmt that skips "
-                "unusable GPUs (see docker/rocm-libhsakmt-patch) or start the server "
-                "with --sandbox none"
-            )
-
-
 def require_matching_torch() -> None:
     """Refuse a worker whose torch was built for the other vendor."""
     import torch

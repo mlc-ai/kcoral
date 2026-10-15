@@ -864,12 +864,6 @@ def gpu_sandbox(require_bubblewrap, tmp_path):
     readonly = tuple(
         Path(p) for p in os.environ.get("KCORAL_SANDBOX_READONLY_PATHS", "").split(os.pathsep) if p
     )
-    if vendor.backend() == "rocm":
-        from kcoral.support import rocm
-
-        problem = rocm.sandbox_problem(gpu_id, readonly)
-        if problem is not None:  # the server would refuse bubblewrap here
-            pytest.skip(f"ROCm cannot use GPU {gpu_id} in this sandbox: {problem}")
     sandboxing.probe([gpu_id], readonly)
     events = EventLogger(tmp_path / "events", console=True)
     instance = Worker(

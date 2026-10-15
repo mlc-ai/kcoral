@@ -67,6 +67,7 @@ class GPURuntime:
 
     def __init__(self) -> None:
         _require_torch_and_ffi()
+        _require_sandboxed_rocm_gpu()
         self._seeded_fnames: list[str] = []  # linecache keys to clear on reset
         _warm_up()
         self._cupti_guard_used = False
@@ -401,6 +402,21 @@ def _warm_up_profiler() -> None:
             torch.cuda.synchronize()
     except Exception:
         pass  # benchmark and the cpu_only check report their own failures
+
+
+def _require_sandboxed_rocm_gpu() -> None:
+    """Name the usual cause when HIP finds no GPU in a sandboxed ROCm worker."""
+    if vendor.backend() != "rocm" or not sandbox.active():
+        return
+    import torch
+
+    if torch.cuda.device_count() == 0:
+        raise RuntimeError(
+            "HIP found no GPU inside the bubblewrap sandbox. Through ROCm 7.0.2, libhsakmt "
+            "needs the patch in docker/rocm-libhsakmt-patch (the ROCm image includes it) to "
+            "run with only the worker's own render node; otherwise start the server with "
+            "--sandbox none"
+        )
 
 
 def _require_torch_and_ffi() -> None:

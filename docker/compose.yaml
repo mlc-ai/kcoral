@@ -44,10 +44,15 @@ services:
     group_add:
       - video
       - render
-    # The image runs with --sandbox none: bubblewrap does not yet support ROCm GPU
-    # workers. For a bubblewrap-capable container on Docker, validation on an 8x
-    # MI355X host needed cap_add SYS_ADMIN and NET_ADMIN, and security_opt
-    # seccomp, apparmor and systempaths unconfined.
+    # Workers run in bubblewrap. On the 8x MI355X validation host Docker needed
+    # these options for it; try narrower ones on your host if you can.
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - systempaths=unconfined
     environment:
       KCORAL_SERVER_GPUS: "${KCORAL_SERVER_GPUS:-0}"
       KCORAL_SERVER_HOST: 0.0.0.0

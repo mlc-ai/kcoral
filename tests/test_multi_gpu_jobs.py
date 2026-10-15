@@ -22,11 +22,6 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture(scope="module", params=["none", "bubblewrap"])
 def gpu_client(request):
     devices = [int(value) for value in os.environ["KCORAL_TEST_GPUS"].split(",")]
-    if request.param == "bubblewrap":
-        try:
-            vendor.require_gpu_sandbox_support(devices)
-        except RuntimeError as exc:  # the server would refuse it the same way
-            pytest.skip(str(exc))
     with TestClient(
         create_app(
             ServerConfig(
