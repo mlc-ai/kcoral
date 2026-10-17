@@ -27,8 +27,8 @@ from pathlib import Path
 from kcoral.runtime.engine import execute, read_captured_output
 from kcoral.runtime.lease import GPULeases, GPUUnavailable, LeaseClient, NoopLease, NoopLeases
 from kcoral.server.events import EventLogger
-from kcoral.support import cuda as nvml
 from kcoral.support import sandbox as sandboxing
+from kcoral.support import vendor
 from kcoral.support.platform import (
     _children,
     _drain_children,
@@ -80,9 +80,10 @@ def worker_main(
 ) -> None:
     """Child entry point. Binds the assigned GPUs, then serves programs.
 
-    For a GPU worker, ``device`` is the ``CUDA_VISIBLE_DEVICES`` value the parent
-    resolved, using comma-separated UUIDs where available. A CPU worker receives ``None``
-    and leaves the environment untouched.
+    For a GPU worker, ``device`` is the visibility value the parent resolved
+    (``CUDA_VISIBLE_DEVICES`` or ``ROCR_VISIBLE_DEVICES``), using comma-separated
+    UUIDs where available. A CPU worker receives ``None`` and leaves the environment
+    untouched.
     """
     # Lead a new process group, so the parent can clean up anything the submitted
     # code spawned (grandchildren included) with one killpg.
@@ -94,7 +95,11 @@ def worker_main(
     # Select all assigned GPUs before the runtime imports torch/tvm.
     # Any value the server was launched with selects nothing here, so it goes.
     if device is not None:
-        os.environ["CUDA_VISIBLE_DEVICES"] = device
+        for name, value in vendor.visible_devices_env(device).items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         for name in (
             "RANK",
             "WORLD_SIZE",
@@ -270,11 +275,11 @@ class Worker:
         self.worker_id = f"cpu/w{index}" if self.gpu_id is None else f"gpu{self.gpu_id}/w{index}"
         if events is not None:
             self._events = events
-        self._expected_uuid = nvml.device_uuid(self.gpu_id) if self.gpu_id is not None else None
+        self._expected_uuid = (
+            vendor.device_identity(self.gpu_id) if self.gpu_id is not None else None
+        )
         self._device = (
-            ",".join(nvml.device_uuid(gpu) or str(gpu) for gpu in self.gpu_ids)
-            if self.gpu_ids
-            else None
+            ",".join(vendor.device_selector(gpu) for gpu in self.gpu_ids) if self.gpu_ids else None
         )
         self._factory = runtime_factory
         self._spawn_timeout = spawn_timeout
@@ -432,11 +437,20 @@ class Worker:
         else's GPU under the id it was asked for."""
         if self.gpu_id is None:
             return
-        expected = nvml.uuid_key(self._expected_uuid)
-        reported = nvml.uuid_key(self.device_uuid)
-        if expected is None or reported is None or expected == reported:
+        expected = vendor.identity_key(self._expected_uuid)
+        reported = vendor.identity_key(self.device_uuid)
+        if expected == reported or reported is None:
+            # A real runtime refuses to start unidentified where that is unsafe
+            # (ROCm); one reporting nothing is a stand-in.
+            return
+        if expected is None and not vendor.strict_identity():
             return
         self._kill()
+        if expected is None:
+            raise WorkerCrashed(
+                f"cannot confirm that the worker for GPU {self.gpu_id} came up on that card "
+                f"(expected {self._expected_uuid}, reported {self.device_uuid})"
+            )
         raise WorkerCrashed(
             f"worker for GPU {self.gpu_id} came up on device {self.device_uuid}, "
             f"not the requested {self._expected_uuid}"

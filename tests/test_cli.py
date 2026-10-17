@@ -48,7 +48,8 @@ def test_filesystem_sandbox_flags():
     assert parse(["--sandbox-readonly-path", "/opt/compiler"]).sandbox == "bubblewrap"
 
 
-def test_host_default_and_flag():
+def test_host_default_and_flag(monkeypatch):
+    monkeypatch.delenv("KCORAL_SERVER_HOST", raising=False)  # images set it
     assert build_parser().parse_args([]).host == "127.0.0.1"
     assert build_parser().parse_args(["--host", "0.0.0.0"]).host == "0.0.0.0"
 

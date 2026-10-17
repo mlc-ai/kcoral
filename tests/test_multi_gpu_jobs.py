@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from kcoral import Client
 from kcoral.config import ServerConfig
 from kcoral.server.app import create_app
+from kcoral.support import vendor
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("KCORAL_MULTI_GPU_TEST") != "1",
@@ -65,3 +66,44 @@ def test_execute_library_multi_gpu_kernel(gpu_client, multiprocess):
             (i, i) for i in range(count)
         ]
     assert report["checked_elements"] == count * report["elements"] * report["iterations"]
+
+
+IDENTITY_PROGRAM = """
+import torch
+from kcoral.support import vendor
+
+def main():
+    return {"count": torch.cuda.device_count(), "identity": vendor.describe_device_identity()}
+"""
+
+
+def test_each_worker_sees_exactly_its_physical_gpu():
+    """A worker pinned to the last reserved GPU must see one device, and it must be
+    that physical card (by UUID on CUDA, PCI address on ROCm), not merely be given
+    the expected device files."""
+    from kcoral import Program
+    from kcoral.client.result import _decode_value
+    from kcoral.protocol import parse_program
+    from kcoral.runtime.gpu import gpu_runtime_factory
+    from kcoral.runtime.lease import NoopLeases
+    from kcoral.runtime.worker import Worker
+
+    gpu = [int(value) for value in os.environ["KCORAL_TEST_GPUS"].split(",")][-1]
+    program = Program()
+    module = program.upload(kind="module", source=IDENTITY_PROGRAM)
+    program.return_(
+        key="seen", value=program.run(fn=program.get_function(module=module, name="main"))
+    )
+    parsed = parse_program({"instructions": program.instructions})
+    parsed.blob_bytes = program._blobs
+    worker = Worker(gpu, gpu_runtime_factory, sandbox="none", max_requests=0)
+    try:
+        result = worker.run(parsed, 120, NoopLeases())
+    finally:
+        worker._kill()
+    assert result.execution.status == "COMPLETED", result.execution.error
+    outcome = result.execution
+    seen = _decode_value({"type": "object", "value": outcome.results}, outcome.binary_parts, set())
+    assert seen["seen"]["count"] == 1
+    reported = vendor.identity_key(seen["seen"]["identity"])
+    assert reported == vendor.identity_key(vendor.device_identity(gpu))

@@ -705,6 +705,25 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+cuda = [
+    { name = "apache-tvm" },
+    { name = "apache-tvm-ffi", extra = ["cpp"] },
+    { name = "cupti-python" },
+    { name = "fastapi" },
+    { name = "flashinfer-python" },
+    { name = "grpcio" },
+    { name = "nvidia-cutlass-dsl", extra = ["cu13"] },
+    { name = "protobuf" },
+    { name = "torch" },
+    { name = "uvicorn" },
+]
+rocm = [
+    { name = "apache-tvm-ffi", extra = ["cpp"] },
+    { name = "fastapi" },
+    { name = "grpcio" },
+    { name = "protobuf" },
+    { name = "uvicorn" },
+]
 server = [
     { name = "apache-tvm" },
     { name = "apache-tvm-ffi", extra = ["cpp"] },
@@ -715,6 +734,13 @@ server = [
     { name = "nvidia-cutlass-dsl", extra = ["cu13"] },
     { name = "protobuf" },
     { name = "torch" },
+    { name = "uvicorn" },
+]
+server-common = [
+    { name = "apache-tvm-ffi", extra = ["cpp"] },
+    { name = "fastapi" },
+    { name = "grpcio" },
+    { name = "protobuf" },
     { name = "uvicorn" },
 ]
 
@@ -729,21 +755,24 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "apache-tvm", marker = "extra == 'server'", specifier = ">=0.27.0" },
-    { name = "apache-tvm-ffi", extras = ["cpp"], marker = "extra == 'server'", specifier = ">=0.1.14.post0" },
-    { name = "cupti-python", marker = "extra == 'server'", specifier = ">=13.0.1" },
-    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.110" },
-    { name = "flashinfer-python", marker = "extra == 'server'", specifier = ">=0.6.17" },
-    { name = "grpcio", marker = "extra == 'server'", specifier = ">=1.66.2" },
+    { name = "apache-tvm", marker = "extra == 'cuda'", specifier = ">=0.27.0" },
+    { name = "apache-tvm-ffi", extras = ["cpp"], marker = "extra == 'server-common'", specifier = ">=0.1.14.post0" },
+    { name = "cupti-python", marker = "extra == 'cuda'", specifier = ">=13.0.1" },
+    { name = "fastapi", marker = "extra == 'server-common'", specifier = ">=0.110" },
+    { name = "flashinfer-python", marker = "extra == 'cuda'", specifier = ">=0.6.17" },
+    { name = "grpcio", marker = "extra == 'server-common'", specifier = ">=1.66.2" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "kcoral", extras = ["cuda"], marker = "extra == 'server'" },
+    { name = "kcoral", extras = ["server-common"], marker = "extra == 'cuda'" },
+    { name = "kcoral", extras = ["server-common"], marker = "extra == 'rocm'" },
     { name = "ml-dtypes", specifier = ">=0.5" },
     { name = "numpy", specifier = ">=1.24" },
-    { name = "nvidia-cutlass-dsl", extras = ["cu13"], marker = "extra == 'server'", specifier = "==4.7.0" },
-    { name = "protobuf", marker = "extra == 'server'", specifier = ">=5.27.2" },
-    { name = "torch", marker = "extra == 'server'", specifier = ">=2.14" },
-    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.29" },
+    { name = "nvidia-cutlass-dsl", extras = ["cu13"], marker = "extra == 'cuda'", specifier = "==4.7.0" },
+    { name = "protobuf", marker = "extra == 'server-common'", specifier = ">=5.27.2" },
+    { name = "torch", marker = "extra == 'cuda'", specifier = ">=2.14" },
+    { name = "uvicorn", marker = "extra == 'server-common'", specifier = ">=0.29" },
 ]
-provides-extras = ["server"]
+provides-extras = ["server-common", "rocm", "cuda", "server"]
 
 [package.metadata.requires-dev]
 server = [{ name = "kcoral", extras = ["server"] }]

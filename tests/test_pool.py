@@ -17,6 +17,18 @@ from kcoral.runtime.worker import (
     worker_main,
 )
 from kcoral.schemas import GetFunction, Program, Ref, Return, Run, Upload
+from kcoral.support import vendor
+
+
+@pytest.fixture(autouse=True)
+def cuda_backend(monkeypatch):
+    """Fake runtimes on fake GPU ids, checked against CUDA's visibility variable
+    and UUID spelling, so the CUDA backend even on an AMD host. Through the
+    environment, so spawned workers agree."""
+    monkeypatch.setenv(vendor.ENVIRONMENT, "cuda")
+    vendor.backend.cache_clear()
+    yield
+    vendor.backend.cache_clear()
 
 
 def prog(*instrs):

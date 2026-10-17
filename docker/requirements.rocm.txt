@@ -1,0 +1,12 @@
+# Dependencies for the ROCm development image: the `rocm` extra plus KCoral's
+# base and test dependencies. Torch and Triton are installed separately, first,
+# from the matching PyTorch ROCm index; see Dockerfile.rocm.dev.
+fastapi>=0.110
+grpcio>=1.66.2
+protobuf>=5.27.2
+uvicorn>=0.29
+apache-tvm-ffi[cpp]>=0.1.14.post0
+httpx>=0.27
+numpy>=1.24
+ml_dtypes>=0.5
+pytest>=8

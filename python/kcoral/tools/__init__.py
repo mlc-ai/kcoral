@@ -5,6 +5,8 @@ COMMANDS = {
     "python": "python",
     "compute-sanitizer": "compute_sanitizer",
     "ncu": "ncu",
+    "rocprofv3": "rocprofv3",
+    "rocprof-compute": "rocprof_compute",
     "run-iket": "run_iket",
     "shell": "shell",
 }

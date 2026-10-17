@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import time
@@ -13,6 +14,9 @@ from kcoral.config import ServerConfig
 from kcoral.protocol import compute_blob_hash, parse_multipart, strict_json_loads
 from kcoral.runtime.gpu import gpu_runtime_factory
 from kcoral.server.app import create_app
+from kcoral.support import vendor
+
+ROCM = vendor.backend() == "rocm"
 
 ADD_ONE = "def main(value):\n    return value + 1\n"
 
@@ -92,8 +96,10 @@ def test_health():
         "load",
         "target",
         "versions",
+        "capabilities",
     }
     assert data["status"] == "ok" and data["gpu_count"] == 1
+    assert data["capabilities"]["backend"] in ("cuda", "rocm")
     assert data["load"] == {
         "request_capacity": ServerConfig().workers_per_gpu,
         "requests_in_progress": 0,
@@ -189,7 +195,7 @@ def test_cpu_cuda_compilation_end_to_end():
         b"void add_one(tvm::ffi::TensorView x) {}\nvoid add_two(tvm::ffi::TensorView x) {}\n"
     )
     source_digest = compute_blob_hash(source_bytes)
-    arch = os.environ.get("KCORAL_CPU_COMPILE_ARCH", "sm_90a")
+    arch = os.environ.get("KCORAL_CPU_COMPILE_ARCH", "gfx942" if ROCM else "sm_90a")
     program = {
         "instructions": [
             {
@@ -666,6 +672,10 @@ def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.con
     os.environ.get("KCORAL_GPU_TEST") != "1",
     reason="real-kernel end-to-end test requires KCORAL_GPU_TEST=1",
 )
+@pytest.mark.skipif(
+    ROCM and importlib.util.find_spec("tvm") is None,
+    reason="TIRx on ROCm needs apache-tvm built with ROCm support",
+)
 def test_real_kernel_end_to_end():
     import numpy as np
 
@@ -771,7 +781,9 @@ def test_a_cpu_only_violation_names_the_request_it_may_have_disturbed(tmp_path):
     assert holder["status"] == "COMPLETED", holder.get("error")
     assert violator["status"] == "FAILED"
     error = violator["error"]
-    assert error["kind"] == "gpu_access" and error["cuda_call"].startswith("cu")
+    assert error["kind"] == "gpu_access"
+    # ROCm stops the torch operation itself rather than the HIP call beneath it.
+    assert error["cuda_call"].startswith("torch aten." if ROCM else "cu")
     assert error["location"].startswith("<uploaded:")
     assert error["interfered_request_id"] == holder["request_id"]
 
@@ -911,7 +923,7 @@ def main(shape):
     app = gpu_app()
     with TestClient(app) as client:
         # the server advertises what the library had to be built for
-        assert client.get("/health").json()["target"]["arch"].startswith("sm_")
+        assert client.get("/health").json()["target"]["arch"].startswith(("sm_", "gfx"))
 
         miss = post_program(client, program).json()
         assert miss["status"] == "CACHE_MISS"
@@ -1111,7 +1123,10 @@ def main(shape):
     error = failed_results[0]["error"]
     assert error["kind"] == "runtime", error
     assert error["instruction_id"] == "invoke"
-    assert "illegal memory access" in error["message"].lower()
+    if ROCM:  # a GPU memory fault aborts the HIP process instead of raising
+        assert "worker exited" in error["message"].lower()
+    else:
+        assert "illegal memory access" in error["message"].lower()
     assert all(new_pid != old_pid for old_pid, new_pid in zip(original_pids, replacement_pids))
 
     recovered_result, recovered_binary = response_parts(recovered)
@@ -1175,7 +1190,8 @@ def main(shape):
     assert failed_result["status"] == "FAILED"
     assert failed_result["error"]["kind"] == "runtime"
     assert failed_result["error"]["instruction_id"] == "invoke"
-    assert "cudaErrorInvalidValue" in failed_result["error"]["message"]
+    expected_error = "HIP error hipError" if ROCM else "cudaErrorInvalidValue"
+    assert expected_error in failed_result["error"]["message"]
     assert worker_pid_after_failure == original_pid
     assert recovered.status_code == 200
     assert recovered_result["status"] == "COMPLETED", recovered_result.get("error")

@@ -14,21 +14,29 @@ dependencies = [
   "ml_dtypes>=0.5", # the bfloat16 and float8 scalar types numpy lacks
 ]
 
-# The base install supports clients and, in Linux wheels, the Rust router. The server extra
-# supplies both GPU execution and CPU compilation dependencies.
+# The base install supports clients and, in Linux wheels, the Rust router.
+# `server-common` is the vendor-neutral server, without torch: pip cannot choose
+# a ROCm torch wheel from an extra, so ROCm installs bring their own torch.
+# `cuda` adds torch and the NVIDIA toolchain from PyPI; `server` is its legacy name.
 [project.optional-dependencies]
-server = [
+server-common = [
   "fastapi>=0.110",
   "grpcio>=1.66.2",
   "protobuf>=5.27.2",
   "uvicorn>=0.29",
+  "apache-tvm-ffi[cpp]>=0.1.14.post0",
+]
+# Install ROCm torch from the matching PyTorch index first; this extra never adds one.
+rocm = ["kcoral[server-common]"]
+cuda = [
+  "kcoral[server-common]",
   "torch>=2.14",
   "apache-tvm>=0.27.0",
-  "apache-tvm-ffi[cpp]>=0.1.14.post0",
   "nvidia-cutlass-dsl[cu13]==4.7.0",
   "cupti-python>=13.0.1",
   "flashinfer-python>=0.6.17",
 ]
+server = ["kcoral[cuda]"]
 
 [project.scripts]
 kcoral = "kcoral.__main__:main"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 from functools import cache
+from pathlib import Path
 from typing import Any
 
 _NVML_SUCCESS = 0
@@ -125,3 +126,59 @@ def _cuda_error_api() -> _CUDAErrorAPI:
         except (AttributeError, OSError) as exc:
             failures.append(f"{candidate}: {exc}")
     raise RuntimeError("could not load libcudart to inspect CUDA errors: " + "; ".join(failures))
+
+
+# The surface `kcoral.support.vendor` dispatches to.
+
+STRICT_IDENTITY = False  # NVML may be absent (CPU test hosts); the check is best effort
+VISIBILITY_VARIABLES = ("CUDA_VISIBLE_DEVICES",)
+RUNTIME_PATHS = ("/opt/nvidia/nsight-compute",)
+
+
+def device_selector(gpu_id: int) -> str:
+    """How a worker's visibility variable names a physical GPU: its UUID, which
+    survives renumbering, else the index."""
+    return device_uuid(gpu_id) or str(gpu_id)
+
+
+def device_identity(gpu_id: int) -> str | None:
+    """What a worker for this GPU must report from ``describe_device_identity``."""
+    return device_uuid(gpu_id)
+
+
+def identity_key(value: str | None) -> str | None:
+    return uuid_key(value)
+
+
+def visible_devices_env(selector: str) -> dict[str, str | None]:
+    return {"CUDA_VISIBLE_DEVICES": selector}
+
+
+def device_nodes(gpu_ids: tuple[int, ...]) -> list[Path]:
+    """The character devices a sandboxed worker needs for these GPUs."""
+    devices = []
+    for gpu in gpu_ids:
+        minor = device_minor_number(gpu)
+        device_number = gpu if minor is None else minor
+        devices.append(Path(f"/dev/nvidia{device_number}"))
+    devices += [
+        Path("/dev/nvidiactl"),
+        Path("/dev/nvidia-uvm"),
+        Path("/dev/nvidia-uvm-tools"),
+    ]
+    devices.extend(Path("/dev/nvidia-caps").glob("nvidia-cap*"))
+    return devices
+
+
+def take_last_error() -> str | None:
+    return _cuda_error_api().take_last_error()
+
+
+def describe_device_identity() -> str | None:
+    """The visible GPU's UUID, inside a worker; None where torch cannot name one."""
+    import torch
+
+    try:
+        return str(torch.cuda.get_device_properties(0).uuid)
+    except Exception:  # no such attribute on older torch, or no visible device
+        return None

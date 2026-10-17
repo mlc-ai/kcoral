@@ -44,6 +44,42 @@ python -m pip install 'kcoral[server]'
 The `server` extra supports both GPU execution and CPU compilation. See
 [system requirements](#server-system-requirements).
 
+### Install the server for AMD GPUs (experimental)
+
+The `server` extra installs CUDA builds of PyTorch and NVIDIA packages, so do
+not use it on an AMD machine. Install the ROCm build of PyTorch first, from the
+PyTorch index matching your ROCm release, then the `rocm` extra, which never
+installs or replaces PyTorch:
+
+```bash
+python -m pip install --index-url https://download.pytorch.org/whl/rocm7.0 torch
+python -m pip install 'kcoral[rocm]'
+```
+
+```{important}
+An unpatched ROCm runtime (checked through 7.0.2) does not work inside KCoral's
+[bubblewrap sandbox](../server-guide/launch-the-server.md#isolate-worker-files-with-bubblewrap),
+which is on by default, when the machine or container has more than one GPU. A
+sandboxed worker sees only its own GPU's device files, ROCm then fails on the
+GPUs it cannot open and finds no GPU at all, and the server fails to start with
+"HIP found no GPU inside the bubblewrap sandbox". Choose one:
+
+- **Patch the ROCm runtime.** Rebuild ROCm's HSA runtime with the three-line
+  patch in `docker/rocm-libhsakmt-patch/`, as `docker/Dockerfile.rocm.dev`
+  does. The patch kit's README explains the build. This keeps per-worker
+  isolation, as on NVIDIA.
+- **Use the ROCm image.** `docker/Dockerfile.rocm.dev` always includes the
+  patched runtime.
+- **Turn the sandbox off.** Start the server with `--sandbox none`. Workers then
+  share the server's filesystem view.
+
+Bubblewrap itself also needs the host or container to allow it; see
+[system requirements](#server-system-requirements).
+```
+
+See [AMD GPUs](../server-guide/launch-the-server.md#amd-gpus-experimental) for
+how ROCm workers differ from CUDA workers.
+
 ## Method 2: Build from source
 
 Use a source installation to modify KCoral or install a specific revision.
@@ -71,6 +107,9 @@ To include the server dependencies, use:
 python -m pip install -e '.[server]'
 ```
 
+On AMD GPUs, install ROCm PyTorch first and use the `rocm` extra instead
+(`-e '.[rocm]'`); see [Install the server for AMD GPUs](#install-the-server-for-amd-gpus-experimental).
+
 These builds are pure Python. A [Router](../server-guide/router.md) deployment
 also needs the Rust router and node supervisor, which run on Linux. Install Rust
 1.87 or newer with Cargo and a C/C++ build toolchain, then build them into the
@@ -87,7 +126,7 @@ extra; the GPU driver and system tools below must be installed separately.
 
 | Server mode | Purpose | Hardware |
 | --- | --- | --- |
-| GPU (`--device gpu`) | Compile, execute, and benchmark kernels | NVIDIA GPU and driver |
+| GPU (`--device gpu`) | Compile, execute, and benchmark kernels | NVIDIA GPU and driver, or AMD Instinct GPU with ROCm (experimental) |
 | CPU (`--device cpu`) | Compile CUDA C for execution on a GPU server | No GPU or GPU driver required |
 
 Compiling CUDA C in either mode requires the

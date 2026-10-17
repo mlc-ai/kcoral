@@ -230,9 +230,12 @@ initial estimate. Explicit `warmup` and `repeat` counts override their respectiv
 budgets. L2 flushing happens before each call and outside its measured span.
 
 The report contains `latency_ms_median`, `latency_ms_mean`, `latency_ms_min`,
-`latency_ms_max`, `warmup`, `repeat`, `flush_l2` and `activities_stable`. A false
-`activities_stable` means calls did not all launch the same GPU activities.
-The helper requires PyTorch and cupti-python in the worker environment.
+`latency_ms_max`, `warmup`, `repeat`, `flush_l2`, `activities_stable` and
+`timing`. A false `activities_stable` means calls did not all launch the same GPU
+activities. `timing` is `"cupti"` on NVIDIA workers, which requires cupti-python
+in the worker environment, and `"trace"` on AMD workers, which take the same
+spans from a ROCprofiler trace. If an AMD trace records no GPU activity, it is
+`"events"`: spans run between stream events and `activities_stable` is `null`.
 
 Use this report to assess kernel latency. The request timing fields on
 `ProgramResult` include other costs, such as waiting and compilation; see

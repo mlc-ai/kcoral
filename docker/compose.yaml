@@ -26,3 +26,49 @@ services:
       timeout: 3s
       retries: 3
       start_period: 60s
+
+  # AMD GPUs: docker compose --profile rocm up kcoral-rocm
+  kcoral-rocm:
+    profiles: [rocm]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.rocm.dev
+      args:
+        ROCM_VERSION: "${ROCM_VERSION:-7.0}"
+        TORCH_INDEX_URL: "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/rocm7.0}"
+    image: kcoral:rocm-dev
+    init: true
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+      - render
+    # Workers run in bubblewrap. On the 8x MI355X validation host Docker needed
+    # these options for it; try narrower ones on your host if you can.
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - systempaths=unconfined
+    environment:
+      KCORAL_SERVER_GPUS: "${KCORAL_SERVER_GPUS:-0}"
+      KCORAL_SERVER_HOST: 0.0.0.0
+      KCORAL_SERVER_PORT: "8000"
+      KCORAL_GPU_BACKEND: rocm
+    ports:
+      - "127.0.0.1:${KCORAL_SERVER_PORT:-8000}:8000"
+    volumes:
+      - ..:/workspace/kcoral
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
