@@ -912,3 +912,31 @@ def report_path():
     assert (tmp_path / "outputs/nested/report").read_bytes() == b"input report"
     assert (tmp_path / "outputs/nested/empty").is_dir()
     assert (tmp_path / "outputs/.hidden").read_bytes() == b""
+
+
+def test_parallel_hashes_use_snapshots_and_resolve_before_serialization(monkeypatch):
+    import threading
+
+    import kcoral.client.program as builder
+
+    barrier = threading.Barrier(2)
+    original = builder.compute_blob_hash
+
+    def digest(data):
+        barrier.wait(timeout=10)
+        return original(data)
+
+    monkeypatch.setattr(builder, "compute_blob_hash", digest)
+    program = Program()
+    first, second = bytearray(b"a" * (1 << 20)), bytearray(b"b" * (1 << 20))
+    program.upload(kind="bytes", value=first)
+    program.upload(kind="bytes", value=second)
+    first[:] = second
+    instructions = program.instructions
+    assert [item["blob"] for item in instructions] == [
+        original(b"a" * len(first)),
+        original(bytes(second)),
+    ]
+    assert list(program._blobs.values()) == [b"a" * len(first), bytes(second)]
+    assert program.instructions == instructions
+    assert not program._pending_blobs

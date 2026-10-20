@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -18,6 +19,9 @@ from kcoral.protocol import (
     validate_and_add_file_paths,
 )
 from kcoral.schemas import DTYPE_ITEM_SIZES
+
+_HASH_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="kcoral-hash")
+_HASH_THRESHOLD = 1 << 20
 
 
 @dataclass(frozen=True)
@@ -50,7 +54,8 @@ class Program:
     """
 
     _instructions: list[dict[str, Any]] = field(default_factory=list, init=False)
-    _blobs: dict[str, bytes] = field(default_factory=dict, init=False)
+    _blob_data: dict[str, bytes] = field(default_factory=dict, init=False)
+    _pending_blobs: dict[Future, bytes] = field(default_factory=dict, init=False, repr=False)
     _ids: set[str] = field(default_factory=set, init=False)
     _next_id: int = field(default=0, init=False)
     _return_keys: set[str] = field(default_factory=set, init=False)
@@ -63,7 +68,34 @@ class Program:
         The contained dictionaries are shared with this program. Treat them
         as read-only; use the builder methods to add instructions.
         """
+        self._finish_blobs()
         return list(self._instructions)
+
+    @property
+    def _blobs(self) -> dict[str, bytes]:
+        self._finish_blobs()
+        return self._blob_data
+
+    def _queue_blob(self, data: bytes):
+        if len(data) >= _HASH_THRESHOLD:
+            digest = _HASH_POOL.submit(compute_blob_hash, data)
+            self._pending_blobs[digest] = data
+            return digest
+        digest = compute_blob_hash(data)
+        self._blob_data.setdefault(digest, data)
+        return digest
+
+    def _finish_blobs(self) -> None:
+        if not self._pending_blobs:
+            return
+        digests = {future: future.result() for future in self._pending_blobs}
+        for future, data in self._pending_blobs.items():
+            self._blob_data.setdefault(digests[future], data)
+        for instruction in self._instructions:
+            digest = instruction.get("blob")
+            if isinstance(digest, Future):
+                instruction["blob"] = digests[digest]
+        self._pending_blobs.clear()
 
     def upload_file(self, *, blob: Any, path: str, id: str | None = None) -> Register:
         """Snapshot bytes-like data as a file in the request workspace.
@@ -167,8 +199,7 @@ class Program:
             if source is not None:
                 raise TypeError("tensor upload does not accept 'source'")
             tensor_dtype, tensor_shape, raw = _tensor_fields(value, dtype=dtype, shape=shape)
-            blob_hash = compute_blob_hash(raw)
-            self._blobs.setdefault(blob_hash, raw)
+            blob_hash = self._queue_blob(raw)
             instruction = {
                 "op": "upload",
                 "kind": "tensor",
@@ -185,8 +216,7 @@ class Program:
                 raw = value if isinstance(value, bytes) else bytes(memoryview(value))
             except TypeError as exc:
                 raise TypeError("bytes upload requires a bytes-like 'value'") from exc
-            blob_hash = compute_blob_hash(raw)
-            self._blobs.setdefault(blob_hash, raw)
+            blob_hash = self._queue_blob(raw)
             instruction = {
                 "op": "upload",
                 "kind": "bytes",
@@ -198,8 +228,7 @@ class Program:
             if dtype is not None or shape is not None:
                 raise TypeError("library upload does not accept tensor fields")
             raw = value if isinstance(value, bytes) else bytes(memoryview(value))
-            blob_hash = compute_blob_hash(raw)
-            self._blobs.setdefault(blob_hash, raw)
+            blob_hash = self._queue_blob(raw)
             instruction = {
                 "op": "upload",
                 "kind": "library",
