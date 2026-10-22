@@ -5,6 +5,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.cu132.dev
+      args:
+        - SETUPTOOLS_SCM_PRETEND_VERSION_FOR_KCORAL
     image: kcoral:cu132-dev
     init: true
     gpus: all

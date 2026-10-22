@@ -29,8 +29,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project --group server --group test
 
 COPY python ./python
+# The image has no Git metadata for setuptools-scm, including when uv run rebuilds it.
+ARG SETUPTOOLS_SCM_PRETEND_VERSION_FOR_KCORAL=0.0.0.dev0
+ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_KCORAL=${SETUPTOOLS_SCM_PRETEND_VERSION_FOR_KCORAL}
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --group server --group test
+    uv sync --locked --reinstall-package kcoral --group server --group test
 
 ENV KCORAL_SERVER_HOST=0.0.0.0
 
