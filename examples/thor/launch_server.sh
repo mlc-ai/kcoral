@@ -6,7 +6,7 @@
 #
 # Start copies this KCoral checkout's tracked files to <thor-host>:DIR, stops the
 # server previously started there, installs the locked server environment
-# (uv sync --locked --group gpu), starts `kcoral server` bound to 127.0.0.1:PORT,
+# (uv sync --locked --group server), starts `kcoral server` bound to 127.0.0.1:PORT,
 # waits for /health and prints the SSH tunnel command for this machine.
 #
 # DIR is relative to the remote home directory; it defaults to
@@ -65,7 +65,7 @@ if ! command -v uv >/dev/null; then
   echo "uv is not installed on this host; install it first (see README)" >&2
   exit 1
 fi
-uv sync --locked --group gpu --python 3.12
+uv sync --locked --group server --python 3.12
 
 echo "==> starting kcoral server (127.0.0.1:$PORT)"
 mkdir -p logs
