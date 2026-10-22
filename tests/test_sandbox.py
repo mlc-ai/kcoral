@@ -729,9 +729,11 @@ def main():
             pending.result()
     for entry in processes:
         try:
-            assert os.readlink(entry / "ns/pid") != namespace
+            if os.readlink(entry / "ns/pid") == namespace:
+                # A zombie keeps its namespace link but cannot access the next workspace.
+                assert "State:\tZ" in (entry / "status").read_text()
         except FileNotFoundError:
-            pass  # exited or zombie: neither can access the next workspace
+            pass  # exited and reaped
     assert not root.exists()
 
 

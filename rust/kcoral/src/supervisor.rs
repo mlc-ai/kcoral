@@ -379,6 +379,9 @@ pub async fn run_server_lifecycle(
                     break reason;
                 }
                 _ = interval.tick() => {
+                    if let Err(error) = tree.reap() {
+                        warn!(pid, %error, "failed to reap exited server descendants");
+                    }
                     match service.refresh_health().await {
                         Ok(()) => {
                             failures = 0;

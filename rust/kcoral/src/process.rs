@@ -157,6 +157,11 @@ impl ProcessTree {
         Ok(present)
     }
 
+    /// Reap adopted orphans that already exited, without disturbing live ones.
+    pub(crate) fn reap(&self) -> io::Result<()> {
+        self.signal(0).map(drop)
+    }
+
     pub(crate) async fn finish(&self) -> anyhow::Result<()> {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
@@ -176,5 +181,56 @@ impl ProcessTree {
 impl Drop for ProcessTree {
     fn drop(&mut self) {
         let _ = self.signal(libc::SIGKILL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn zombie_children() -> Vec<u32> {
+        let mut result = Vec::new();
+        for task in fs::read_dir("/proc/self/task").unwrap() {
+            let children =
+                fs::read_to_string(task.unwrap().path().join("children")).unwrap_or_default();
+            for pid in children.split_whitespace() {
+                let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+                if stat
+                    .rsplit_once(") ")
+                    .is_some_and(|(_, fields)| fields.starts_with('Z'))
+                {
+                    result.push(pid.parse().unwrap());
+                }
+            }
+        }
+        result
+    }
+
+    fn wait_until(predicate: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !predicate() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "condition did not become true"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn reap_clears_exited_orphans_but_not_the_root() {
+        adopt_server_descendants().unwrap();
+        // The subshell exits at once, so its background sleep is adopted here.
+        let mut root = std::process::Command::new("sh")
+            .args(["-c", "(sleep 0.1 &); exec sleep 30"])
+            .spawn()
+            .unwrap();
+        let tree = ProcessTree::new(root.id()).unwrap();
+        wait_until(|| !zombie_children().is_empty());
+        root.kill().unwrap();
+        wait_until(|| zombie_children().contains(&root.id()));
+        tree.reap().unwrap();
+        assert_eq!(zombie_children(), vec![root.id()]);
+        assert!(!root.wait().unwrap().success());
     }
 }
