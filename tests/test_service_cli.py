@@ -31,7 +31,7 @@ def launch(monkeypatch):
 
 def test_root_help_and_no_implicit_server(capsys):
     main([])
-    assert "{server,router,run}" in capsys.readouterr().out
+    assert "{server,router,run,slurm}" in capsys.readouterr().out
     with pytest.raises(SystemExit) as exc:
         main(["--gpus", "0"])
     assert exc.value.code == 2

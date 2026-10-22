@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import json
+import subprocess
+import sys
 from functools import cache
 from typing import Any
 
@@ -20,6 +23,17 @@ class _NVMLAPI:
         self._handle_by_index = library.nvmlDeviceGetHandleByIndex_v2
         self._device_uuid = library.nvmlDeviceGetUUID
         self._device_minor_number = library.nvmlDeviceGetMinorNumber
+        self._handle_by_uuid = library.nvmlDeviceGetHandleByUUID
+        self._device_index = library.nvmlDeviceGetIndex
+
+    def device_index(self, device_uuid: str) -> int | None:
+        handle = ctypes.c_void_p()
+        if self._handle_by_uuid(device_uuid.encode(), ctypes.byref(handle)) != _NVML_SUCCESS:
+            return None
+        index = ctypes.c_uint()
+        if self._device_index(handle, ctypes.byref(index)) != _NVML_SUCCESS:
+            return None
+        return index.value
 
     def device_minor_number(self, gpu_id: int) -> int | None:
         handle = ctypes.c_void_p()
@@ -73,6 +87,51 @@ def uuid_key(value: str | None) -> str | None:
     if value is None:
         return None
     return value.strip().removeprefix("GPU-").lower() or None
+
+
+def visible_device_ids() -> list[int]:
+    """Map CUDA-visible UUIDs to NVML indices without initializing CUDA here.
+
+    Slurm and containers can renumber CUDA ordinals. Probe in a short-lived
+    process, then resolve identities through NVML for the worker pool and
+    filesystem sandbox. Never fall back to assuming CUDA and NVML indices match.
+    """
+    probe = (
+        "import json, torch; torch.cuda.init(); "
+        "print(json.dumps([str(torch.cuda.get_device_properties(device).uuid) "
+        "for device in range(torch.cuda.device_count())]))"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        identities = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise RuntimeError(
+            "cannot probe allocated CUDA devices; check the server environment"
+        ) from exc
+    if not isinstance(identities, list) or not identities:
+        raise RuntimeError("no CUDA devices are visible in this allocation")
+    api = _nvml_api()
+    if api is None:
+        raise RuntimeError("NVML is required to identify the allocated GPUs")
+    devices = []
+    for identity in identities:
+        if not isinstance(identity, str) or not uuid_key(identity):
+            raise RuntimeError("the CUDA probe returned an invalid GPU UUID")
+        physical = api.device_index("GPU-" + uuid_key(identity))
+        if physical is None or uuid_key(api.device_uuid(physical)) != uuid_key(identity):
+            raise RuntimeError(
+                f"cannot map CUDA GPU {identity} to a physical GPU; MIG is unsupported"
+            )
+        devices.append(physical)
+    if len(devices) != len(set(devices)):
+        raise RuntimeError("the CUDA probe returned duplicate GPUs")
+    return devices
 
 
 class _CUDAErrorAPI:
