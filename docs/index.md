@@ -13,6 +13,7 @@ services can build kernels for a separate GPU server.
 | Write a client program | [Write a client program](client-guide/writing-a-program.md), [KCoral Protocol](client-guide/protocol.md) |
 | Run Python, checks, profilers, or shell commands | [Builtin CLI Tools](client-guide/builtin-cli-tools.md) |
 | Operate a service | [Launch the server](server-guide/launch-the-server.md), [Logging](server-guide/logging.md) and [Launch the router](server-guide/router.md) |
+| Understand large-tensor transfer cost | [Worker Tensor Transfer](server-guide/tensor-transfer.md) |
 | Compile remotely, then execute the returned library in another request | [Remote Compilation](tutorials/remote-compilation.md) |
 | Measure or automate a workload | [Benchmark a Kernel with KCoral](tutorials/benchmark-kernel.md) and [Agent Integration Guide](tutorials/agent-integration.md) |
 | Look up Python interfaces | [Python API](python-api/index.rst) |
@@ -52,6 +53,7 @@ client-guide/builtin-cli-tools
 server-guide/launch-the-server
 server-guide/router
 server-guide/logging
+server-guide/tensor-transfer
 ```
 
 ```{toctree}

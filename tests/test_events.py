@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
-from support.programs import harness_instructions
+from support.programs import harness_instructions, python_instructions
 from support.runtime import fake_runtime_factory
 
 from kcoral.config import ServerConfig
@@ -324,6 +324,36 @@ def test_a_cpu_only_function_touching_the_gpu_is_a_warning_naming_both_requests(
     assert warnings[1]["level"] == "WARNING"
     assert warnings[1]["request_id"] == violator["request_id"]
     assert warnings[1]["instruction_id"] == "call" and warnings[1]["cuda_call"] == "cudaMalloc"
+
+
+@pytest.mark.parametrize("violation", [False, True])
+def test_oversized_return_skips_staging_and_preserves_diagnostics(tmp_path, violation):
+    source = (
+        "from kcoral.runtime import transfer\n"
+        "def blocked(): raise AssertionError('memfd staging attempted')\n"
+        "transfer._memfd_create = blocked\n"
+        "def main(): return b'x' * (1 << 20)"
+    )
+    program = {
+        "instructions": [
+            *python_instructions("large", source),
+            {"op": "return", "key": "large", "value": {"$ref": "large"}},
+            *(VIOLATING_PROGRAM["instructions"] if violation else []),
+        ]
+    }
+    with _make_client(tmp_path, max_response_bytes=4096) as client:
+        worker = client.app.state.pool._workers[0]
+        pid = worker.pid
+        response = _post(client, program)
+        assert _post(client, STRUCTURAL_PROGRAM).status_code == 200
+        assert worker.pid == pid
+    assert response.status_code == 500 and response.json()["error"]["kind"] == "response_too_large"
+    warnings = _named(_read_events(tmp_path), "gpu_access_violation")
+    assert len(warnings) == int(violation)
+    if violation:
+        assert warnings[0]["request_id"] == response.json()["request_id"]
+        assert warnings[0]["instruction_id"] == "call" and warnings[0]["cuda_call"] == "cudaMalloc"
+        assert warnings[0]["interfered_request_id"] is None
 
 
 # --- failures outside a request ----------------------------------------------

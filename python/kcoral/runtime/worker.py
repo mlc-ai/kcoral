@@ -20,12 +20,16 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from multiprocessing import reduction
 from multiprocessing.connection import wait
 from pathlib import Path
 
+from kcoral.runtime import transfer
 from kcoral.runtime.engine import execute, read_captured_output
+from kcoral.runtime.gpu import GPURuntime
 from kcoral.runtime.lease import GPULeases, GPUUnavailable, LeaseClient, NoopLease, NoopLeases
+from kcoral.schemas import ProgramOutcome
 from kcoral.server.events import EventLogger
 from kcoral.support import cuda as nvml
 from kcoral.support import sandbox as sandboxing
@@ -159,15 +163,21 @@ def worker_main(
             if cleanup_error is None:
                 cleanup_error = exc
 
-        outcome = execute(
-            program,
-            runtime,
-            lease=lease,
-            progress=lambda index: conn.send({"__instruction__": index}),
-            cleanup_failed=mark_cleanup_failed,
-            capture_dir=capture_dir,
-            workspace_dir=workspace_dir,
-        )
+        with transfer.mapped_blobs(conn, program.blob_bytes) as blobs:
+            program.blob_bytes = (
+                blobs
+                if type(runtime) is GPURuntime
+                else {key: bytes(value) for key, value in blobs.items()}
+            )
+            outcome = execute(
+                program,
+                runtime,
+                lease=lease,
+                progress=lambda index: conn.send({"__instruction__": index}),
+                cleanup_failed=mark_cleanup_failed,
+                capture_dir=capture_dir,
+                workspace_dir=workspace_dir,
+            )
         sandbox_cleanup_error = None
         if request_state is not None:
             try:
@@ -202,7 +212,17 @@ def worker_main(
             # Thread/file cleanup errors can be reported before the child check.
             # Track live children independently: namespace exit will kill them.
             response["__sandbox_children__"] = request_state.has_children()
-        conn.send(response)
+        result_bytes = sum(map(len, outcome.binary_parts.values()))
+        if result_bytes > program.max_return_bytes:
+            outcome._response_bytes = result_bytes
+            outcome.binary_parts = {}
+            outcome.results = {}
+            conn.send(response)
+        else:
+            with transfer.pack_blobs(outcome.binary_parts) as (outcome.binary_parts, fds):
+                conn.send(response)
+                for fd in fds:
+                    reduction.send_handle(conn, fd, None)
         if retire_reason is not None:
             return
 
@@ -534,7 +554,19 @@ class Worker:
         held_since: float | None = None
         instruction_index: int | None = None
         try:
-            self._conn.send((program, workspace_dir))
+            if hasattr(program, "blob_bytes"):
+                with transfer.pack_blobs(program.blob_bytes, program._blob_cache) as (blobs, fds):
+                    message = replace(program, blob_bytes=blobs, _blob_cache=None)
+                    self._conn.send((message, workspace_dir))
+                    for fd in fds:
+                        try:
+                            reduction.send_handle(self._conn, fd, self.pid)
+                        except RuntimeError as exc:
+                            if str(exc) != "did not receive acknowledgement of fd":
+                                raise
+                            raise OSError(str(exc)) from exc
+            else:
+                self._conn.send((program, workspace_dir))
             while True:
                 waited_from = time.monotonic()
                 if not self._poll_response(remaining):  # no answer by the deadline -> hung
@@ -554,6 +586,19 @@ class Worker:
                     if cleanup_error := message.get("__sandbox_cleanup_error__"):
                         self._log_failure("sandbox_cleanup", RuntimeError(cleanup_error))
                     outcome = message["__outcome__"]
+                    if isinstance(outcome, ProgramOutcome):
+                        deadline = time.monotonic() + remaining
+                        with transfer.mapped_blobs(
+                            self._conn,
+                            outcome.binary_parts,
+                            program.max_return_bytes,
+                            lambda: self._poll_response(max(0, deadline - time.monotonic())),
+                        ) as blobs:
+                            if blobs is not outcome.binary_parts:
+                                outcome.binary_parts = {
+                                    key: bytes(data) for key, data in blobs.items()
+                                }
+                        remaining = deadline - time.monotonic()
                     if message["__retire_reason__"] is not None:
                         # An outcome precedes Python/CUDA finalizers. Keep them within
                         # the execution deadline and wait for the complete process tree.
@@ -621,7 +666,8 @@ class Worker:
                 self._proc.join(timeout=0.1)
             except Exception:
                 pass
-            crash = WorkerCrashed(f"{self._description()} pipe failed: {exc}")
+            error_type = WorkerTimeout if isinstance(exc, transfer.HandleTimeout) else WorkerCrashed
+            crash = error_type(f"{self._description()} pipe failed: {exc}")
             crash.worker_id = self.worker_id
             crash.instruction_index = instruction_index
             crash.lease_wait_ms = lease_wait_ms
@@ -634,7 +680,9 @@ class Worker:
                 if getattr(self, "_exit_status", None) is not None
                 else self._proc.exitcode
             )
-            self._abandon_and_respawn(leases, "crashed")
+            self._abandon_and_respawn(
+                leases, "timeout" if isinstance(exc, transfer.HandleTimeout) else "crashed"
+            )
             raise crash from exc
 
     def _output_tail(self) -> str:

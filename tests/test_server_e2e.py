@@ -240,12 +240,17 @@ def test_completed_program_returns_only_selected_values():
     assert data["stdout"] == "" and data["stderr"] == ""
 
 
-def test_failed_instruction_stops_after_a_return_that_already_ran():
+@pytest.mark.parametrize("kind", ["runtime", "response_too_large"])
+def test_failed_instruction_stops_after_a_return_that_already_ran(kind):
     program = {
         "instructions": [
             *harness_instructions("ok", "structural"),
             {"op": "return", "key": "ok", "value": {"$ref": "ok"}},
-            *harness_instructions("bad", "nope"),
+            *python_instructions(
+                "bad",
+                "from kcoral.errors import ExecutionError\n"
+                f"def main(): raise ExecutionError({kind!r}, 'deliberate test failure')",
+            ),
             {"op": "return", "key": "never", "value": {"$ref": "ok"}},
         ]
     }
@@ -255,7 +260,7 @@ def test_failed_instruction_stops_after_a_return_that_already_ran():
     assert response.status_code == 200 and data["status"] == "FAILED"
     assert set(data["results"]) == {"ok"}
     error = data["error"]
-    assert error["kind"] == "runtime" and error["instruction_index"] == 6
+    assert error["kind"] == kind and error["instruction_index"] == 6
     assert error["instruction_op"] == "run" and error["instruction_id"] == "bad"
     assert "Traceback" in error["traceback"]
 

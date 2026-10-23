@@ -26,6 +26,7 @@ from kcoral.protocol import (
     is_blob_hash,
     verify_blob,
 )
+from kcoral.runtime import transfer
 from kcoral.schemas import FileUpload, Program
 
 
@@ -33,9 +34,12 @@ from kcoral.schemas import FileUpload, Program
 class _Entry:
     data: bytes
     refcount: int = 0
+    fd: int | None = None
 
 
 class ByteCache:
+    _MAX_FDS = 128
+
     def __init__(self, capacity_bytes: int, max_object_bytes: int | None = None) -> None:
         self._cap = capacity_bytes
         # Don't cache an object larger than this (default: 25% of capacity) so one
@@ -44,6 +48,7 @@ class ByteCache:
         self._max_obj = max_object_bytes if max_object_bytes is not None else capacity_bytes // 4
         self._entries: OrderedDict[str, _Entry] = OrderedDict()
         self._size = 0
+        self._fd_count = 0
         self._lock = threading.Lock()
 
     def get(self, key: str) -> bytes | None:
@@ -64,6 +69,30 @@ class ByteCache:
             self._entries[key] = _Entry(data=data)
             self._size += len(data)
             self._evict_locked()
+
+    def borrow_memfd(self, key: str) -> int | None:
+        """Duplicate an immutable entry buffer while eviction is excluded."""
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            if entry.fd is None:
+                if self._fd_count >= self._MAX_FDS:
+                    return None
+                with transfer.pack_blobs({key: entry.data}) as (_, fds):
+                    if not fds:
+                        return None
+                    entry.fd = os.dup(fds[0])
+                    self._fd_count += 1
+            return os.dup(entry.fd)
+
+    def close(self) -> None:
+        with self._lock:
+            for entry in self._entries.values():
+                if entry.fd is not None:
+                    os.close(entry.fd)
+            self._entries.clear()
+            self._size = self._fd_count = 0
 
     def pin(self, keys: list[str]) -> None:
         with self._lock:
@@ -89,6 +118,9 @@ class ByteCache:
             if e.refcount == 0:
                 del self._entries[key]
                 self._size -= len(e.data)
+                if e.fd is not None:
+                    os.close(e.fd)
+                    self._fd_count -= 1
 
     def __contains__(self, key: str) -> bool:
         return key in self._entries

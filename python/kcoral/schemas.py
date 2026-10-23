@@ -92,6 +92,8 @@ class Program:
     # Filled by the HTTP front-end after multipart validation and cache lookup.
     blob_bytes: dict[str, bytes] = field(default_factory=dict)
 
+    _blob_cache: Any = None  # Parent-only; removed before sending to workers.
+
     # Trusted limits supplied by the front-end; never accepted in wire options.
     max_return_bytes: int = 256 * 1024**2
 
@@ -117,3 +119,4 @@ class ProgramOutcome:
     stderr: str = ""
     stdout_truncated: bool = False
     stderr_truncated: bool = False
+    _response_bytes: int = 0  # Internal raw-size lower bound when binary parts were omitted.

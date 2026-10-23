@@ -176,7 +176,10 @@ def create_app(
                 try:
                     await asyncio.to_thread(app.state.upload_executor.shutdown, wait=True)
                 finally:
-                    await app.state.pool.shutdown_async()
+                    try:
+                        await app.state.pool.shutdown_async()
+                    finally:
+                        app.state.cache.close()
 
         try:
             if config.router_endpoint is not None:
@@ -359,6 +362,7 @@ def create_app(
                 **_program_shape(program),
             )
         cache.pin(cache_keys)
+        program._blob_cache = cache
         # A crash the engine can attribute to an instruction still answers 200
         # with a FAILED program; these carry its cause onto that record.
         crash_exitcode: int | None = None
@@ -483,12 +487,13 @@ def create_app(
             payload["error"] = execution.error
 
         response_body, content_type = _encode_response(payload, execution.binary_parts)
-        if len(response_body) > config.max_response_bytes:
+        response_bytes = max(len(response_body), execution._response_bytes)
+        if response_bytes > config.max_response_bytes:
             finished(
                 500,
                 finish_reason="server_error",
                 error_kind="response_too_large",
-                response_bytes=len(response_body),
+                response_bytes=response_bytes,
                 worker_id=outcome.worker_id,
                 gpu_id=outcome.gpu_id,
                 queue_ms=outcome.queue_ms,
