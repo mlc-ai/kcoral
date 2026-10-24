@@ -427,10 +427,11 @@ def _check_fields(value: dict[str, Any], allowed: set[str], required: set[str], 
 class MultipartPart:
     name: str
     content_type: str
-    data: bytes
+    data: bytes | memoryview
 
 
-def parse_multipart(content_type: str | None, body: bytes) -> list[MultipartPart]:
+def parse_multipart(content_type: str | None, body: bytes | bytearray) -> list[MultipartPart]:
+    """Split a multipart body; payloads of a ``bytearray`` body are views into it."""
     if not content_type or not content_type.lower().startswith("multipart/form-data"):
         raise ValidationError("expected a multipart/form-data request")
     try:
@@ -474,6 +475,7 @@ def parse_multipart(content_type: str | None, body: bytes) -> list[MultipartPart
 
     _, part_start, closing = next_boundary(0)
     parts: list[MultipartPart] = []
+    payloads = memoryview(body) if isinstance(body, bytearray) else body
     while not closing:
         boundary_start, next_start, closing = next_boundary(part_start)
         part_end = boundary_start - 1  # boundary's preceding LF
@@ -516,7 +518,7 @@ def parse_multipart(content_type: str | None, body: bytes) -> list[MultipartPart
         transfer_encoding = item.get("content-transfer-encoding")
         if transfer_encoding and transfer_encoding.lower() not in ("binary", "8bit"):
             raise ValidationError("encoded multipart parts are not supported")
-        payload = body[payload_start:part_end]
+        payload = payloads[payload_start:part_end]
         parts.append(MultipartPart(name=name, content_type=item.get_content_type(), data=payload))
     if not parts:
         raise ValidationError("multipart body has no parts")
@@ -526,25 +528,35 @@ def parse_multipart(content_type: str | None, body: bytes) -> list[MultipartPart
 def encode_multipart(parts: list[MultipartPart]) -> tuple[bytes, str]:
     if not parts:
         raise ValueError("at least one multipart part is required")
+    # ``in`` on a memoryview looks for one element, not a byte string, so check bytes.
+    # The server's payloads are already bytes and are not copied.
+    parts = [
+        MultipartPart(part.name, part.content_type, bytes(part.data))
+        if isinstance(part.data, memoryview)
+        else part
+        for part in parts
+    ]
     while True:
         boundary = f"kcoral-{secrets.token_hex(16)}"
-        delimiter = f"\r\n--{boundary}".encode("ascii")
-        if all(delimiter not in part.data for part in parts):
+        delimiter = f"\n--{boundary}".encode("ascii")
+        # The parser also takes a delimiter after a bare LF, and every payload follows
+        # its header's LF, so a payload must not contain it or start with its rest.
+        if not any(delimiter in part.data or part.data.startswith(delimiter[1:]) for part in parts):
             break
 
     chunks: list[bytes] = []
+    size = 0
     for part in parts:
         if not part.name or any(character in part.name for character in '"\r\n'):
             raise ValueError(f"invalid multipart part name: {part.name!r}")
-        chunks.extend(
-            [
-                f"--{boundary}\r\n".encode("ascii"),
-                f'Content-Disposition: form-data; name="{part.name}"\r\n'.encode("ascii"),
-                f"Content-Type: {part.content_type}\r\n\r\n".encode("ascii"),
-                part.data,
-                b"\r\n",
-            ]
-        )
+        disposition = f'--{boundary}\r\nContent-Disposition: form-data; name="{part.name}"\r\n'
+        payload_offset = size + len(disposition) + len(f"Content-Type: {part.content_type}\r\n\r\n")
+        # Whitespace before the Content-Type value starts every payload at an 8-byte
+        # offset, the largest dtype alignment, so a receiver can use it in place.
+        padding = " " * (-payload_offset % 8)
+        header = f"{disposition}Content-Type: {padding}{part.content_type}\r\n\r\n".encode("ascii")
+        chunks.extend([header, part.data, b"\r\n"])
+        size += len(header) + len(part.data) + 2
     chunks.append(f"--{boundary}--\r\n".encode("ascii"))
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
 

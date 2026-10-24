@@ -51,3 +51,54 @@ def test_binary_payload_preserves_boundary_prefixes():
     assert parse_multipart("multipart/form-data; boundary=boundary", body) == [
         MultipartPart("blob", "application/octet-stream", payload)
     ]
+
+
+def test_encoded_payloads_are_aligned_and_parse_as_views_of_a_writable_body():
+    parts = [
+        MultipartPart("result", "application/json", b"{}"),
+        MultipartPart("return:0", "application/octet-stream", bytes(range(100))),
+        MultipartPart("return:1", "application/octet-stream", b"xyz"),
+    ]
+    body, content_type = encode_multipart(parts)
+    buffer = bytearray(body)
+    parsed = parse_multipart(content_type, buffer)
+    assert parsed == parts
+    for part in parsed:
+        assert isinstance(part.data, memoryview) and part.data.obj is buffer
+        offset = body.index(bytes(part.data) + b"\r\n--")
+        assert offset % 8 == 0
+
+
+def test_reencoded_views_avoid_a_boundary_inside_their_payload(monkeypatch):
+    payload = b"A\r\n--kcoral-" + b"a" * 32 + b"\r\nB"
+    part = MultipartPart("blob", "application/octet-stream", payload)
+    body, content_type = encode_multipart([part])
+    parsed = parse_multipart(content_type, bytearray(body))
+    assert isinstance(parsed[0].data, memoryview)
+    candidates = iter(["a" * 32, "b" * 32])
+    monkeypatch.setattr("kcoral.protocol.secrets.token_hex", lambda size: next(candidates))
+    body, content_type = encode_multipart(parsed)
+    assert content_type.endswith("b" * 32)
+    assert parse_multipart(content_type, body) == [part]
+
+
+@pytest.mark.parametrize("kind", [bytes, bytearray, memoryview])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"A\r\n--kcoral-" + b"a" * 32 + b"\r\nB",
+        b"A\n--kcoral-" + b"a" * 32 + b"\nB",
+        b"--kcoral-" + b"a" * 32 + b"\r\nB",
+        b"A\n--kcoral-" + b"a" * 32 + b"--\r\nB",
+    ],
+    ids=["crlf", "lf", "payload_start", "closing"],
+)
+def test_encoder_avoids_every_delimiter_form_in_a_payload(monkeypatch, kind, payload):
+    candidates = iter(["a" * 32, "b" * 32])
+    monkeypatch.setattr("kcoral.protocol.secrets.token_hex", lambda size: next(candidates))
+    part = MultipartPart("blob", "application/octet-stream", kind(payload))
+    body, content_type = encode_multipart([part])
+    assert content_type.endswith("b" * 32)
+    assert parse_multipart(content_type, body) == [
+        MultipartPart("blob", "application/octet-stream", payload)
+    ]

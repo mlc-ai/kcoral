@@ -379,6 +379,161 @@ def test_ml_dtype_tensor_round_trips_through_the_server(server_url, name):
     np.testing.assert_array_equal(result, value)
 
 
+def capture_receive_buffers(monkeypatch):
+    import kcoral.client.result as result_module
+
+    buffers = []
+    read_body = result_module._read_body
+
+    def capture(response):
+        buffers.append(read_body(response))
+        return buffers[-1]
+
+    monkeypatch.setattr(result_module, "_read_body", capture)
+    return buffers
+
+
+def assert_decoded_in_place(results, buffer):
+    # The large tensor is used in place in the client's receive buffer; the small one
+    # is copied rather than keeping that buffer alive.
+    received = np.frombuffer(buffer, dtype=np.uint8)
+    assert np.shares_memory(results["large"], received)
+    assert not np.shares_memory(results["small"], received)
+
+
+def test_received_results_are_writable_and_independent(server_url, monkeypatch):
+    large = np.arange(1 << 16, dtype=np.float32).reshape(256, 256)
+    small = np.arange(3, dtype=np.int64)
+    program = Program()
+    for key, kind, value in (
+        ("large", "tensor", large),
+        ("small", "tensor", small),
+        ("bytes", "bytes", b"\x00\xff"),
+    ):
+        program.return_(key=key, value=program.upload(kind=kind, value=value))
+    buffers = capture_receive_buffers(monkeypatch)
+    with Client(server_url) as client:
+        results = client.execute(program).results
+        np.testing.assert_array_equal(results["large"], large)
+    assert_decoded_in_place(results, buffers[-1])
+    for array in (results["large"], results["small"]):
+        assert array.flags.writeable and array.flags.aligned
+    np.testing.assert_array_equal(results["large"], large)
+    results["large"][:] = -1
+    np.testing.assert_array_equal(results["small"], small)
+    assert results["bytes"] == b"\x00\xff" and type(results["bytes"]) is bytes
+
+
+STREAMED_VALUES = {
+    "large": np.arange(1024, dtype=np.float32),
+    "small": np.arange(3, dtype=np.int64),
+}
+
+
+def _multipart_response(*, tampered=False):
+    results, parts = {}, []
+    for index, (key, value) in enumerate(STREAMED_VALUES.items()):
+        data = value.tobytes()
+        results[key] = {
+            "type": "tensor",
+            "dtype": value.dtype.name,
+            "shape": list(value.shape),
+            "part": f"return:{index}",
+            "sha256": compute_blob_hash(data),
+        }
+        sent = data[:-1] + b"\x00" if tampered else data
+        parts.append(MultipartPart(f"return:{index}", "application/octet-stream", sent))
+    result = {
+        "status": "COMPLETED",
+        "request_id": "request",
+        "queue_ms": 0,
+        "elapsed_ms": 1,
+        "lease_wait_ms": 0,
+        "lease_held_ms": 1,
+        "stdout": "",
+        "stderr": "",
+        "results": results,
+    }
+    body, content_type = encode_multipart(
+        [MultipartPart("result", "application/json", json.dumps(result).encode()), *parts]
+    )
+    return body, content_type
+
+
+def _execute_streamed(body, content_type, content_length):
+    headers = {"Content-Type": content_type}
+    if content_length is not None:
+        headers["Content-Length"] = content_length
+
+    def handler(request):
+        return httpx.Response(200, headers=headers, content=iter([body[:100], body[100:]]))
+
+    with Client("http://server") as client:
+        client._http.close()
+        client._http = httpx.Client(
+            base_url="http://server", transport=httpx.MockTransport(handler)
+        )
+        return client.execute(add_one_program()).results
+
+
+@pytest.mark.parametrize("framing", ["content_length", "chunked"])
+def test_streamed_tensors_decode_in_place_with_or_without_content_length(monkeypatch, framing):
+    body, content_type = _multipart_response()
+    buffers = capture_receive_buffers(monkeypatch)
+    results = _execute_streamed(
+        body, content_type, None if framing == "chunked" else str(len(body))
+    )
+    assert_decoded_in_place(results, buffers[-1])
+    for key, array in results.items():
+        np.testing.assert_array_equal(array, STREAMED_VALUES[key])
+        assert array.flags.writeable and array.flags.aligned
+    results["large"][:] = -1
+    np.testing.assert_array_equal(results["small"], STREAMED_VALUES["small"])
+
+
+@pytest.mark.parametrize(
+    ("framing", "error"),
+    [
+        ("long", "longer than its Content-Length"),
+        ("short", "shorter than its Content-Length"),
+        ("tampered", "hash mismatch"),
+        ("chunked_tampered", "hash mismatch"),
+    ],
+)
+def test_streamed_response_framing_and_digest(framing, error):
+    body, content_type = _multipart_response(tampered=framing.endswith("tampered"))
+    length = len(body) + {"long": -1, "short": 1}.get(framing, 0)
+    with pytest.raises(ProtocolError, match=error):
+        _execute_streamed(
+            body, content_type, None if framing == "chunked_tampered" else str(length)
+        )
+
+
+@pytest.mark.parametrize(
+    "length",
+    ["", "abc", "-1", "+12", "1e3", "0x10", "10, 10", "\u0661".encode(), "9" * 19, "9" * 5000],
+)
+def test_invalid_content_length_is_a_protocol_error(length):
+    body, content_type = _multipart_response()
+    with pytest.raises(ProtocolError, match="invalid response Content-Length"):
+        _execute_streamed(body, content_type, length)
+
+
+@pytest.mark.parametrize("length", [(256 << 20) - 1, 256 << 20, (256 << 20) + 1, 1 << 40])
+def test_content_length_is_not_allocated_before_the_body_arrives(length):
+    import tracemalloc
+
+    _, content_type = _multipart_response()
+    tracemalloc.start()
+    try:
+        with pytest.raises(ProtocolError, match="shorter than its Content-Length"):
+            _execute_streamed(b"", content_type, str(length))
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 8 << 20
+
+
 def test_nested_binary_results_are_decoded(server_url):
     program = Program()
     module = program.upload(
