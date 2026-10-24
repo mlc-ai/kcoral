@@ -526,6 +526,11 @@ def parse_multipart(content_type: str | None, body: bytes | bytearray) -> list[M
 
 
 def encode_multipart(parts: list[MultipartPart]) -> tuple[bytes, str]:
+    chunks, content_type = _multipart_chunks(parts)
+    return b"".join(chunks), content_type
+
+
+def _multipart_chunks(parts: list[MultipartPart]) -> tuple[list[bytes], str]:
     if not parts:
         raise ValueError("at least one multipart part is required")
     # ``in`` on a memoryview looks for one element, not a byte string, so check bytes.
@@ -558,22 +563,23 @@ def encode_multipart(parts: list[MultipartPart]) -> tuple[bytes, str]:
         chunks.extend([header, part.data, b"\r\n"])
         size += len(header) + len(part.data) + 2
     chunks.append(f"--{boundary}--\r\n".encode("ascii"))
-    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+    return chunks, f"multipart/form-data; boundary={boundary}"
 
 
 def _encode_response(
     payload: dict[str, object], binary_parts: dict[str, bytes]
-) -> tuple[bytes, str]:
+) -> tuple[list[bytes], str]:
+    """Encode a response as chunks to send in order, without joining the payloads."""
     result_bytes = json.dumps(
         payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
     ).encode("utf-8")
     if not binary_parts:
-        return result_bytes, "application/json"
+        return [result_bytes], "application/json"
     parts = [MultipartPart("result", "application/json", result_bytes)]
     parts.extend(
         MultipartPart(name, "application/octet-stream", data) for name, data in binary_parts.items()
     )
-    return encode_multipart(parts)
+    return _multipart_chunks(parts)
 
 
 def _dedup(items: list[str]) -> list[str]:
