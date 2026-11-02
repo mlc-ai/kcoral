@@ -329,9 +329,9 @@ def test_a_cpu_only_function_touching_the_gpu_is_a_warning_naming_both_requests(
 @pytest.mark.parametrize("violation", [False, True])
 def test_oversized_return_skips_staging_and_preserves_diagnostics(tmp_path, violation):
     source = (
-        "from kcoral.runtime import transfer\n"
+        "from kcoral.runtime import worker\n"
         "def blocked(): raise AssertionError('memfd staging attempted')\n"
-        "transfer._memfd_create = blocked\n"
+        "worker._memfd_create = blocked\n"
         "def main(): return b'x' * (1 << 20)"
     )
     program = {

@@ -13,23 +13,27 @@ The parent handles timeout and crash recovery when no answer arrives.
 
 from __future__ import annotations
 
+import array
+import ctypes
+import mmap
 import multiprocessing as mp
 import os
+import socket
 import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from multiprocessing import reduction
 from multiprocessing.connection import wait
 from pathlib import Path
 
-from kcoral.runtime import transfer
 from kcoral.runtime.engine import execute, read_captured_output
 from kcoral.runtime.gpu import GPURuntime
 from kcoral.runtime.lease import GPULeases, GPUUnavailable, LeaseClient, NoopLease, NoopLeases
-from kcoral.schemas import ProgramOutcome
+from kcoral.schemas import BlobHandle, ProgramOutcome
 from kcoral.server.events import EventLogger
 from kcoral.support import cuda as nvml
 from kcoral.support import sandbox as sandboxing
@@ -40,6 +44,9 @@ from kcoral.support.platform import (
     _terminate_process_tree,
     _wait_for_tree_exit,
 )
+
+if sys.platform == "linux":
+    import fcntl
 
 _WORKER_PIPE_FAILURES = (EOFError, ConnectionResetError, BrokenPipeError, OSError)
 
@@ -71,6 +78,114 @@ class WorkerResult:
 
 _NO_EVENTS = EventLogger(None)  # a shared no-op, for a handle given no log
 _OUTPUT_TAIL_BYTES = 4096  # of a killed worker's output, kept on its log record
+
+# Large blobs cross the control socket as sealed, request-local memfds.
+MEMFD_THRESHOLD = 1 << 20
+_SEAL_NAMES = ("SEAL", "SHRINK", "GROW", "WRITE")
+
+
+def _seals():
+    return sum(getattr(fcntl, "F_SEAL_" + name, 1 << i) for i, name in enumerate(_SEAL_NAMES))
+
+
+def _memfd_create():
+    create = getattr(os, "memfd_create", None)
+    fd = create("blob", 3) if create else ctypes.CDLL(None, use_errno=True).memfd_create(b"blob", 3)
+    if fd < 0:
+        raise OSError(ctypes.get_errno(), "memfd_create failed")
+    return fd
+
+
+def _sealed_memfd(data):
+    fd = _memfd_create()  # MFD_CLOEXEC | MFD_ALLOW_SEALING
+    try:
+        with os.fdopen(fd, "wb", closefd=False) as stream:
+            stream.write(data)
+        fcntl.fcntl(fd, getattr(fcntl, "F_ADD_SEALS", 1033), _seals())
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+class HandleTimeout(OSError):
+    pass
+
+
+class ResultSizeError(OSError):
+    pass
+
+
+@contextmanager
+def pack_blobs(blobs, cache=None):
+    fds, packed = [], blobs.copy()
+    with ExitStack() as cleanup:
+        try:
+            if sys.platform == "linux":
+                for key, data in blobs.items():
+                    if len(data) < MEMFD_THRESHOLD:
+                        continue
+                    fd = cache.borrow_memfd(key, _sealed_memfd) if cache is not None else None
+                    if fd is None:
+                        fd = _sealed_memfd(data)
+                    cleanup.callback(os.close, fd)
+                    packed[key] = BlobHandle(len(data))
+                    fds.append(fd)
+        except (OSError, AttributeError, NotImplementedError):
+            cleanup.close()
+            fds, packed = [], blobs
+        yield packed, fds
+
+
+def _recv_handle(conn):
+    fds = array.array("i")
+    try:
+        with socket.fromfd(conn.fileno(), socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            data, ancillary, flags, _ = sock.recvmsg(
+                1, socket.CMSG_SPACE(256 * fds.itemsize), socket.MSG_CMSG_CLOEXEC
+            )
+            for level, kind, payload in ancillary:
+                if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                    fds.frombytes(payload[: len(payload) - len(payload) % fds.itemsize])
+            if len(fds) != 1 or data != bytes([1]) or flags & socket.MSG_CTRUNC:
+                raise OSError("invalid memfd handle message")
+            if getattr(reduction, "ACKNOWLEDGE", True):
+                sock.sendall(b"A")
+        return fds.pop()
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+@contextmanager
+def mapped_blobs(conn, blobs, max_bytes=None, ready=lambda: True):
+    descriptors = [(key, value) for key, value in blobs.items() if isinstance(value, BlobHandle)]
+    if not descriptors:
+        yield blobs
+        return
+    if max_bytes is not None:
+        sizes = [p.size if isinstance(p, BlobHandle) else len(p) for p in blobs.values()]
+        if any(type(n) is not int or n < 0 for n in sizes) or sum(sizes) > max_bytes:
+            raise ResultSizeError("results exceed the configured response-size limit")
+    mapped = blobs.copy()
+    with ExitStack() as cleanup:
+        for key, descriptor in descriptors:
+            if not ready():
+                raise HandleTimeout("worker result handles exceeded the execution timeout")
+            fd = _recv_handle(conn)
+            try:
+                if (
+                    descriptor.size < MEMFD_THRESHOLD
+                    or fcntl.fcntl(fd, getattr(fcntl, "F_GET_SEALS", 1034)) & _seals() != _seals()
+                    or os.fstat(fd).st_size != descriptor.size
+                ):
+                    raise OSError("invalid memfd size or seals")
+                mapping = mmap.mmap(fd, descriptor.size, access=mmap.ACCESS_READ)
+            finally:
+                os.close(fd)
+            cleanup.callback(mapping.close)
+            mapped[key] = cleanup.enter_context(memoryview(mapping))
+        yield mapped
 
 
 def worker_main(
@@ -163,7 +278,7 @@ def worker_main(
             if cleanup_error is None:
                 cleanup_error = exc
 
-        with transfer.mapped_blobs(conn, program.blob_bytes) as blobs:
+        with mapped_blobs(conn, program.blob_bytes) as blobs:
             program.blob_bytes = (
                 blobs
                 if type(runtime) is GPURuntime
@@ -219,7 +334,7 @@ def worker_main(
             outcome.results = {}
             conn.send(response)
         else:
-            with transfer.pack_blobs(outcome.binary_parts) as (outcome.binary_parts, fds):
+            with pack_blobs(outcome.binary_parts) as (outcome.binary_parts, fds):
                 conn.send(response)
                 for fd in fds:
                     reduction.send_handle(conn, fd, None)
@@ -555,7 +670,7 @@ class Worker:
         instruction_index: int | None = None
         try:
             if hasattr(program, "blob_bytes"):
-                with transfer.pack_blobs(program.blob_bytes, program._blob_cache) as (blobs, fds):
+                with pack_blobs(program.blob_bytes, program._blob_cache) as (blobs, fds):
                     message = replace(program, blob_bytes=blobs, _blob_cache=None)
                     self._conn.send((message, workspace_dir))
                     for fd in fds:
@@ -588,7 +703,7 @@ class Worker:
                     outcome = message["__outcome__"]
                     if isinstance(outcome, ProgramOutcome):
                         deadline = time.monotonic() + remaining
-                        with transfer.mapped_blobs(
+                        with mapped_blobs(
                             self._conn,
                             outcome.binary_parts,
                             program.max_return_bytes,
@@ -666,7 +781,7 @@ class Worker:
                 self._proc.join(timeout=0.1)
             except Exception:
                 pass
-            error_type = WorkerTimeout if isinstance(exc, transfer.HandleTimeout) else WorkerCrashed
+            error_type = WorkerTimeout if isinstance(exc, HandleTimeout) else WorkerCrashed
             crash = error_type(f"{self._description()} pipe failed: {exc}")
             crash.worker_id = self.worker_id
             crash.instruction_index = instruction_index
@@ -681,7 +796,7 @@ class Worker:
                 else self._proc.exitcode
             )
             self._abandon_and_respawn(
-                leases, "timeout" if isinstance(exc, transfer.HandleTimeout) else "crashed"
+                leases, "timeout" if isinstance(exc, HandleTimeout) else "crashed"
             )
             raise crash from exc
 

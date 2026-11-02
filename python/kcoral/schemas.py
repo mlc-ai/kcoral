@@ -107,6 +107,17 @@ class Program:
         ]
 
 
+@dataclass(frozen=True)
+class BlobHandle:
+    """Stands in for a blob sent as a sealed memfd after the message that carries it.
+
+    Defined here, not in the worker module, so both ends unpickle the same class
+    when the sandboxed worker runs as ``python -m kcoral.runtime.worker``.
+    """
+
+    size: int
+
+
 @dataclass
 class ProgramOutcome:
     """What running one program produced, before the front-end adds request metadata."""

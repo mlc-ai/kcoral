@@ -13,7 +13,7 @@ import stat
 import threading
 import uuid
 from collections import OrderedDict
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +26,6 @@ from kcoral.protocol import (
     is_blob_hash,
     verify_blob,
 )
-from kcoral.runtime import transfer
 from kcoral.schemas import FileUpload, Program
 
 
@@ -70,7 +69,7 @@ class ByteCache:
             self._size += len(data)
             self._evict_locked()
 
-    def borrow_memfd(self, key: str) -> int | None:
+    def borrow_memfd(self, key: str, create: Callable[[bytes], int]) -> int | None:
         """Duplicate an immutable entry buffer while eviction is excluded."""
         with self._lock:
             entry = self._entries.get(key)
@@ -79,11 +78,11 @@ class ByteCache:
             if entry.fd is None:
                 if self._fd_count >= self._MAX_FDS:
                     return None
-                with transfer.pack_blobs({key: entry.data}) as (_, fds):
-                    if not fds:
-                        return None
-                    entry.fd = os.dup(fds[0])
-                    self._fd_count += 1
+                try:
+                    entry.fd = create(entry.data)
+                except OSError:
+                    return None  # the caller stages its own copy instead
+                self._fd_count += 1
             return os.dup(entry.fd)
 
     def close(self) -> None:
