@@ -12,6 +12,7 @@ from dataclasses import fields, is_dataclass
 
 import httpx
 
+from kcoral import __version__
 from kcoral.client.result import _json_body, _parse_program_result, _response_body
 from kcoral.errors import ProtocolError
 from kcoral.runtime.pool import PoolBusy, SubmitOutcome
@@ -65,31 +66,72 @@ class ModalPool:
         self._condition = threading.Condition()
         self._active = self._waiting = 0
         self._shutdown_done = False
+        # The instance whose last outcome or cleanup is unknown, until the remote recovers.
+        self._lost: str | None = None
+        self._needs_replacement = False
         try:
-            response = self._request("GET", "/health", budget=30)
-            response.raise_for_status()
-            info = _json_body(response)
-            if info["status"] != "ok" or info["gpu_count"] != 1:
-                raise ValueError("Modal server must have one ready GPU")
-            if info["load"]["request_capacity"] != 1:
-                raise ValueError("Modal server must have one serviceable worker")
+            info = self._health()
+            self._check_version()
             self._instance_id = info["instance_id"]
             self._target, self._versions = info["target"], info["versions"]
-            if (
-                not isinstance(self._instance_id, str)
-                or not self._instance_id
-                or "arch" not in self._target
-            ):
-                raise ValueError("Modal server has no instance identity or compilation target")
-            for metadata in (self._target, self._versions):
-                if not isinstance(metadata, dict) or not all(
-                    isinstance(key, str) and isinstance(value, str)
-                    for key, value in metadata.items()
-                ):
-                    raise ValueError("invalid Modal runtime metadata")
         except BaseException:
             self._http.close()
             raise
+
+    def _health(self) -> dict:
+        response = self._request("GET", "/health", budget=30)
+        response.raise_for_status()
+        info = _json_body(response)
+        if info["status"] != "ok" or info["gpu_count"] != 1:
+            raise ValueError("Modal server must have one ready GPU")
+        if info["load"]["request_capacity"] < 1:
+            raise ValueError("Modal server has no serviceable worker")
+        instance_id, target = info["instance_id"], info["target"]
+        if not isinstance(instance_id, str) or not instance_id or "arch" not in target:
+            raise ValueError("Modal server has no instance identity or compilation target")
+        for metadata in (target, info["versions"]):
+            if not isinstance(metadata, dict) or not all(
+                isinstance(key, str) and isinstance(value, str) for key, value in metadata.items()
+            ):
+                raise ValueError("invalid Modal runtime metadata")
+        return info
+
+    def _check_version(self) -> None:
+        response = self._request("GET", "/openapi.json", budget=30)
+        response.raise_for_status()
+        remote = _json_body(response)["info"]["version"]
+        if remote != __version__:
+            raise ValueError(
+                f"Modal server runs KCoral {remote} but this server is {__version__}; "
+                "redeploy modal_app.py"
+            )
+
+    def _mark_lost(self, *, needs_replacement: bool) -> None:
+        with self._condition:
+            self._lost = self._instance_id
+            self._needs_replacement = self._needs_replacement or needs_replacement
+
+    def _recover(self, queue_ms: float) -> None:
+        """Resume once the remote is idle, and replaced if its cleanup was unconfirmed.
+
+        The lost request is never replayed: an idle remote has finished it either way.
+        """
+        try:
+            info = self._health()
+            replaced = info["instance_id"] != self._lost
+            if replaced:
+                self._check_version()
+        except (httpx.HTTPError, ProtocolError, KeyError, TypeError, ValueError):
+            raise PoolBusy("Modal server unavailable", queue_ms=queue_ms) from None
+        if (
+            info["load"].get("requests_in_progress") != 0
+            or (self._needs_replacement and not replaced)
+            or info["target"] != self._target
+        ):
+            raise PoolBusy("Modal server has not recovered", queue_ms=queue_ms)
+        with self._condition:
+            self._instance_id, self._versions = info["instance_id"], info["versions"]
+            self._lost, self._needs_replacement = None, False
 
     def _request(self, method: str, path: str, *, budget: float, **kwargs) -> httpx.Response:
         deadline = time.monotonic() + budget
@@ -150,6 +192,8 @@ class ModalPool:
 
         run_started = time.monotonic()
         try:
+            if self._lost is not None:
+                self._recover(queue_ms)
             payload = {
                 "instructions": [_wire_value(instruction) for instruction in program.instructions],
                 "options": {**program.options, "timeout_seconds": timeout},
@@ -198,8 +242,10 @@ class ModalPool:
                 ):
                     failure = WorkerCrashed("Modal worker crashed")
                 else:
-                    self.begin_shutdown()  # delivery/cleanup is unknown; do not reuse the slot
-                    if "cleanup was not confirmed" in str(error.get("message", "")):
+                    unconfirmed = "cleanup was not confirmed" in str(error.get("message", ""))
+                    # Delivery or cleanup is unknown; hold requests until the remote recovers.
+                    self._mark_lost(needs_replacement=unconfirmed)
+                    if unconfirmed:
                         raise WorkerCleanupError("Modal worker cleanup was not confirmed")
                     failure = WorkerCrashed(f"Modal server returned HTTP {response.status_code}")
                 failure.worker_id = f"modal/{self._instance_id}"
@@ -230,7 +276,7 @@ class ModalPool:
                 gpu_ids=result.gpu_ids,
             )
         except (httpx.HTTPError, ProtocolError, KeyError, TypeError, ValueError) as exc:
-            self.begin_shutdown()
+            self._mark_lost(needs_replacement=False)
             failure = WorkerCrashed(f"Modal transport failed: {exc}")
             failure.queue_ms = queue_ms
             failure.elapsed_ms = (time.monotonic() - run_started) * 1000
@@ -244,7 +290,7 @@ class ModalPool:
     def load(self) -> dict[str, int]:
         with self._condition:
             return {
-                "request_capacity": 0 if self._closing.is_set() else 1,
+                "request_capacity": 0 if self._closing.is_set() or self._lost else 1,
                 "requests_in_progress": self._active,
                 "requests_waiting": self._waiting,
             }

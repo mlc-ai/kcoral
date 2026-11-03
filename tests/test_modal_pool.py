@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from support.programs import python_instructions
 
+from kcoral import __version__
 from kcoral.config import ServerConfig
 from kcoral.protocol import (
     MultipartPart,
@@ -24,7 +25,7 @@ from kcoral.protocol import (
 from kcoral.runtime import modal_pool
 from kcoral.runtime.modal_pool import ModalPool, ModalRejected
 from kcoral.runtime.pool import PoolBusy
-from kcoral.runtime.worker import WorkerCrashed, WorkerTimeout
+from kcoral.runtime.worker import WorkerCleanupError, WorkerCrashed, WorkerTimeout
 from kcoral.server.app import create_app
 from kcoral.server.cli import build_parser, config_from_args
 
@@ -44,6 +45,9 @@ def test_modal_pool_success_busy_timeout_crash_and_shutdown(monkeypatch):
         mode = "success"
         block = False
         calls = 0
+        instance = "fake"
+        in_progress = 0
+        version = __version__
 
         def __init__(self):
             self.entered, self.release = threading.Event(), threading.Event()
@@ -51,14 +55,16 @@ def test_modal_pool_success_busy_timeout_crash_and_shutdown(monkeypatch):
         def __call__(self, request):
             assert request.headers["Modal-Key"] == "fake-key"
             assert request.headers["Modal-Secret"] == "fake-secret"
+            if request.url.path == "/openapi.json":
+                return httpx.Response(200, json={"info": {"version": self.version}})
             if request.url.path == "/health":
                 return httpx.Response(
                     200,
                     json={
                         "status": "ok",
                         "gpu_count": 1,
-                        "instance_id": "fake",
-                        "load": {"request_capacity": 1},
+                        "instance_id": self.instance,
+                        "load": {"request_capacity": 2, "requests_in_progress": self.in_progress},
                         "target": {"arch": "fake"},
                         "versions": {},
                     },
@@ -80,6 +86,11 @@ def test_modal_pool_success_busy_timeout_crash_and_shutdown(monkeypatch):
                     "busy": (503, "busy", "server saturated"),
                     "timeout": (504, "timeout", "execution timed out"),
                     "crash": (500, "engine", "worker crashed"),
+                    "unconfirmed": (
+                        500,
+                        "engine",
+                        "worker cleanup was not confirmed; affected devices unavailable",
+                    ),
                 }[self.mode]
                 return httpx.Response(
                     code,
@@ -194,15 +205,39 @@ def test_modal_pool_success_busy_timeout_crash_and_shutdown(monkeypatch):
         assert response.status_code == 200
     assert pool.closing and "modal" not in sys.modules
 
+    # A lost outcome holds requests until the remote is idle again, then resumes
+    # without replaying the lost request.
     for mode in ("oversized", "lost"):
         invoker.mode = mode
         pool = make_pool()
         with pytest.raises(WorkerCrashed):
             pool.submit(program, timeout=5, request_id=str(uuid.uuid4()))
-        assert pool.closing and pool.active_requests == 0
-        with pytest.raises(PoolBusy):
+        assert not pool.closing and pool.load()["request_capacity"] == 0
+        invoker.mode, invoker.in_progress = "success", 1
+        calls = invoker.calls
+        with pytest.raises(PoolBusy, match="not recovered"):
             pool.submit(program, timeout=5)
+        assert invoker.calls == calls  # still running remotely: nothing dispatched
+        invoker.in_progress = 0
+        assert pool.submit(program, timeout=5).execution.status == "COMPLETED"
+        assert invoker.calls == calls + 1 and pool.load()["request_capacity"] == 1
         pool.shutdown()
+
+    # Unconfirmed cleanup resumes only on a replacement container.
+    invoker.mode = "unconfirmed"
+    pool = make_pool()
+    with pytest.raises(WorkerCleanupError):
+        pool.submit(program, timeout=5)
+    invoker.mode = "success"
+    with pytest.raises(PoolBusy, match="not recovered"):
+        pool.submit(program, timeout=5)
+    invoker.instance = "fake-replacement"
+    assert pool.submit(program, timeout=5).worker_id == "modal/fake-replacement"
+    pool.shutdown()
+
+    invoker.version = "0.0.0-other"
+    with pytest.raises(ValueError, match="redeploy"):
+        make_pool()
 
 
 def test_modal_request_errors_and_limits_keep_the_backend_usable(monkeypatch):
@@ -225,11 +260,13 @@ def test_modal_request_errors_and_limits_keep_the_backend_usable(monkeypatch):
                     "status": "ok",
                     "gpu_count": 1,
                     "instance_id": "fake",
-                    "load": {"request_capacity": 1},
+                    "load": {"request_capacity": 1, "requests_in_progress": 0},
                     "target": {"arch": "fake"},
                     "versions": {},
                 },
             )
+        if request.url.path == "/openapi.json":
+            return httpx.Response(200, json={"info": {"version": __version__}})
         executed.append(request)
         request_id = str(uuid.uuid4())  # Modal's proxy renames requests
         if replies:

@@ -53,7 +53,7 @@ class ModalWorker:
         app = create_app(
             ServerConfig(
                 gpus=[0],
-                workers_per_gpu=1,
+                workers_per_gpu=2,  # a warm spare while the used worker is replaced
                 max_requests_per_worker=1,
                 worker_wait_timeout_seconds=modal_pool.REMOTE_RESPAWN_SECONDS,
                 max_request_bytes=modal_pool.REMOTE_MAX_REQUEST_BYTES,
