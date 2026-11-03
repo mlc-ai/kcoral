@@ -73,7 +73,16 @@ def _children(pid: int) -> set[int]:
             children.update(map(int, (task / "children").read_text().split()))
         except (FileNotFoundError, ProcessLookupError):
             pass
-    return children
+    # gVisor also lists the children's threads, which pidfd_open refuses; keep processes.
+    return {child for child in children if _is_process(child)}
+
+
+def _is_process(pid: int) -> bool:
+    try:
+        status = Path(f"/proc/{pid}/status").read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        return False  # already reaped, or a thread gVisor hides from /proc
+    return f"\nTgid:\t{pid}\n" in status
 
 
 def _descendants(pid: int) -> set[int]:
