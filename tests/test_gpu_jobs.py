@@ -675,6 +675,21 @@ def test_child_discovery_skips_thread_ids_that_gvisor_lists(tmp_path, monkeypatc
     (tmp_path / "proc/200/status").write_text("Name:\tworker\nState:\tS\nTgid:\t200\nPid:\t200\n")
     (tmp_path / "proc/202").mkdir()
     (tmp_path / "proc/202/status").write_text("Name:\tworker\nState:\tS\nTgid:\t200\nPid:\t202\n")
-    monkeypatch.setattr(platform, "Path", lambda path: tmp_path / str(path).lstrip("/"))
+
+    class Vanishing:
+        """A task directory that exists when found and is gone when read."""
+
+        def is_dir(self):
+            return True
+
+        def glob(self, pattern="*"):
+            raise FileNotFoundError
+
+        iterdir = glob
+
+    def proc(path):
+        return Vanishing() if path == "/proc/300/task" else tmp_path / str(path).lstrip("/")
+
+    monkeypatch.setattr(platform, "Path", proc)
     assert platform._children(100) == {200}
-    assert platform._children(300) == set()
+    assert platform._children(300) == set()  # exited while the tree was walked

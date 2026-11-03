@@ -64,7 +64,11 @@ def test_modal_pool_success_busy_timeout_crash_and_shutdown(monkeypatch):
                         "status": "ok",
                         "gpu_count": 1,
                         "instance_id": self.instance,
-                        "load": {"request_capacity": 2, "requests_in_progress": self.in_progress},
+                        "load": {
+                            "request_capacity": 2,
+                            "requests_in_progress": self.in_progress,
+                            "requests_waiting": 0,
+                        },
                         "target": {"arch": "fake"},
                         "versions": {},
                     },
@@ -208,13 +212,18 @@ def test_modal_pool_success_busy_timeout_crash_and_shutdown(monkeypatch):
     # A lost outcome holds requests until the remote is idle again, then resumes
     # without replaying the lost request.
     for mode in ("oversized", "lost"):
+        monkeypatch.setattr(modal_pool, "REMOTE_SETTLE_SECONDS", 30)
         invoker.mode = mode
         pool = make_pool()
         with pytest.raises(WorkerCrashed):
             pool.submit(program, timeout=5, request_id=str(uuid.uuid4()))
         assert not pool.closing and pool.load()["request_capacity"] == 0
-        invoker.mode, invoker.in_progress = "success", 1
+        invoker.mode = "success"
         calls = invoker.calls
+        with pytest.raises(PoolBusy, match="not recovered"):
+            pool.submit(program, timeout=5)  # idle, but a delivered request may be parsing
+        monkeypatch.setattr(modal_pool, "REMOTE_SETTLE_SECONDS", 0)
+        invoker.in_progress = 1
         with pytest.raises(PoolBusy, match="not recovered"):
             pool.submit(program, timeout=5)
         assert invoker.calls == calls  # still running remotely: nothing dispatched
@@ -260,7 +269,11 @@ def test_modal_request_errors_and_limits_keep_the_backend_usable(monkeypatch):
                     "status": "ok",
                     "gpu_count": 1,
                     "instance_id": "fake",
-                    "load": {"request_capacity": 1, "requests_in_progress": 0},
+                    "load": {
+                        "request_capacity": 1,
+                        "requests_in_progress": 0,
+                        "requests_waiting": 0,
+                    },
                     "target": {"arch": "fake"},
                     "versions": {},
                 },

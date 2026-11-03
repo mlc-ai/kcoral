@@ -26,6 +26,9 @@ REMOTE_MAX_TIMEOUT_SECONDS = 900.0
 # Each request retires the remote worker, and a timeout or crash respawns it before the
 # answer. Either costs a kill plus prepare and initialize waits of up to 60 s each.
 REMOTE_RESPAWN_SECONDS = 180.0
+# A request delivered just before its connection broke is parsed before the remote counts
+# it as in progress, so an idle report is trusted only this long after the loss.
+REMOTE_SETTLE_SECONDS = 30.0
 _PART_OVERHEAD_BYTES = 512  # multipart boundary and part headers, rounded up
 # Errors the Modal server returns after finishing a request cleanly.
 _REQUEST_ERRORS = {(400, "parse"), (413, "request_too_large"), (500, "response_too_large")}
@@ -68,6 +71,7 @@ class ModalPool:
         self._shutdown_done = False
         # The instance whose last outcome or cleanup is unknown, until the remote recovers.
         self._lost: str | None = None
+        self._lost_at = 0.0
         self._needs_replacement = False
         try:
             info = self._health()
@@ -108,13 +112,14 @@ class ModalPool:
 
     def _mark_lost(self, *, needs_replacement: bool) -> None:
         with self._condition:
-            self._lost = self._instance_id
+            self._lost, self._lost_at = self._instance_id, time.monotonic()
             self._needs_replacement = self._needs_replacement or needs_replacement
 
     def _recover(self, queue_ms: float) -> None:
         """Resume once the remote is idle, and replaced if its cleanup was unconfirmed.
 
-        The lost request is never replayed: an idle remote has finished it either way.
+        The lost request is never replayed. A replacement never received it; the same
+        instance has finished it once it stays idle past the settle window.
         """
         try:
             info = self._health()
@@ -123,9 +128,11 @@ class ModalPool:
                 self._check_version()
         except (httpx.HTTPError, ProtocolError, KeyError, TypeError, ValueError):
             raise PoolBusy("Modal server unavailable", queue_ms=queue_ms) from None
+        settling = time.monotonic() - self._lost_at < REMOTE_SETTLE_SECONDS
         if (
             info["load"].get("requests_in_progress") != 0
-            or (self._needs_replacement and not replaced)
+            or info["load"].get("requests_waiting") != 0
+            or (not replaced and (settling or self._needs_replacement))
             or info["target"] != self._target
         ):
             raise PoolBusy("Modal server has not recovered", queue_ms=queue_ms)
