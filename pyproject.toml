@@ -29,7 +29,8 @@ server = [
   "cupti-python>=13.0.1",
   "flashinfer-python>=0.6.17",
 ]
-modal = ["modal>=1.6.1"]
+# A local front end for `--backend modal` (no GPU packages), plus the SDK to deploy it.
+modal = ["fastapi>=0.110", "uvicorn>=0.29", "modal>=1.6.1"]
 
 [project.scripts]
 kcoral = "kcoral.__main__:main"
