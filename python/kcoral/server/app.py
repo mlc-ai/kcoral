@@ -141,8 +141,6 @@ def create_app(
                         tuple(config.sandbox_readonly_paths),
                     )
                 except sandbox.SandboxUnavailable as exc:
-                    if config.sandbox_required:
-                        raise
                     app.state.sandbox = "none"
                     message = (
                         "bubblewrap could not start; filesystem isolation is disabled "

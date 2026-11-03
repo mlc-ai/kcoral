@@ -7,7 +7,6 @@ import json
 import os
 import threading
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import fields, is_dataclass
 
@@ -150,7 +149,6 @@ class ModalPool:
             raise PoolBusy("all Modal workers busy or shutting down", queue_ms=queue_ms)
 
         run_started = time.monotonic()
-        request_id = request_id or str(uuid.uuid4())
         try:
             payload = {
                 "instructions": [_wire_value(instruction) for instruction in program.instructions],
@@ -178,14 +176,12 @@ class ModalPool:
                 # Waiting for the last replacement, running, then respawning after a failure.
                 budget=timeout + 2 * REMOTE_RESPAWN_SECONDS + 60,
                 files=files,
-                headers={"X-Request-ID": request_id},
             )
+            # Modal's proxy replaces X-Request-ID, so the remote names this request itself.
             if response.status_code == 503:
                 raise PoolBusy("Modal worker capacity exhausted", queue_ms=queue_ms)
             if response.status_code != 200:
                 body = _json_body(response)
-                if body.get("request_id") != request_id:
-                    raise ProtocolError("Modal error has a different request_id")
                 error = body.get("error", {})
                 if not isinstance(error, dict):
                     raise ProtocolError("Modal error details must be an object")
@@ -212,8 +208,6 @@ class ModalPool:
                 raise failure
             body, binary_parts = _response_body(response)
             result = _parse_program_result(body, binary_parts)
-            if result.request_id != request_id:
-                raise ProtocolError("Modal response has a different request_id")
             return SubmitOutcome(
                 execution=ProgramOutcome(
                     status=result.status,

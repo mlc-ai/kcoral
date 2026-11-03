@@ -12,7 +12,6 @@ from kcoral import __version__
 app = modal.App("kcoral-modal-worker")
 image = (
     modal.Image.from_registry("nvidia/cuda:13.2.1-devel-ubuntu22.04", add_python="3.11")
-    .apt_install("bubblewrap")
     .uv_sync(extras=["server", "modal"], frozen=True, uv_version="0.11.30")
     .add_local_dir("python", "/opt/kcoral/python", copy=True)
     .add_local_file("pyproject.toml", "/opt/kcoral/pyproject.toml", copy=True)
@@ -62,7 +61,9 @@ class ModalWorker:
                 max_timeout_seconds=modal_pool.REMOTE_MAX_TIMEOUT_SECONDS,
                 cache_capacity_bytes=0,
                 disk_cache_capacity_mbytes=0,
-                sandbox_required=True,
+                # Modal GPU containers run under gVisor, where bubblewrap cannot set up its
+                # network namespace. The container is the boundary; proxy auth gates it.
+                sandbox="none",
             )
         )
         self._server = ShutdownServer(uvicorn.Config(app, host="0.0.0.0", port=8000), app)
