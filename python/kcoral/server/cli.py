@@ -49,6 +49,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="worker type: gpu or cpu (default: gpu)",
     )
     parser.add_argument(
+        "--backend",
+        choices=("local", "modal"),
+        default=os.environ.get("KCORAL_SERVER_BACKEND", "local"),
+        help="where GPU workers run (default: local)",
+    )
+    parser.add_argument(
+        "--modal-url",
+        default=os.environ.get("KCORAL_MODAL_URL") or None,
+        help="authenticated Modal server URL "
+        "(credentials: KCORAL_MODAL_KEY and KCORAL_MODAL_SECRET)",
+    )
+    parser.add_argument(
         "--gpus",
         default=os.environ.get("KCORAL_SERVER_GPUS", "0"),
         help="comma-separated physical GPU ids; used only with --device gpu (default: 0)",
@@ -152,6 +164,10 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
             raise SystemExit("--gpus needs at least one GPU id")
     if args.num_workers < 1:
         raise SystemExit("--num-workers must be at least 1")
+    if args.backend == "modal" and args.device != "gpu":
+        raise SystemExit("--backend modal requires --device gpu")
+    if args.backend == "modal" and not args.modal_url:
+        raise SystemExit("--backend modal requires --modal-url")
     if args.workers_per_gpu < 1:
         raise SystemExit("--workers-per-gpu must be at least 1")
     if not 1 <= args.port <= 65535:
@@ -166,6 +182,8 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         raise SystemExit("--sandbox-readonly-path requires --sandbox bubblewrap")
     return ServerConfig(
         device=args.device,
+        backend=args.backend,
+        modal_url=args.modal_url,
         gpus=gpus,
         num_workers=args.num_workers,
         cache_capacity_bytes=args.cache_capacity_bytes,
@@ -199,7 +217,7 @@ def main(argv: list[str] | None = None) -> None:
 def serve(args: argparse.Namespace) -> None:
     """Run the Python server in the current process."""
     config = config_from_args(args)
-    if config.device == "gpu":
+    if config.device == "gpu" and config.backend == "local":
         _warn_if_visible_devices_set()
     uvicorn, create_app, shutdown_server = server_components()
     app = create_app(config)
