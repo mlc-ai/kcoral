@@ -19,6 +19,25 @@ from kcoral.runtime.pool import PoolBusy, SubmitOutcome
 from kcoral.runtime.worker import WorkerCleanupError, WorkerCrashed, WorkerTimeout
 from kcoral.schemas import ProgramOutcome, Ref
 
+# The deployed Modal server's contract; modal_app.py configures it with these.
+REMOTE_MAX_REQUEST_BYTES = 256 * 1024**2
+REMOTE_MAX_RESPONSE_BYTES = 256 * 1024**2
+REMOTE_MAX_TIMEOUT_SECONDS = 900.0
+# Each request retires the remote worker, and a timeout or crash respawns it before the
+# answer. Either costs a kill plus prepare and initialize waits of up to 60 s each.
+REMOTE_RESPAWN_SECONDS = 180.0
+_PART_OVERHEAD_BYTES = 512  # multipart boundary and part headers, rounded up
+# Errors the Modal server returns after finishing a request cleanly.
+_REQUEST_ERRORS = {(400, "parse"), (413, "request_too_large"), (500, "response_too_large")}
+
+
+class ModalRejected(Exception):
+    """The Modal server refused this request but stays usable for the next one."""
+
+    def __init__(self, status: int, kind: str, message: str) -> None:
+        super().__init__(message)
+        self.status, self.kind, self.message = status, kind, message
+
 
 class ModalPool:
     """One admitted execution on a single, authenticated Modal GPU server."""
@@ -137,26 +156,27 @@ class ModalPool:
                 "instructions": [_wire_value(instruction) for instruction in program.instructions],
                 "options": {**program.options, "timeout_seconds": timeout},
             }
-            files = [
-                (
-                    "program",
-                    (
-                        None,
-                        json.dumps(
-                            payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-                        ).encode(),
-                        "application/json",
-                    ),
-                )
-            ]
+            program_json = json.dumps(
+                payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+            ).encode()
+            files = [("program", (None, program_json, "application/json"))]
             files.extend(
                 (f"blob:{digest}", (None, data, "application/octet-stream"))
                 for digest, data in program.blob_bytes.items()
             )
+            # Cached blobs make the hop larger than what the client uploaded.
+            forwarded_bytes = len(program_json) + sum(map(len, program.blob_bytes.values()))
+            if forwarded_bytes + _PART_OVERHEAD_BYTES * len(files) > REMOTE_MAX_REQUEST_BYTES:
+                raise ModalRejected(
+                    413,
+                    "request_too_large",
+                    "request with its cached blobs exceeds the Modal server's size limit",
+                )
             response = self._request(
                 "POST",
                 "/execute",
-                budget=timeout + 60,
+                # Waiting for the last replacement, running, then respawning after a failure.
+                budget=timeout + 2 * REMOTE_RESPAWN_SECONDS + 60,
                 files=files,
                 headers={"X-Request-ID": request_id},
             )
@@ -169,6 +189,10 @@ class ModalPool:
                 error = body.get("error", {})
                 if not isinstance(error, dict):
                     raise ProtocolError("Modal error details must be an object")
+                if (response.status_code, error.get("kind")) in _REQUEST_ERRORS:
+                    raise ModalRejected(
+                        response.status_code, error["kind"], str(error.get("message", ""))
+                    )
                 if response.status_code == 504 and error.get("kind") == "timeout":
                     failure = WorkerTimeout("Modal worker execution timed out")
                 elif (

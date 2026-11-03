@@ -29,6 +29,12 @@ from kcoral.protocol import (
     _encode_response,
     parse_request,
 )
+from kcoral.runtime.modal_pool import (
+    REMOTE_MAX_REQUEST_BYTES,
+    REMOTE_MAX_RESPONSE_BYTES,
+    REMOTE_MAX_TIMEOUT_SECONDS,
+    ModalRejected,
+)
 from kcoral.runtime.pool import PoolBusy, SubmitOutcome, WorkerPool
 from kcoral.runtime.worker import WorkerCleanupError, WorkerCrashed, WorkerTimeout
 from kcoral.schemas import Program, ProgramOutcome
@@ -78,6 +84,12 @@ def create_app(
         raise ValueError("the Modal backend requires GPU workers")
     if config.backend == "modal" and not config.modal_url:
         raise ValueError("the Modal backend requires modal_url")
+    if config.backend == "modal" and (
+        config.max_request_bytes > REMOTE_MAX_REQUEST_BYTES
+        or config.max_response_bytes > REMOTE_MAX_RESPONSE_BYTES
+        or config.max_timeout_seconds > REMOTE_MAX_TIMEOUT_SECONDS
+    ):
+        raise ValueError("size and timeout limits must not exceed the Modal server's")
     if config.disk_cache_capacity_mbytes < 0:
         raise ValueError("disk cache capacity must be non-negative")
     if config.sandbox not in ("none", "bubblewrap"):
@@ -147,9 +159,10 @@ def create_app(
             if config.backend == "modal":
                 from kcoral.runtime.modal_pool import ModalPool
 
+                # Accept anything the remote may send; the local limit applies below.
                 app.state.pool = ModalPool(
                     url=config.modal_url,
-                    max_response_bytes=config.max_response_bytes,
+                    max_response_bytes=REMOTE_MAX_RESPONSE_BYTES,
                 )
             else:
                 app.state.pool = WorkerPool(
@@ -399,6 +412,10 @@ def create_app(
             response = _error_response(503, "busy", "server saturated", request_id)
             response.headers["Retry-After"] = "1"
             return response
+        except ModalRejected as exc:
+            finish_reason = "rejected" if exc.status < 500 else "server_error"
+            finished(exc.status, finish_reason=finish_reason, error_kind=exc.kind)
+            return _error_response(exc.status, exc.kind, exc.message, request_id)
         except WorkerCleanupError as exc:
             finished(500, finish_reason="server_error", error_kind="engine", error_message=str(exc))
             return _error_response(

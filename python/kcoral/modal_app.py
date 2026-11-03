@@ -48,6 +48,7 @@ class ModalWorker:
         import uvicorn
 
         from kcoral.config import ServerConfig
+        from kcoral.runtime import modal_pool
         from kcoral.server.app import ShutdownServer, create_app
 
         app = create_app(
@@ -55,7 +56,10 @@ class ModalWorker:
                 gpus=[0],
                 workers_per_gpu=1,
                 max_requests_per_worker=1,
-                worker_wait_timeout_seconds=0,
+                worker_wait_timeout_seconds=modal_pool.REMOTE_RESPAWN_SECONDS,
+                max_request_bytes=modal_pool.REMOTE_MAX_REQUEST_BYTES,
+                max_response_bytes=modal_pool.REMOTE_MAX_RESPONSE_BYTES,
+                max_timeout_seconds=modal_pool.REMOTE_MAX_TIMEOUT_SECONDS,
                 cache_capacity_bytes=0,
                 disk_cache_capacity_mbytes=0,
                 sandbox_required=True,
