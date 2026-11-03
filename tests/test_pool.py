@@ -901,3 +901,34 @@ def test_large_input_failures_do_not_leak_parent_fds(memfd_worker, failure, monk
     assert memfd_worker.pid != pid
     check_result(memfd_worker, data, 3 * len(data))
     assert fd_count() == before
+
+
+@linux_only
+def test_result_handles_arriving_after_the_deadline_still_complete(memfd_worker, monkeypatch):
+    # The outcome is the program's answer; the handles that follow it are part of
+    # the response, so their delivery is not held to the execution timeout.
+    data = b"\3" * MEMFD_THRESHOLD
+    check_result(memfd_worker, data, 3 * len(data))  # warm the worker
+    source = (
+        "import time\n"
+        "from kcoral.runtime import worker\n"
+        "send = worker._send_handle\n"
+        "def late(conn, fd): time.sleep(3); send(conn, fd)\n"
+        "worker._send_handle = late\n" + MEMFD_SOURCE
+    )
+    received, receive = [], worker_module._recv_handle
+
+    def recv(conn):
+        received.append(receive(conn))
+        return received[-1]
+
+    monkeypatch.setattr(worker_module, "_recv_handle", recv)
+    before = fd_count()
+    pid = memfd_worker.pid
+    outcome = memfd_worker.run(tensor_program(data, source), 2, NoopLeases()).execution
+    assert outcome.status == "COMPLETED", outcome.error
+    assert len(received) == 1  # the result crossed as a handle, not inline
+    assert outcome.results["value"]["value"][0]["value"] == 3 * len(data)
+    assert list(outcome.binary_parts.values()) == [data]
+    assert memfd_worker.pid == pid
+    assert fd_count() == before

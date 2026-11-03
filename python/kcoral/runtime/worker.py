@@ -106,10 +106,6 @@ def _sealed_memfd(data):
     return fd
 
 
-class HandleTimeout(OSError):
-    pass
-
-
 @contextmanager
 def pack_blobs(blobs, cache=None):
     fds, packed = [], blobs.copy()
@@ -147,9 +143,10 @@ def _recv_handle(conn):
 
 
 @contextmanager
-def mapped_blobs(conn, blobs, ready=lambda: True):
+def mapped_blobs(conn, blobs, wait_readable=lambda: None):
     # Both ends are trusted (the parent already unpickles worker messages), and
     # the sender sealed each memfd, so a handle is mapped as received.
+    # ``wait_readable`` returns once the next handle can be read, or raises.
     descriptors = [(key, value) for key, value in blobs.items() if isinstance(value, BlobHandle)]
     if not descriptors:
         yield blobs
@@ -157,8 +154,7 @@ def mapped_blobs(conn, blobs, ready=lambda: True):
     mapped = blobs.copy()
     with ExitStack() as cleanup:
         for key, descriptor in descriptors:
-            if not ready():
-                raise HandleTimeout("worker result handles exceeded the execution timeout")
+            wait_readable()
             fd = _recv_handle(conn)
             try:
                 mapping = mmap.mmap(fd, descriptor.size, access=mmap.ACCESS_READ)
@@ -581,11 +577,12 @@ class Worker:
             self._raise_startup_timeout(phase)
         return msg
 
-    def _poll_response(self, timeout: float) -> bool:
+    def _poll_response(self, timeout: float | None) -> bool:
+        """Wait for the next message. ``None`` waits until it arrives or the worker dies."""
         control = getattr(self, "_control", None)
         if control is None:
             return self._conn.poll(timeout)
-        ready = wait([self._conn, control], timeout=max(0, timeout))
+        ready = wait([self._conn, control], timeout=None if timeout is None else max(0, timeout))
         if self._conn in ready:
             return True
         if control in ready:
@@ -674,15 +671,15 @@ class Worker:
                     if cleanup_error := message.get("__sandbox_cleanup_error__"):
                         self._log_failure("sandbox_cleanup", RuntimeError(cleanup_error))
                     outcome = message["__outcome__"]
-                    deadline = time.monotonic() + remaining
+                    # The worker sealed its result memfds before sending the outcome,
+                    # so their handles follow at once. Like the rest of an inline
+                    # response, they do not count against the execution timeout.
+                    # Waiting on the supervisor still catches a worker that dies first.
                     with mapped_blobs(
-                        self._conn,
-                        outcome.binary_parts,
-                        lambda: self._poll_response(max(0, deadline - time.monotonic())),
+                        self._conn, outcome.binary_parts, lambda: self._poll_response(None)
                     ) as blobs:
                         if blobs is not outcome.binary_parts:
                             outcome.binary_parts = {key: bytes(data) for key, data in blobs.items()}
-                    remaining = deadline - time.monotonic()
                     if message["__retire_reason__"] is not None:
                         # An outcome precedes Python/CUDA finalizers. Keep them within
                         # the execution deadline and wait for the complete process tree.
@@ -750,8 +747,7 @@ class Worker:
                 self._proc.join(timeout=0.1)
             except Exception:
                 pass
-            error_type = WorkerTimeout if isinstance(exc, HandleTimeout) else WorkerCrashed
-            crash = error_type(f"{self._description()} pipe failed: {exc}")
+            crash = WorkerCrashed(f"{self._description()} pipe failed: {exc}")
             crash.worker_id = self.worker_id
             crash.instruction_index = instruction_index
             crash.lease_wait_ms = lease_wait_ms
@@ -764,9 +760,7 @@ class Worker:
                 if getattr(self, "_exit_status", None) is not None
                 else self._proc.exitcode
             )
-            self._abandon_and_respawn(
-                leases, "timeout" if isinstance(exc, HandleTimeout) else "crashed"
-            )
+            self._abandon_and_respawn(leases, "crashed")
             raise crash from exc
 
     def _output_tail(self) -> str:
