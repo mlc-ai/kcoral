@@ -42,7 +42,7 @@ def test_cached_memfds_are_bounded_and_borrow_survives_eviction(monkeypatch):
 
     size = 4096
     before = len(os.listdir("/proc/self/fd"))
-    cache = ByteCache(2 * size, max_object_bytes=size)
+    cache = ByteCache(4 * size, max_object_bytes=size)
     monkeypatch.setattr(cache, "_MAX_FDS", 1)
     cache.put("a", b"a" * size)
 
@@ -50,22 +50,25 @@ def test_cached_memfds_are_bounded_and_borrow_survives_eviction(monkeypatch):
         raise OSError("memfd unavailable")
 
     assert cache.borrow_memfd("a", unavailable) is None and cache._fd_count == 0
+    assert cache._size == size
     fd = cache.borrow_memfd("a", _sealed_memfd)
     assert fd is not None
-    assert cache._fd_count == 1
+    assert cache._fd_count == 1 and cache._size == 2 * size  # the memfd is a second copy
     owned = cache._entries["a"].fd
     cache.pin(["a"])
     cache.put("b", b"b" * size)
     assert cache.borrow_memfd("b", _sealed_memfd) is None
     cache.put("c", b"c" * size)
     cache.unpin(["a"])
+    # Only a's memfd puts the cache over budget, so a goes with both copies.
     cache.put("d", b"d" * size)
+    assert "a" not in cache and cache._size == 3 * size and cache._fd_count == 0
     with pytest.raises(OSError):
         os.fstat(owned)
     assert os.pread(fd, 1, 0) == b"a"
     os.close(fd)
     borrowed = cache.borrow_memfd("d", _sealed_memfd)
-    assert borrowed is not None
+    assert borrowed is not None and cache._size == 4 * size
     cache.close()
     assert os.pread(borrowed, 1, 0) == b"d"
     os.close(borrowed)

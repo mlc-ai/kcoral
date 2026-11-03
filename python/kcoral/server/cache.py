@@ -83,7 +83,10 @@ class ByteCache:
                 except OSError:
                     return None  # the caller stages its own copy instead
                 self._fd_count += 1
-            return os.dup(entry.fd)
+                self._size += len(entry.data)  # the memfd is a second copy
+            fd = os.dup(entry.fd)
+            self._evict_locked()
+            return fd
 
     def close(self) -> None:
         with self._lock:
@@ -120,6 +123,7 @@ class ByteCache:
                 if e.fd is not None:
                     os.close(e.fd)
                     self._fd_count -= 1
+                    self._size -= len(e.data)
 
     def __contains__(self, key: str) -> bool:
         return key in self._entries

@@ -13,7 +13,6 @@ The parent handles timeout and crash recovery when no answer arrives.
 
 from __future__ import annotations
 
-import array
 import ctypes
 import mmap
 import multiprocessing as mp
@@ -26,14 +25,13 @@ import time
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
-from multiprocessing import reduction
 from multiprocessing.connection import wait
 from pathlib import Path
 
 from kcoral.runtime.engine import execute, read_captured_output
 from kcoral.runtime.gpu import GPURuntime
 from kcoral.runtime.lease import GPULeases, GPUUnavailable, LeaseClient, NoopLease, NoopLeases
-from kcoral.schemas import BlobHandle, ProgramOutcome
+from kcoral.schemas import BlobHandle
 from kcoral.server.events import EventLogger
 from kcoral.support import cuda as nvml
 from kcoral.support import sandbox as sandboxing
@@ -137,24 +135,19 @@ def pack_blobs(blobs, cache=None):
         yield packed, fds
 
 
+def _send_handle(conn, fd):
+    with socket.fromfd(conn.fileno(), socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        socket.send_fds(sock, [b"\1"], [fd])
+
+
 def _recv_handle(conn):
-    fds = array.array("i")
-    try:
-        with socket.fromfd(conn.fileno(), socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            data, ancillary, flags, _ = sock.recvmsg(
-                1, socket.CMSG_SPACE(256 * fds.itemsize), socket.MSG_CMSG_CLOEXEC
-            )
-            for level, kind, payload in ancillary:
-                if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
-                    fds.frombytes(payload[: len(payload) - len(payload) % fds.itemsize])
-            if len(fds) != 1 or data != bytes([1]) or flags & socket.MSG_CTRUNC:
-                raise OSError("invalid memfd handle message")
-            if getattr(reduction, "ACKNOWLEDGE", True):
-                sock.sendall(b"A")
-        return fds.pop()
-    finally:
-        for fd in fds:
-            os.close(fd)
+    with socket.fromfd(conn.fileno(), socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        data, fds, flags, _ = socket.recv_fds(sock, 1, 1, socket.MSG_CMSG_CLOEXEC)
+    if len(fds) == 1 and data == b"\1" and not flags & socket.MSG_CTRUNC:
+        return fds[0]
+    for fd in fds:
+        os.close(fd)
+    raise OSError("invalid memfd handle message")
 
 
 @contextmanager
@@ -337,7 +330,7 @@ def worker_main(
             with pack_blobs(outcome.binary_parts) as (outcome.binary_parts, fds):
                 conn.send(response)
                 for fd in fds:
-                    reduction.send_handle(conn, fd, None)
+                    _send_handle(conn, fd)
         if retire_reason is not None:
             return
 
@@ -669,19 +662,11 @@ class Worker:
         held_since: float | None = None
         instruction_index: int | None = None
         try:
-            if hasattr(program, "blob_bytes"):
-                with pack_blobs(program.blob_bytes, program._blob_cache) as (blobs, fds):
-                    message = replace(program, blob_bytes=blobs, _blob_cache=None)
-                    self._conn.send((message, workspace_dir))
-                    for fd in fds:
-                        try:
-                            reduction.send_handle(self._conn, fd, self.pid)
-                        except RuntimeError as exc:
-                            if str(exc) != "did not receive acknowledgement of fd":
-                                raise
-                            raise OSError(str(exc)) from exc
-            else:
-                self._conn.send((program, workspace_dir))
+            with pack_blobs(program.blob_bytes, program._blob_cache) as (blobs, fds):
+                message = replace(program, blob_bytes=blobs, _blob_cache=None)
+                self._conn.send((message, workspace_dir))
+                for fd in fds:
+                    _send_handle(self._conn, fd)
             while True:
                 waited_from = time.monotonic()
                 if not self._poll_response(remaining):  # no answer by the deadline -> hung
@@ -701,19 +686,16 @@ class Worker:
                     if cleanup_error := message.get("__sandbox_cleanup_error__"):
                         self._log_failure("sandbox_cleanup", RuntimeError(cleanup_error))
                     outcome = message["__outcome__"]
-                    if isinstance(outcome, ProgramOutcome):
-                        deadline = time.monotonic() + remaining
-                        with mapped_blobs(
-                            self._conn,
-                            outcome.binary_parts,
-                            program.max_return_bytes,
-                            lambda: self._poll_response(max(0, deadline - time.monotonic())),
-                        ) as blobs:
-                            if blobs is not outcome.binary_parts:
-                                outcome.binary_parts = {
-                                    key: bytes(data) for key, data in blobs.items()
-                                }
-                        remaining = deadline - time.monotonic()
+                    deadline = time.monotonic() + remaining
+                    with mapped_blobs(
+                        self._conn,
+                        outcome.binary_parts,
+                        program.max_return_bytes,
+                        lambda: self._poll_response(max(0, deadline - time.monotonic())),
+                    ) as blobs:
+                        if blobs is not outcome.binary_parts:
+                            outcome.binary_parts = {key: bytes(data) for key, data in blobs.items()}
+                    remaining = deadline - time.monotonic()
                     if message["__retire_reason__"] is not None:
                         # An outcome precedes Python/CUDA finalizers. Keep them within
                         # the execution deadline and wait for the complete process tree.

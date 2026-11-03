@@ -8,7 +8,7 @@ import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
-from multiprocessing import Pipe, reduction
+from multiprocessing import Pipe
 
 import pytest
 from support.programs import harness_call
@@ -25,7 +25,16 @@ from kcoral.runtime.worker import (
     WorkerTimeout,
     worker_main,
 )
-from kcoral.schemas import BlobHandle, GetFunction, Program, Ref, Return, Run, Upload
+from kcoral.schemas import (
+    BlobHandle,
+    GetFunction,
+    Program,
+    ProgramOutcome,
+    Ref,
+    Return,
+    Run,
+    Upload,
+)
 
 
 def prog(*instrs):
@@ -690,7 +699,10 @@ def test_parent_waits_for_retiring_process_exit_before_releasing_gpu(tmp_path):
             self.messages = deque(
                 [
                     {"__lease__": "acquire"},
-                    {"__outcome__": "outcome", "__retire_reason__": reason},
+                    {
+                        "__outcome__": ProgramOutcome(status="COMPLETED"),
+                        "__retire_reason__": reason,
+                    },
                 ]
             )
 
@@ -725,7 +737,7 @@ def test_parent_waits_for_retiring_process_exit_before_releasing_gpu(tmp_path):
 
     worker._wait_for_exit = wait_for_exit
     worker._kill = lambda: observed.append(("kill", leases.held))
-    result = worker._run_in_workspace(None, 10, leases, str(tmp_path))
+    result = worker._run_in_workspace(Program(instructions=[]), 10, leases, str(tmp_path))
     assert result.retire_reason == reason
     assert observed == [("wait", True), ("kill", True)]
     assert not leases.held
@@ -814,12 +826,13 @@ def memfd_worker():
         instance.close()
 
 
-def check_result(worker, data, source=MEMFD_SOURCE):
+def check_result(worker, data, expected_sum, source=MEMFD_SOURCE):
+    """Run ``source`` (which returns ``[sum(t.data), t]``) on ``data``."""
     program = tensor_program(data, source)
     outcome = worker.run(program, 10, NoopLeases()).execution
     assert outcome.status == "COMPLETED", outcome.error
     values = outcome.results["value"]["value"]
-    assert values[0]["value"] == 3 * len(data)
+    assert values[0]["value"] == expected_sum
     assert list(outcome.binary_parts.values()) == [data]
     assert next(iter(program.blob_bytes.values())) is data
 
@@ -846,7 +859,7 @@ def test_large_and_small_inputs_have_identical_numeric_results(memfd_worker, siz
     monkeypatch.setattr(worker_module, "_recv_handle", recv)
     pid, before = memfd_worker.pid, fd_count()
     for _ in range(2):
-        check_result(memfd_worker, b"\3" * size)
+        check_result(memfd_worker, b"\3" * size, 3 * size)
         assert memfd_worker.pid == pid and fd_count() == before
     assert sent == [size >= MEMFD_THRESHOLD] * 2
     assert len(received) == 2 * (size >= MEMFD_THRESHOLD)
@@ -864,12 +877,12 @@ def test_memfd_unavailable_preserves_the_result(memfd_worker, monkeypatch):
         "worker._memfd_create = unavailable\n" + MEMFD_SOURCE
     )
     before = fd_count()
-    check_result(memfd_worker, b"\3" * MEMFD_THRESHOLD, source)
+    check_result(memfd_worker, b"\3" * MEMFD_THRESHOLD, 3 * MEMFD_THRESHOLD, source)
     assert fd_count() == before
 
 
 @linux_only
-@pytest.mark.parametrize("failure", ["crash", "timeout", "ack"])
+@pytest.mark.parametrize("failure", ["crash", "timeout", "send"])
 def test_large_input_failures_do_not_leak_parent_fds(memfd_worker, failure, monkeypatch):
     data = b"\3" * MEMFD_THRESHOLD
     source = (
@@ -877,20 +890,20 @@ def test_large_input_failures_do_not_leak_parent_fds(memfd_worker, failure, monk
         if failure == "crash"
         else "import time\ndef main(t): time.sleep(10)"
     )
-    check_result(memfd_worker, data)
+    check_result(memfd_worker, data, 3 * len(data))
     before = fd_count()
     pid = memfd_worker.pid
     with monkeypatch.context() as patch:
-        if failure == "ack":
+        if failure == "send":
 
-            def failed_ack(*args):
-                raise RuntimeError("did not receive acknowledgement of fd")
+            def failed_send(*args):
+                raise BrokenPipeError("handle not delivered")
 
-            patch.setattr(reduction, "send_handle", failed_ack)
+            patch.setattr(worker_module, "_send_handle", failed_send)
         with pytest.raises(WorkerTimeout if failure == "timeout" else WorkerCrashed):
             memfd_worker.run(tensor_program(data, source), 0.3, NoopLeases())
     assert memfd_worker.pid != pid
-    check_result(memfd_worker, data)
+    check_result(memfd_worker, data, 3 * len(data))
     assert fd_count() == before
 
 
@@ -920,9 +933,6 @@ def test_hostile_handles_are_rejected_without_leaking(fault, monkeypatch):
             sock.sendmsg(
                 [b"\1"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", fds).tobytes())]
             )
-        if fault == "ctrunc":
-            space = socket.CMSG_SPACE
-            monkeypatch.setattr(socket, "CMSG_SPACE", lambda _n: space(array.array("i").itemsize))
         before = fd_count()
         with (
             pytest.raises(OSError),

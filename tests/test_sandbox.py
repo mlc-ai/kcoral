@@ -762,17 +762,17 @@ def main():
 
 def test_large_inputs_and_results_cross_the_sandbox_as_memfds(worker, monkeypatch):
     sent, received = [], []
-    send, receive = worker_module.reduction.send_handle, worker_module._recv_handle
+    send, receive = worker_module._send_handle, worker_module._recv_handle
 
-    def send_handle(conn, fd, pid):
+    def send_handle(conn, fd):
         sent.append(fd)
-        return send(conn, fd, pid)
+        return send(conn, fd)
 
     def recv_handle(conn):
         received.append(receive(conn))
         return received[-1]
 
-    monkeypatch.setattr(worker_module.reduction, "send_handle", send_handle)
+    monkeypatch.setattr(worker_module, "_send_handle", send_handle)
     monkeypatch.setattr(worker_module, "_recv_handle", recv_handle)
     data = os.urandom(1 << 20)
     source = "from pathlib import Path\ndef main(): return Path('input.bin').read_bytes()"
