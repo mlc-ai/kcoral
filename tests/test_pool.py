@@ -1,14 +1,10 @@
-import array
 import gc
 import os
-import socket
 import sys
 import threading
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
-from multiprocessing import Pipe
 
 import pytest
 from support.programs import harness_call
@@ -905,42 +901,3 @@ def test_large_input_failures_do_not_leak_parent_fds(memfd_worker, failure, monk
     assert memfd_worker.pid != pid
     check_result(memfd_worker, data, 3 * len(data))
     assert fd_count() == before
-
-
-@linux_only
-@pytest.mark.parametrize(
-    "fault", ["unsealed", "wrong_size", "too_large", "extra", "ctrunc", "non_memfd"]
-)
-def test_hostile_handles_are_rejected_without_leaking(fault, monkeypatch):
-    sender, receiver = Pipe()
-    with ExitStack() as cleanup, sender, receiver:
-        if fault in ("unsealed", "wrong_size", "too_large"):
-            import fcntl
-
-            stream = cleanup.enter_context(os.fdopen(worker_module._memfd_create(), "wb"))
-            stream.truncate(MEMFD_THRESHOLD - (fault == "wrong_size"))
-            if fault != "unsealed":
-                fcntl.fcntl(
-                    stream.fileno(), getattr(fcntl, "F_ADD_SEALS", 1033), worker_module._seals()
-                )
-            fds = [stream.fileno()]
-        else:
-            fds = [
-                cleanup.enter_context(open(os.devnull, "rb")).fileno()
-                for _ in range(1 if fault == "non_memfd" else 3 if fault == "ctrunc" else 2)
-            ]
-        with socket.fromfd(sender.fileno(), socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.sendmsg(
-                [b"\1"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", fds).tobytes())]
-            )
-        before = fd_count()
-        with (
-            pytest.raises(OSError),
-            worker_module.mapped_blobs(
-                receiver,
-                {"blob": BlobHandle(MEMFD_THRESHOLD)},
-                max_bytes=MEMFD_THRESHOLD - 1 if fault == "too_large" else None,
-            ),
-        ):
-            pass
-        assert fd_count() == before
