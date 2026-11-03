@@ -3,6 +3,8 @@
 import json
 import os
 import runpy
+import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +22,7 @@ from kcoral.runtime.lease import GPULeases, GPUUnavailable, NoopLeases
 from kcoral.runtime.pool import PoolBusy, WorkerPool
 from kcoral.runtime.worker import Worker, WorkerCleanupError, WorkerCrashed, WorkerTimeout
 from kcoral.server.app import create_app
+from kcoral.support import platform
 
 
 def wait_for(predicate, timeout=10):
@@ -632,3 +635,46 @@ def test_job_startup_timeout_and_crash_have_distinct_http_statuses(
         assert not Path(f"/proc/{marker.read_text()}").exists()
         assert not app.state.pool._transient_workers
         assert all(app.state.pool._leases.depth(gpu) == 0 for gpu in (0, 2))
+
+
+@pytest.mark.skipif(not Path("/proc/self/task").exists(), reason="reads Linux /proc")
+def test_child_discovery_keeps_processes_and_skips_threads_and_exits():
+    threaded = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import threading, time; "
+            "[threading.Thread(target=time.sleep, args=(30,), daemon=True).start() "
+            "for _ in range(4)]; time.sleep(30)",
+        ]
+    )
+    zombie = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        tasks = Path(f"/proc/{threaded.pid}/task")
+        wait_for(lambda: len(list(tasks.iterdir())) == 5)
+        wait_for(lambda: "\nState:\tZ" in Path(f"/proc/{zombie.pid}/status").read_text())
+        threads = {int(task.name) for task in tasks.iterdir()} - {threaded.pid}
+        children = platform._children(os.getpid())
+        assert {threaded.pid, zombie.pid} <= children  # zombies still need reaping
+        assert not threads & children
+        assert not any(platform._is_process(thread) for thread in threads)
+    finally:
+        threaded.kill()
+        threaded.wait()
+        zombie.wait()
+    assert platform._children(threaded.pid) == set()  # exited mid-walk
+    assert not platform._is_process(threaded.pid)
+
+
+def test_child_discovery_skips_thread_ids_that_gvisor_lists(tmp_path, monkeypatch):
+    # gVisor lists the children's threads too, and gives those threads no /proc entry.
+    task = tmp_path / "proc/100/task/101"
+    task.mkdir(parents=True)
+    (task / "children").write_text("200 201 202")
+    (tmp_path / "proc/200").mkdir()
+    (tmp_path / "proc/200/status").write_text("Name:\tworker\nState:\tS\nTgid:\t200\nPid:\t200\n")
+    (tmp_path / "proc/202").mkdir()
+    (tmp_path / "proc/202/status").write_text("Name:\tworker\nState:\tS\nTgid:\t200\nPid:\t202\n")
+    monkeypatch.setattr(platform, "Path", lambda path: tmp_path / str(path).lstrip("/"))
+    assert platform._children(100) == {200}
+    assert platform._children(300) == set()
