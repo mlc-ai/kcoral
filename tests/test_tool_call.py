@@ -6,7 +6,7 @@ import json
 import pytest
 from test_tool_cli import remote  # noqa: F401
 
-from kcoral import agent
+from kcoral import tool_call
 from kcoral.tools.cli import pack_inputs
 from kcoral.tools.runner import unpack_inputs
 
@@ -31,7 +31,7 @@ def test_send_shell_uploads_runs_and_fetches(remote, tmp_path):  # noqa: F811
     data.mkdir()
     (data / "w.jsonl").write_text("{}")
     out = tmp_path / "runs" / "artifacts"
-    report = agent.send_shell(
+    report = tool_call.send_shell(
         "http://testserver",
         "cat solution/kernel.py\nls dataset\necho $MODE\nmkdir bench_results\n"
         "echo row > bench_results/r.jsonl\necho 'remote stderr' >&2\nexit 3\n",
@@ -57,7 +57,7 @@ def test_send_shell_keeps_outcome_when_artifact_save_fails(remote, tmp_path, mon
         raise OSError("disk full")
 
     monkeypatch.setattr(ReturnedFolder, "save", fail_save)
-    report = agent.send_shell(
+    report = tool_call.send_shell(
         "http://testserver",
         "echo finished; echo diagnostic >&2; echo row > report.txt; exit 3",
         {},
@@ -74,10 +74,10 @@ def test_send_shell_keeps_outcome_when_artifact_save_fails(remote, tmp_path, mon
 
 
 def test_send_shell_reports_remote_failure_without_raising(remote, tmp_path):  # noqa: F811
-    report = agent.send_shell("http://testserver", "echo ok", {}, timeout_seconds=1)
+    report = tool_call.send_shell("http://testserver", "echo ok", {}, timeout_seconds=1)
     assert report["status"] == "COMPLETED" and report["returncode"] == 0
     # A symlinked artifact fails collection after the script ran: no outcome, an error.
-    report = agent.send_shell(
+    report = tool_call.send_shell(
         "http://testserver",
         "ln -s /etc/passwd leak",
         {},
@@ -100,14 +100,14 @@ def test_send_shell_reports_remote_failure_without_raising(remote, tmp_path):  #
 def test_send_shell_rejects_invalid_arguments(tmp_path, kwargs):
     arguments = {"uploaded_files": {}, **kwargs}
     with pytest.raises(ValueError):
-        agent.send_shell("http://unused", "true", **arguments)
+        tool_call.send_shell("http://unused", "true", **arguments)
 
 
 def test_send_python_runs_a_function_with_uploads_and_args(remote, tmp_path):  # noqa: F811
     data = tmp_path / "data"
     data.mkdir()
     (data / "weights.txt").write_text("3")
-    report = agent.send_python(
+    report = tool_call.send_python(
         "http://testserver",
         "from pathlib import Path\n"
         "def main(x, label):\n"
@@ -124,12 +124,14 @@ def test_send_python_runs_a_function_with_uploads_and_args(remote, tmp_path):  #
 
 
 def test_send_python_reports_failures_without_raising(remote, tmp_path):  # noqa: F811
-    report = agent.send_python(
+    report = tool_call.send_python(
         "http://testserver", "def main():\n    raise RuntimeError('boom')\n", "main", {}
     )
     assert report["status"] == "FAILED" and report["value"] is None
     assert "boom" in report["error"]["message"]
-    report = agent.send_python("http://testserver", "def main():\n    return b'raw'\n", "main", {})
+    report = tool_call.send_python(
+        "http://testserver", "def main():\n    return b'raw'\n", "main", {}
+    )
     assert report["status"] == "ERROR" and report["value"] is None
     assert report["error"]["kind"] == "unsupported_value" and "bytes" in report["error"]["message"]
     json.dumps(report)
@@ -138,7 +140,7 @@ def test_send_python_reports_failures_without_raising(remote, tmp_path):  # noqa
 @pytest.mark.parametrize("name", ["", "not an identifier", "1abc"])
 def test_send_python_rejects_invalid_entry_function(name):
     with pytest.raises(ValueError):
-        agent.send_python("http://unused", "def main(): pass", name, {})
+        tool_call.send_python("http://unused", "def main(): pass", name, {})
 
 
 def test_send_python_rejects_unsafe_uploads(tmp_path):
@@ -148,7 +150,7 @@ def test_send_python_rejects_unsafe_uploads(tmp_path):
     link.symlink_to(source)
     for uploads in ({"../escape": str(source)}, {"/abs": str(source)}, {"ok.txt": str(link)}):
         with pytest.raises(ValueError):
-            agent.send_python("http://unused", "def main(): pass", "main", uploads)
+            tool_call.send_python("http://unused", "def main(): pass", "main", uploads)
 
 
 MODULE = """
@@ -180,7 +182,7 @@ def test_send_program_builds_the_same_instructions_as_the_builder():
 
     built = Program()
     for item in _program():
-        agent._translate(built, item, None)
+        tool_call._translate(built, item, None)
     expected = Program()
     module = expected.upload(id="mod", kind="module", source=MODULE)
     fn = expected.get_function(id="fn", module=module, name="main")
@@ -188,8 +190,8 @@ def test_send_program_builds_the_same_instructions_as_the_builder():
     expected.return_(key="value", value=out)
     assert built.instructions == expected.instructions
     with pytest.raises(ValueError):
-        agent._translate(built, {"op": "run", "fn": {"$ref": "nope"}}, None)
-    assert isinstance(agent._register({"$ref": "x"}), Register)
+        tool_call._translate(built, {"op": "run", "fn": {"$ref": "nope"}}, None)
+    assert isinstance(tool_call._register({"$ref": "x"}), Register)
 
 
 def test_send_program_runs_uploads_and_saves_artifacts(remote, tmp_path):  # noqa: F811
@@ -204,7 +206,7 @@ def test_send_program_runs_uploads_and_saves_artifacts(remote, tmp_path):  # noq
         {"op": "upload", "kind": "file", "id": "w", "local": str(source), "path": "inputs/w.bin"},
         *_program({"op": "return", "key": "report", "kind": "folder", "path": "report"}),
     ]
-    report = agent.send_program("http://testserver", program, out_dir=str(out))
+    report = tool_call.send_program("http://testserver", program, out_dir=str(out))
     assert report["status"] == "COMPLETED" and report["error"] is None
     assert report["results"] == {"value": {"n": 4, "doubled": 8}, "report": str(out / "report")}
     assert report["result_errors"] == {} and report["stdout"] == "ran 4\n"
@@ -229,7 +231,7 @@ def test_send_program_reports_invalid_instructions_with_their_index(index, instr
         program = [
             {"op": "upload", "kind": "module", "id": "m", "source": "x = 1"}
         ] * index + program
-    report = agent.send_program("http://unused", program)
+    report = tool_call.send_program("http://unused", program)
     assert report["status"] == "ERROR"
     assert report["error"]["kind"] == "invalid_program"
     assert report["error"]["instruction_index"] == index
@@ -249,14 +251,14 @@ def test_send_program_indexes_after_a_folder_upload_and_checks_keys(tmp_path):
             {"op": "upload", "kind": "folder", "local": str(folder), "path": "assets"},
             *_program({"op": "return", "key": bad_key, "kind": "folder", "path": "report"}),
         ]
-        report = agent.send_program("http://unused", program, out_dir=str(out))
+        report = tool_call.send_program("http://unused", program, out_dir=str(out))
         assert report["error"]["kind"] == "invalid_program"
         assert report["error"]["instruction_index"] == 5, bad_key
     program = [
         {"op": "upload", "kind": "folder", "local": str(folder), "path": "assets"},
         {"op": "upload", "kind": "file", "id": "w", "local": str(link), "path": "w"},
     ]
-    report = agent.send_program("http://unused", program)
+    report = tool_call.send_program("http://unused", program)
     assert report["error"]["instruction_index"] == 1 and "symlink" in report["error"]["message"]
     assert not out.exists()
 
@@ -264,7 +266,7 @@ def test_send_program_indexes_after_a_folder_upload_and_checks_keys(tmp_path):
 def test_send_program_reports_parser_errors_without_an_index():
     program = _program()
     program[2]["args"] = [{"$ref": "ghost"}]
-    report = agent.send_program("http://unused", program)
+    report = tool_call.send_program("http://unused", program)
     assert report["status"] == "ERROR" and report["error"]["kind"] == "invalid_program"
     assert report["error"]["instruction_index"] is None
     assert "ghost" in report["error"]["message"]
@@ -285,13 +287,13 @@ def test_mcp_rejects_malformed_program_without_submission(
 ):
     pytest.importorskip("mcp")
     monkeypatch.setattr(
-        agent, "_execute", lambda *args: pytest.fail("invalid program was submitted")
+        tool_call, "_execute", lambda *args: pytest.fail("invalid program was submitted")
     )
     program = _program()
     program[index].update(changes)
     out = tmp_path / "out"
     result = asyncio.run(
-        agent.build_server().call_tool(
+        tool_call.build_server().call_tool(
             "kcoral_send_program",
             {"endpoint": "http://unused", "program": program, "out_dir": str(out)},
         )
@@ -308,7 +310,7 @@ def test_send_program_out_dir_handling(remote, tmp_path, monkeypatch):  # noqa: 
 
     existing = tmp_path / "existing"
     existing.mkdir()
-    report = agent.send_program("http://testserver", _program(), out_dir=str(existing))
+    report = tool_call.send_program("http://testserver", _program(), out_dir=str(existing))
     assert report["status"] == "ERROR" and report["error"]["kind"] == "out_dir"
     assert "already exists" in report["error"]["message"]
 
@@ -318,7 +320,7 @@ def test_send_program_out_dir_handling(remote, tmp_path, monkeypatch):  # noqa: 
     monkeypatch.setattr(artifacts.ReturnedFolder, "save", fail)
     out = tmp_path / "nested" / "out"
     program = _program({"op": "return", "key": "report", "kind": "folder", "path": "report"})
-    report = agent.send_program("http://testserver", program, out_dir=str(out))
+    report = tool_call.send_program("http://testserver", program, out_dir=str(out))
     assert out.is_dir()
     assert report["results"] == {"value": {"n": 4, "doubled": 8}}
     assert report["result_errors"]["report"]["kind"] == "save_failed"
@@ -332,7 +334,7 @@ def test_send_program_keeps_partial_results_and_flags_unsupported_values(remote)
         {"op": "run", "id": "crash", "fn": {"$ref": "boom"}},
         {"op": "return", "key": "never", "value": {"$ref": "crash"}},
     )
-    report = agent.send_program("http://testserver", program)
+    report = tool_call.send_program("http://testserver", program)
     assert report["status"] == "FAILED" and "boom" in report["error"]["message"]
     assert report["results"] == {"value": {"n": 4, "doubled": 8}} and report["result_errors"] == {}
     program = _program(
@@ -340,7 +342,7 @@ def test_send_program_keeps_partial_results_and_flags_unsupported_values(remote)
         {"op": "run", "id": "rawout", "fn": {"$ref": "rawfn"}},
         {"op": "return", "key": "raw", "value": {"$ref": "rawout"}},
     )
-    report = agent.send_program("http://testserver", program)
+    report = tool_call.send_program("http://testserver", program)
     assert report["results"] == {"value": {"n": 4, "doubled": 8}}
     assert report["result_errors"]["raw"]["kind"] == "unsupported_value"
     assert report["status"] == "ERROR" and report["error"]["kind"] == "unsupported_value"
@@ -349,8 +351,10 @@ def test_send_program_keeps_partial_results_and_flags_unsupported_values(remote)
 
 def test_mcp_reports_local_validation_errors(tmp_path, monkeypatch):
     pytest.importorskip("mcp")
-    monkeypatch.setattr(agent, "_execute", lambda *args: pytest.fail("invalid call was submitted"))
-    server = agent.build_server()
+    monkeypatch.setattr(
+        tool_call, "_execute", lambda *args: pytest.fail("invalid call was submitted")
+    )
+    server = tool_call.build_server()
     missing_upload = {"uploaded_files": {"kernel.py": str(tmp_path / "missing.py")}}
     for tool, invalid, message in [
         ("shell", missing_upload, "input must exist"),
@@ -375,13 +379,13 @@ def test_mcp_reports_unusable_shell_output_before_submission(
 ):
     pytest.importorskip("mcp")
     monkeypatch.setattr(
-        agent, "_execute", lambda *args: pytest.fail("invalid output was submitted")
+        tool_call, "_execute", lambda *args: pytest.fail("invalid output was submitted")
     )
     occupied = tmp_path / "occupied"
     occupied.write_text("keep")
     out = occupied / "out" if existing_parent else occupied
     result = asyncio.run(
-        agent.build_server().call_tool(
+        tool_call.build_server().call_tool(
             "kcoral_send_shell",
             {
                 "endpoint": "http://unused",
@@ -400,7 +404,7 @@ def test_mcp_reports_unusable_shell_output_before_submission(
 
 def test_mcp_server_exposes_and_calls_the_tools(remote, tmp_path):  # noqa: F811
     pytest.importorskip("mcp")
-    server = agent.build_server()
+    server = tool_call.build_server()
     tools = asyncio.run(server.list_tools())
     assert [tool.name for tool in tools] == [
         "kcoral_send_shell",

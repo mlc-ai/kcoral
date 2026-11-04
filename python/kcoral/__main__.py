@@ -23,7 +23,7 @@ def main(argv: list[str] | None = None) -> None:
         router_main(argv[1:])
         return
     if argv == ["mcp"]:
-        from kcoral.agent import main as mcp_main
+        from kcoral.tool_call import main as mcp_main
 
         mcp_main()
         return
