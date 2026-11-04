@@ -29,6 +29,7 @@ server = [
   "cupti-python>=13.0.1",
   "flashinfer-python>=0.6.17",
 ]
+client = ["mcp>=2"] # the MCP server behind `kcoral mcp`
 
 [project.scripts]
 kcoral = "kcoral.__main__:main"
