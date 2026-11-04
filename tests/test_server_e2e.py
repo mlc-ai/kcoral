@@ -537,6 +537,45 @@ def test_binary_response_uses_multipart():
     assert binary == {"return:0": b"binary-result"}
 
 
+def test_multipart_response_streams_parts_larger_than_one_chunk():
+    value = bytes(range(256)) * 12289  # just over 3 MiB
+    source = "def main():\n    return bytes(range(256)) * 12289\n"
+    program = {
+        "instructions": [
+            {"op": "upload", "id": "fn_module", "kind": "module", "source": source},
+            {"op": "get_function", "id": "fn", "module": {"$ref": "fn_module"}, "name": "main"},
+            {"op": "run", "id": "value", "fn": {"$ref": "fn"}},
+            {"op": "return", "key": "value", "value": {"$ref": "value"}},
+        ]
+    }
+    app = create_app(
+        ServerConfig(sandbox="none", max_requests_per_worker=0),
+        runtime_factory=fake_runtime_factory,
+    )
+    frames = []
+
+    async def recording_app(scope, receive, send):
+        async def record(message):
+            if message["type"] == "http.response.body":
+                frames.append(message)
+            await send(message)
+
+        await app(scope, receive, record)
+
+    with TestClient(recording_app) as client:
+        response = post_program(client, program)
+    result, binary = response_parts(response)
+    assert response.headers["content-length"] == str(len(response.content))
+    assert result["results"]["value"]["sha256"] == compute_blob_hash(value)
+    assert binary == {"return:0": value}
+    # Sent as bounded slices; only the last frame ends the body.
+    *streamed, last = frames
+    assert len(streamed) >= 3 and all(frame["more_body"] for frame in streamed)
+    assert not last.get("more_body", False)
+    assert all(len(frame["body"]) <= 1 << 20 for frame in frames)
+    assert b"".join(frame["body"] for frame in frames) == response.content
+
+
 def test_stdout_stderr_and_output_limit_are_request_level():
     source = (
         "import sys\n"

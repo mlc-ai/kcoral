@@ -210,7 +210,7 @@ class Client:
         options: dict[str, Any],
         include_blobs: set[str],
         route: str | None,
-    ) -> tuple[dict[str, Any], dict[str, bytes], str | None]:
+    ) -> tuple[dict[str, Any], dict[str, bytes | memoryview], str | None]:
         payload: dict[str, Any] = {"instructions": program.instructions}
         if options:
             payload["options"] = options
@@ -235,18 +235,24 @@ class Client:
             if blob_hash in include_blobs
         )
         headers = {"X-KCoral-Node": route} if route else None
-        response = self._request("POST", "/execute", files=files, headers=headers)
-        if response.status_code != 200:
-            raise _server_error(response)
-        next_route = response.headers.get("X-KCoral-Node")
-        if next_route is not None and not (0 < len(next_route) <= 512):
-            next_route = None
-        body, binary_parts = _response_body(response)
+        response = self._request("POST", "/execute", files=files, headers=headers, stream=True)
+        try:
+            if response.status_code != 200:
+                raise _server_error(response)
+            next_route = response.headers.get("X-KCoral-Node")
+            if next_route is not None and not (0 < len(next_route) <= 512):
+                next_route = None
+            body, binary_parts = _response_body(response)
+        finally:
+            response.close()
         return body, binary_parts, next_route
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+    def _request(
+        self, method: str, path: str, *, stream: bool = False, **kwargs: Any
+    ) -> httpx.Response:
+        # A streamed response is read by the caller, which must close it.
         try:
-            return self._http.request(method, path, **kwargs)
+            return self._http.send(self._http.build_request(method, path, **kwargs), stream=stream)
         except httpx.HTTPError as exc:
             raise TransportError(str(exc)) from exc
 

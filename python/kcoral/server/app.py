@@ -8,7 +8,7 @@ import logging
 import traceback
 import uuid
 import warnings
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -19,7 +19,7 @@ from typing import Literal
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from kcoral import __version__
@@ -38,6 +38,7 @@ from kcoral.support import sandbox
 
 _TRACEBACK_LIMIT = 8192
 _MESSAGE_LIMIT = 2048
+_STREAM_CHUNK_BYTES = 1024 * 1024
 
 _FINISH_REASON_LEVEL = {
     "completed": "INFO",
@@ -486,8 +487,9 @@ def create_app(
         if execution.status != "COMPLETED":
             payload["error"] = execution.error
 
-        response_body, content_type = _encode_response(payload, execution.binary_parts)
-        response_bytes = max(len(response_body), execution._response_bytes)
+        chunks, content_type = _encode_response(payload, execution.binary_parts)
+        response_length = sum(len(chunk) for chunk in chunks)
+        response_bytes = max(response_length, execution._response_bytes)
         if response_bytes > config.max_response_bytes:
             finished(
                 500,
@@ -525,12 +527,23 @@ def create_app(
             elapsed_ms=outcome.elapsed_ms,
             lease_wait_ms=outcome.lease_wait_ms,
             lease_held_ms=outcome.lease_held_ms,
-            response_bytes=len(response_body),
+            response_bytes=response_length,
         )
         response_headers = {**headers, "Content-Type": content_type}
-        return Response(content=response_body, status_code=200, headers=response_headers)
+        if response_length <= _STREAM_CHUNK_BYTES:
+            return Response(content=b"".join(chunks), status_code=200, headers=response_headers)
+        # Stream large results in slices instead of joining one more full-size copy.
+        response_headers["Content-Length"] = str(response_length)
+        return StreamingResponse(_stream(chunks), status_code=200, headers=response_headers)
 
     return app
+
+
+async def _stream(chunks: list[bytes]) -> AsyncIterator[bytes]:
+    # Bounded slices keep the transport's write buffer small and reused.
+    for chunk in chunks:
+        for start in range(0, len(chunk), _STREAM_CHUNK_BYTES):
+            yield chunk[start : start + _STREAM_CHUNK_BYTES]
 
 
 def _parse_execute_request(

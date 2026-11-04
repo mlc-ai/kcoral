@@ -11,7 +11,7 @@ import ml_dtypes
 import numpy as np
 
 from kcoral.artifacts import ReturnedFile, ReturnedFolder, validate_manifest
-from kcoral.errors import ProtocolError
+from kcoral.errors import ProtocolError, TransportError
 from kcoral.protocol import (
     expected_tensor_nbytes,
     is_blob_hash,
@@ -70,19 +70,22 @@ class ProgramResult:
         return self.results[key]
 
 
-def _response_body(response: httpx.Response) -> tuple[dict[str, Any], dict[str, bytes]]:
+def _response_body(
+    response: httpx.Response,
+) -> tuple[dict[str, Any], dict[str, bytes | memoryview]]:
     media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if media_type == "application/json":
         return _json_body(response), {}
     if media_type != "multipart/form-data":
         raise ProtocolError(f"unsupported response content type: {media_type!r}")
+    body = _read_body(response)
     try:
-        parts = parse_multipart(response.headers.get("content-type"), response.content)
+        parts = parse_multipart(response.headers.get("content-type"), body)
     except Exception as exc:
         raise ProtocolError(f"malformed multipart response: {exc}") from exc
 
     result: dict[str, Any] | None = None
-    binary_parts: dict[str, bytes] = {}
+    binary_parts: dict[str, bytes | memoryview] = {}
     for part in parts:
         if part.name == "result":
             if result is not None:
@@ -90,7 +93,7 @@ def _response_body(response: httpx.Response) -> tuple[dict[str, Any], dict[str, 
             if part.content_type != "application/json":
                 raise ProtocolError("the 'result' response part must use application/json")
             try:
-                parsed = strict_json_loads(part.data)
+                parsed = strict_json_loads(bytes(part.data))
             except Exception as exc:
                 raise ProtocolError(f"the 'result' part is not valid JSON: {exc}") from exc
             if not isinstance(parsed, dict):
@@ -107,9 +110,53 @@ def _response_body(response: httpx.Response) -> tuple[dict[str, Any], dict[str, 
     return result, binary_parts
 
 
+def _read_body(response: httpx.Response) -> bytes | bytearray:
+    """Read the body into one writable buffer.
+
+    Payloads parsed from the buffer are views, so decoded tensors need no further copy.
+    """
+    length = _content_length(response)
+    try:
+        if (
+            response.is_stream_consumed
+            or response.headers.get("content-encoding", "identity").lower() != "identity"
+        ):
+            return response.read()
+        # Content-Length is unverified until the body arrives, so nothing is allocated
+        # from it. Joining the received chunks copies each byte once; growing a buffer
+        # instead can copy it again on every resize.
+        chunks = []
+        received = 0
+        for chunk in response.iter_raw():
+            received += len(chunk)
+            if length is not None and received > length:
+                raise ProtocolError("response body is longer than its Content-Length")
+            chunks.append(chunk)
+        body = bytearray().join(chunks)
+    except httpx.HTTPError as exc:
+        raise TransportError(str(exc)) from exc
+    if length is not None and received != length:
+        raise ProtocolError("response body is shorter than its Content-Length")
+    return body
+
+
+def _content_length(response: httpx.Response) -> int | None:
+    value = response.headers.get("content-length")
+    if value is None:
+        return None
+    # isdigit() alone accepts non-ASCII digits; 18 digits keep the value below 2**63.
+    if not (value.isascii() and value.isdigit() and len(value) <= 18):
+        raise ProtocolError(f"invalid response Content-Length: {value[:32]!r}")
+    return int(value)
+
+
 def _json_body(response: httpx.Response) -> dict[str, Any]:
     try:
-        body = strict_json_loads(response.content)
+        content = response.read()
+    except httpx.HTTPError as exc:
+        raise TransportError(str(exc)) from exc
+    try:
+        body = strict_json_loads(content)
     except Exception as exc:
         raise ProtocolError(f"response is not valid JSON: {exc}") from exc
     if not isinstance(body, dict):
@@ -117,7 +164,9 @@ def _json_body(response: httpx.Response) -> dict[str, Any]:
     return body
 
 
-def _parse_program_result(body: dict[str, Any], binary_parts: dict[str, bytes]) -> ProgramResult:
+def _parse_program_result(
+    body: dict[str, Any], binary_parts: dict[str, bytes | memoryview]
+) -> ProgramResult:
     try:
         status = body["status"]
         if status not in ("COMPLETED", "FAILED"):
@@ -246,7 +295,9 @@ def _parse_error(error: Any) -> dict[str, Any]:
     return error
 
 
-def _decode_value(encoded: Any, binary_parts: dict[str, bytes], used_parts: set[str]) -> Any:
+def _decode_value(
+    encoded: Any, binary_parts: dict[str, bytes | memoryview], used_parts: set[str]
+) -> Any:
     if not isinstance(encoded, dict) or not isinstance(encoded.get("type"), str):
         raise ValueError("encoded values must be objects with a type")
     value_type = encoded["type"]
@@ -288,7 +339,7 @@ def _decode_value(encoded: Any, binary_parts: dict[str, bytes], used_parts: set[
         }
     if value_type == "bytes":
         _expect_fields(encoded, {"type", "part", "sha256"})
-        return _binary_part(encoded, binary_parts, used_parts)
+        return bytes(_binary_part(encoded, binary_parts, used_parts))
     if value_type == "file":
         _expect_fields(encoded, {"type", "size", "part", "sha256"})
         size = encoded["size"]
@@ -297,7 +348,7 @@ def _decode_value(encoded: Any, binary_parts: dict[str, bytes], used_parts: set[
         data = _binary_part(encoded, binary_parts, used_parts)
         if len(data) != size:
             raise ValueError("file binary length does not match size")
-        return ReturnedFile(data)
+        return ReturnedFile(bytes(data))
     if value_type == "folder":
         _expect_fields(encoded, {"type", "files", "directories"})
         files, directories = encoded["files"], encoded["directories"]
@@ -333,8 +384,8 @@ def _decode_value(encoded: Any, binary_parts: dict[str, bytes], used_parts: set[
 
 
 def _binary_part(
-    encoded: dict[str, Any], binary_parts: dict[str, bytes], used_parts: set[str]
-) -> bytes:
+    encoded: dict[str, Any], binary_parts: dict[str, bytes | memoryview], used_parts: set[str]
+) -> bytes | memoryview:
     part_name = encoded["part"]
     blob_hash = encoded["sha256"]
     if not isinstance(part_name, str) or not part_name.startswith("return:"):
@@ -380,14 +431,19 @@ _NUMPY_DTYPES = {
 }
 
 
-def _decode_tensor(dtype: str, shape: list[int], data: bytes) -> Any:
+def _decode_tensor(dtype: str, shape: list[int], data: bytes | memoryview) -> Any:
     try:
         numpy_dtype = _NUMPY_DTYPES[dtype]
     except KeyError:
         raise ValueError(f"cannot decode tensor dtype {dtype!r}") from None
-    # frombuffer aliases the read-only response bytes; copy() gives the caller a
-    # writable array that owns its storage and outlives the response.
-    return np.frombuffer(data, dtype=numpy_dtype).reshape(shape).copy()
+    array = np.frombuffer(data, dtype=numpy_dtype).reshape(shape)
+    # A view into the client's private receive buffer is writable and outlives the
+    # response. Copy read-only bytes, misaligned views, and views that would keep a
+    # response buffer more than twice their size alive.
+    in_place = isinstance(data, memoryview) and 2 * data.nbytes >= len(data.obj)
+    if not (in_place and array.flags.writeable and array.flags.aligned):
+        array = array.copy()
+    return array
 
 
 def _expect_fields(value: dict[str, Any], expected: set[str]) -> None:
