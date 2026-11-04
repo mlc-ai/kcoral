@@ -92,6 +92,8 @@ class Program:
     # Filled by the HTTP front-end after multipart validation and cache lookup.
     blob_bytes: dict[str, bytes] = field(default_factory=dict)
 
+    _blob_cache: Any = None  # Parent-only; removed before sending to workers.
+
     # Trusted limits supplied by the front-end; never accepted in wire options.
     max_return_bytes: int = 256 * 1024**2
 
@@ -103,6 +105,17 @@ class Program:
             if isinstance(instruction, FileUpload)
             or (isinstance(instruction, Upload) and instruction.blob is not None)
         ]
+
+
+@dataclass(frozen=True)
+class BlobHandle:
+    """Stands in for a blob sent as a sealed memfd after the message that carries it.
+
+    Defined here, not in the worker module, so both ends unpickle the same class
+    when the sandboxed worker runs as ``python -m kcoral.runtime.worker``.
+    """
+
+    size: int
 
 
 @dataclass
@@ -117,3 +130,4 @@ class ProgramOutcome:
     stderr: str = ""
     stdout_truncated: bool = False
     stderr_truncated: bool = False
+    _response_bytes: int = 0  # Internal raw-size lower bound when binary parts were omitted.

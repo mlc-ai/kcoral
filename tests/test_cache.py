@@ -1,5 +1,6 @@
 import multiprocessing as mp
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -33,6 +34,46 @@ def test_per_object_cap_skips_giant_objects():
     assert "big" not in c
     c.put("ok", b"x" * 8)
     assert "ok" in c
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux")
+def test_cached_memfds_are_bounded_and_borrow_survives_eviction(monkeypatch):
+    from kcoral.runtime.worker import _sealed_memfd
+
+    size = 4096
+    before = len(os.listdir("/proc/self/fd"))
+    cache = ByteCache(4 * size, max_object_bytes=size)
+    monkeypatch.setattr(cache, "_MAX_FDS", 1)
+    cache.put("a", b"a" * size)
+
+    def unavailable(data):
+        raise OSError("memfd unavailable")
+
+    assert cache.borrow_memfd("a", unavailable) is None and cache._fd_count == 0
+    assert cache._size == size
+    fd = cache.borrow_memfd("a", _sealed_memfd)
+    assert fd is not None
+    assert cache._fd_count == 1 and cache._size == 2 * size  # the memfd is a second copy
+    owned = cache._entries["a"].fd
+    cache.pin(["a"])
+    cache.put("b", b"b" * size)
+    assert cache.borrow_memfd("b", _sealed_memfd) is None
+    cache.put("c", b"c" * size)
+    cache.unpin(["a"])
+    # Only a's memfd puts the cache over budget, so a goes with both copies.
+    cache.put("d", b"d" * size)
+    assert "a" not in cache and cache._size == 3 * size and cache._fd_count == 0
+    with pytest.raises(OSError):
+        os.fstat(owned)
+    assert os.pread(fd, 1, 0) == b"a"
+    os.close(fd)
+    borrowed = cache.borrow_memfd("d", _sealed_memfd)
+    assert borrowed is not None and cache._size == 4 * size
+    cache.close()
+    assert os.pread(borrowed, 1, 0) == b"d"
+    os.close(borrowed)
+    cache.close()
+    assert len(os.listdir("/proc/self/fd")) == before
 
 
 def _disk_path(cache, key):

@@ -13,19 +13,25 @@ The parent handles timeout and crash recovery when no answer arrives.
 
 from __future__ import annotations
 
+import ctypes
+import mmap
 import multiprocessing as mp
 import os
+import socket
 import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, replace
 from multiprocessing.connection import wait
 from pathlib import Path
 
 from kcoral.runtime.engine import execute, read_captured_output
+from kcoral.runtime.gpu import GPURuntime
 from kcoral.runtime.lease import GPULeases, GPUUnavailable, LeaseClient, NoopLease, NoopLeases
+from kcoral.schemas import BlobHandle
 from kcoral.server.events import EventLogger
 from kcoral.support import cuda as nvml
 from kcoral.support import sandbox as sandboxing
@@ -36,6 +42,9 @@ from kcoral.support.platform import (
     _terminate_process_tree,
     _wait_for_tree_exit,
 )
+
+if sys.platform == "linux":
+    import fcntl
 
 _WORKER_PIPE_FAILURES = (EOFError, ConnectionResetError, BrokenPipeError, OSError)
 
@@ -67,6 +76,93 @@ class WorkerResult:
 
 _NO_EVENTS = EventLogger(None)  # a shared no-op, for a handle given no log
 _OUTPUT_TAIL_BYTES = 4096  # of a killed worker's output, kept on its log record
+
+# Large blobs cross the control socket as sealed, request-local memfds.
+MEMFD_THRESHOLD = 1 << 20
+_SEAL_NAMES = ("SEAL", "SHRINK", "GROW", "WRITE")
+
+
+def _seals():
+    return sum(getattr(fcntl, "F_SEAL_" + name, 1 << i) for i, name in enumerate(_SEAL_NAMES))
+
+
+def _memfd_create():
+    create = getattr(os, "memfd_create", None)
+    fd = create("blob", 3) if create else ctypes.CDLL(None, use_errno=True).memfd_create(b"blob", 3)
+    if fd < 0:
+        raise OSError(ctypes.get_errno(), "memfd_create failed")
+    return fd
+
+
+def _sealed_memfd(data):
+    fd = _memfd_create()  # MFD_CLOEXEC | MFD_ALLOW_SEALING
+    try:
+        with os.fdopen(fd, "wb", closefd=False) as stream:
+            stream.write(data)
+        fcntl.fcntl(fd, getattr(fcntl, "F_ADD_SEALS", 1033), _seals())
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+@contextmanager
+def pack_blobs(blobs, cache=None):
+    fds, packed = [], blobs.copy()
+    with ExitStack() as cleanup:
+        try:
+            if sys.platform == "linux":
+                for key, data in blobs.items():
+                    if len(data) < MEMFD_THRESHOLD:
+                        continue
+                    fd = cache.borrow_memfd(key, _sealed_memfd) if cache is not None else None
+                    if fd is None:
+                        fd = _sealed_memfd(data)
+                    cleanup.callback(os.close, fd)
+                    packed[key] = BlobHandle(len(data))
+                    fds.append(fd)
+        except (OSError, AttributeError, NotImplementedError):
+            cleanup.close()
+            fds, packed = [], blobs
+        yield packed, fds
+
+
+def _send_handle(conn, fd):
+    with socket.fromfd(conn.fileno(), socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        socket.send_fds(sock, [b"\1"], [fd])
+
+
+def _recv_handle(conn):
+    with socket.fromfd(conn.fileno(), socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        data, fds, flags, _ = socket.recv_fds(sock, 1, 1, socket.MSG_CMSG_CLOEXEC)
+    if len(fds) == 1 and data == b"\1" and not flags & socket.MSG_CTRUNC:
+        return fds[0]
+    for fd in fds:
+        os.close(fd)
+    raise OSError("invalid memfd handle message")
+
+
+@contextmanager
+def mapped_blobs(conn, blobs, wait_readable=lambda: None):
+    # Both ends are trusted (the parent already unpickles worker messages), and
+    # the sender sealed each memfd, so a handle is mapped as received.
+    # ``wait_readable`` returns once the next handle can be read, or raises.
+    descriptors = [(key, value) for key, value in blobs.items() if isinstance(value, BlobHandle)]
+    if not descriptors:
+        yield blobs
+        return
+    mapped = blobs.copy()
+    with ExitStack() as cleanup:
+        for key, descriptor in descriptors:
+            wait_readable()
+            fd = _recv_handle(conn)
+            try:
+                mapping = mmap.mmap(fd, descriptor.size, access=mmap.ACCESS_READ)
+            finally:
+                os.close(fd)
+            cleanup.callback(mapping.close)
+            mapped[key] = cleanup.enter_context(memoryview(mapping))
+        yield mapped
 
 
 def worker_main(
@@ -159,15 +255,21 @@ def worker_main(
             if cleanup_error is None:
                 cleanup_error = exc
 
-        outcome = execute(
-            program,
-            runtime,
-            lease=lease,
-            progress=lambda index: conn.send({"__instruction__": index}),
-            cleanup_failed=mark_cleanup_failed,
-            capture_dir=capture_dir,
-            workspace_dir=workspace_dir,
-        )
+        with mapped_blobs(conn, program.blob_bytes) as blobs:
+            program.blob_bytes = (
+                blobs
+                if type(runtime) is GPURuntime
+                else {key: bytes(value) for key, value in blobs.items()}
+            )
+            outcome = execute(
+                program,
+                runtime,
+                lease=lease,
+                progress=lambda index: conn.send({"__instruction__": index}),
+                cleanup_failed=mark_cleanup_failed,
+                capture_dir=capture_dir,
+                workspace_dir=workspace_dir,
+            )
         sandbox_cleanup_error = None
         if request_state is not None:
             try:
@@ -202,7 +304,17 @@ def worker_main(
             # Thread/file cleanup errors can be reported before the child check.
             # Track live children independently: namespace exit will kill them.
             response["__sandbox_children__"] = request_state.has_children()
-        conn.send(response)
+        result_bytes = sum(map(len, outcome.binary_parts.values()))
+        if result_bytes > program.max_return_bytes:
+            outcome._response_bytes = result_bytes
+            outcome.binary_parts = {}
+            outcome.results = {}
+            conn.send(response)
+        else:
+            with pack_blobs(outcome.binary_parts) as (outcome.binary_parts, fds):
+                conn.send(response)
+                for fd in fds:
+                    _send_handle(conn, fd)
         if retire_reason is not None:
             return
 
@@ -465,11 +577,12 @@ class Worker:
             self._raise_startup_timeout(phase)
         return msg
 
-    def _poll_response(self, timeout: float) -> bool:
+    def _poll_response(self, timeout: float | None) -> bool:
+        """Wait for the next message. ``None`` waits until it arrives or the worker dies."""
         control = getattr(self, "_control", None)
         if control is None:
             return self._conn.poll(timeout)
-        ready = wait([self._conn, control], timeout=max(0, timeout))
+        ready = wait([self._conn, control], timeout=None if timeout is None else max(0, timeout))
         if self._conn in ready:
             return True
         if control in ready:
@@ -534,7 +647,11 @@ class Worker:
         held_since: float | None = None
         instruction_index: int | None = None
         try:
-            self._conn.send((program, workspace_dir))
+            with pack_blobs(program.blob_bytes, program._blob_cache) as (blobs, fds):
+                message = replace(program, blob_bytes=blobs, _blob_cache=None)
+                self._conn.send((message, workspace_dir))
+                for fd in fds:
+                    _send_handle(self._conn, fd)
             while True:
                 waited_from = time.monotonic()
                 if not self._poll_response(remaining):  # no answer by the deadline -> hung
@@ -554,6 +671,15 @@ class Worker:
                     if cleanup_error := message.get("__sandbox_cleanup_error__"):
                         self._log_failure("sandbox_cleanup", RuntimeError(cleanup_error))
                     outcome = message["__outcome__"]
+                    # The worker sealed its result memfds before sending the outcome,
+                    # so their handles follow at once. Like the rest of an inline
+                    # response, they do not count against the execution timeout.
+                    # Waiting on the supervisor still catches a worker that dies first.
+                    with mapped_blobs(
+                        self._conn, outcome.binary_parts, lambda: self._poll_response(None)
+                    ) as blobs:
+                        if blobs is not outcome.binary_parts:
+                            outcome.binary_parts = {key: bytes(data) for key, data in blobs.items()}
                     if message["__retire_reason__"] is not None:
                         # An outcome precedes Python/CUDA finalizers. Keep them within
                         # the execution deadline and wait for the complete process tree.

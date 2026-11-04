@@ -16,6 +16,7 @@ import pytest
 from kcoral import Program
 from kcoral.client.result import _decode_value
 from kcoral.protocol import parse_program
+from kcoral.runtime import worker as worker_module
 from kcoral.runtime.lease import NoopLeases
 from kcoral.runtime.pool import WorkerPool
 from kcoral.runtime.python import cpu_runtime_factory
@@ -759,6 +760,27 @@ def main():
     result = worker.run(program, 30, NoopLeases())
     assert result.finish_reason == "completed" and result.retire_reason is None
     assert values(result.execution)["file"].read_bytes() == b"compiled"
+
+
+def test_large_inputs_and_results_cross_the_sandbox_as_memfds(worker, monkeypatch):
+    sent, received = [], []
+    send, receive = worker_module._send_handle, worker_module._recv_handle
+
+    def send_handle(conn, fd):
+        sent.append(fd)
+        return send(conn, fd)
+
+    def recv_handle(conn):
+        received.append(receive(conn))
+        return received[-1]
+
+    monkeypatch.setattr(worker_module, "_send_handle", send_handle)
+    monkeypatch.setattr(worker_module, "_recv_handle", recv_handle)
+    data = os.urandom(1 << 20)
+    source = "from pathlib import Path\ndef main(): return Path('input.bin').read_bytes()"
+    value, reason = run(worker, parsed(source, files={"input.bin": data}))
+    assert value == data and reason is None
+    assert len(sent) == len(received) == 1
 
 
 def test_workspace_is_removed_on_shutdown(worker):

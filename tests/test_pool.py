@@ -1,13 +1,18 @@
+import gc
 import os
+import sys
 import threading
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from support.programs import harness_call
-from support.runtime import fake_runtime_factory
+from support.runtime import FakeRuntime, fake_runtime_factory
 
-from kcoral.runtime.lease import GPULeases, GPUUnavailable
+from kcoral.protocol import compute_blob_hash
+from kcoral.runtime import worker as worker_module
+from kcoral.runtime.lease import GPULeases, GPUUnavailable, NoopLeases
 from kcoral.runtime.pool import PoolBusy, WorkerPool
 from kcoral.runtime.worker import (
     Worker,
@@ -16,7 +21,16 @@ from kcoral.runtime.worker import (
     WorkerTimeout,
     worker_main,
 )
-from kcoral.schemas import GetFunction, Program, Ref, Return, Run, Upload
+from kcoral.schemas import (
+    BlobHandle,
+    GetFunction,
+    Program,
+    ProgramOutcome,
+    Ref,
+    Return,
+    Run,
+    Upload,
+)
 
 
 def prog(*instrs):
@@ -681,7 +695,10 @@ def test_parent_waits_for_retiring_process_exit_before_releasing_gpu(tmp_path):
             self.messages = deque(
                 [
                     {"__lease__": "acquire"},
-                    {"__outcome__": "outcome", "__retire_reason__": reason},
+                    {
+                        "__outcome__": ProgramOutcome(status="COMPLETED"),
+                        "__retire_reason__": reason,
+                    },
                 ]
             )
 
@@ -716,7 +733,7 @@ def test_parent_waits_for_retiring_process_exit_before_releasing_gpu(tmp_path):
 
     worker._wait_for_exit = wait_for_exit
     worker._kill = lambda: observed.append(("kill", leases.held))
-    result = worker._run_in_workspace(None, 10, leases, str(tmp_path))
+    result = worker._run_in_workspace(Program(instructions=[]), 10, leases, str(tmp_path))
     assert result.retire_reason == reason
     assert observed == [("wait", True), ("kill", True)]
     assert not leases.held
@@ -753,3 +770,134 @@ def test_cpu_timeout_waits_for_gpu_before_destroying_live_context(gpu_ids):
         thread.join(timeout=3)
     assert not thread.is_alive()
     assert observed == [True]
+
+
+# --- sealed-buffer transport through real worker lifetime boundaries ---------
+
+linux_only = pytest.mark.skipif(sys.platform != "linux", reason="requires Linux")
+MEMFD_SOURCE = "def main(t): return [sum(t.data), t]"
+MEMFD_THRESHOLD = worker_module.MEMFD_THRESHOLD
+
+
+class BufferRuntime(FakeRuntime):
+    def load_tensor(self, data, dtype, shape):
+        import torch
+
+        assert isinstance(data, bytes)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message="The given buffer is not writable", category=UserWarning
+            )
+            self.retained_tensor = torch.frombuffer(data, dtype=torch.uint8)
+        return super().load_tensor(data, dtype, shape)
+
+
+def tensor_program(data, source=MEMFD_SOURCE):
+    digest = compute_blob_hash(data)
+    return Program(
+        instructions=[
+            Upload("module", "module", source=source),
+            GetFunction("fn", Ref("module"), "main", cpu_only=True),
+            Upload("tensor", "tensor", blob=digest, dtype="uint8", shape=[len(data)]),
+            Run("result", Ref("fn"), [Ref("tensor")]),
+            Return("value", Ref("result")),
+        ],
+        blob_bytes={digest: data},
+    )
+
+
+def fd_count():
+    gc.collect()
+    return len(os.listdir("/proc/self/fd"))
+
+
+@pytest.fixture
+def memfd_worker():
+    instance = Worker(
+        None, BufferRuntime, sandbox="none", max_requests=0, termination_grace_seconds=0.1
+    )
+    try:
+        yield instance
+    finally:
+        instance.close()
+
+
+def check_result(worker, data, expected_sum, source=MEMFD_SOURCE):
+    """Run ``source`` (which returns ``[sum(t.data), t]``) on ``data``."""
+    program = tensor_program(data, source)
+    outcome = worker.run(program, 10, NoopLeases()).execution
+    assert outcome.status == "COMPLETED", outcome.error
+    values = outcome.results["value"]["value"]
+    assert values[0]["value"] == expected_sum
+    assert list(outcome.binary_parts.values()) == [data]
+    assert next(iter(program.blob_bytes.values())) is data
+
+
+@linux_only
+@pytest.mark.parametrize("size", [4096, MEMFD_THRESHOLD])
+def test_large_and_small_inputs_have_identical_numeric_results(memfd_worker, size, monkeypatch):
+    monkeypatch.delattr(os, "memfd_create", raising=False)
+    sent, original = [], memfd_worker._conn.send
+
+    def send(message):
+        if isinstance(message, tuple):
+            sent.extend(isinstance(value, BlobHandle) for value in message[0].blob_bytes.values())
+        return original(message)
+
+    monkeypatch.setattr(memfd_worker._conn, "send", send)
+    received, receive = [], worker_module._recv_handle
+
+    def recv(conn):
+        fd = receive(conn)
+        received.append(fd)
+        return fd
+
+    monkeypatch.setattr(worker_module, "_recv_handle", recv)
+    pid, before = memfd_worker.pid, fd_count()
+    for _ in range(2):
+        check_result(memfd_worker, b"\3" * size, 3 * size)
+        assert memfd_worker.pid == pid and fd_count() == before
+    assert sent == [size >= MEMFD_THRESHOLD] * 2
+    assert len(received) == 2 * (size >= MEMFD_THRESHOLD)
+
+
+@linux_only
+def test_memfd_unavailable_preserves_the_result(memfd_worker, monkeypatch):
+    def unavailable(*args):
+        raise OSError("memfd unavailable")
+
+    monkeypatch.setattr(worker_module, "_memfd_create", unavailable)
+    source = (
+        "from kcoral.runtime import worker\n"
+        "def unavailable(*args): raise OSError('memfd unavailable')\n"
+        "worker._memfd_create = unavailable\n" + MEMFD_SOURCE
+    )
+    before = fd_count()
+    check_result(memfd_worker, b"\3" * MEMFD_THRESHOLD, 3 * MEMFD_THRESHOLD, source)
+    assert fd_count() == before
+
+
+@linux_only
+@pytest.mark.parametrize("failure", ["crash", "timeout", "send"])
+def test_large_input_failures_do_not_leak_parent_fds(memfd_worker, failure, monkeypatch):
+    data = b"\3" * MEMFD_THRESHOLD
+    source = (
+        "import os\ndef main(t): os._exit(3)"
+        if failure == "crash"
+        else "import time\ndef main(t): time.sleep(10)"
+    )
+    check_result(memfd_worker, data, 3 * len(data))
+    before = fd_count()
+    pid = memfd_worker.pid
+    with monkeypatch.context() as patch:
+        if failure == "send":
+
+            def failed_send(*args):
+                raise BrokenPipeError("handle not delivered")
+
+            patch.setattr(worker_module, "_send_handle", failed_send)
+        with pytest.raises(WorkerTimeout if failure == "timeout" else WorkerCrashed):
+            memfd_worker.run(tensor_program(data, source), 0.3, NoopLeases())
+    assert memfd_worker.pid != pid
+    check_result(memfd_worker, data, 3 * len(data))
+    assert fd_count() == before

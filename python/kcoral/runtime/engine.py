@@ -39,7 +39,7 @@ class Runtime(Protocol):
     def load_module(self, source: str) -> Any: ...
     def load_library(self, data: bytes) -> Any: ...
     def get_function(self, module: Any, name: str) -> Any: ...
-    def load_tensor(self, data: bytes, dtype: str, shape: list[int]) -> Any: ...
+    def load_tensor(self, data: bytes | memoryview, dtype: str, shape: list[int]) -> Any: ...
     def export_tensor(self, value: Any) -> tuple[str, list[int], bytes] | None: ...
     def forbid_gpu(self) -> AbstractContextManager[None]: ...
     def synchronize(self) -> None: ...
@@ -116,7 +116,7 @@ def _execute_in_workspace(
                         _materialize_file(
                             workspace_dir,
                             instruction.path,
-                            program.blob_bytes[instruction.blob],
+                            bytes(program.blob_bytes[instruction.blob]),
                         )
                         env[instruction.id] = instruction.path
                     elif isinstance(instruction, Upload):
@@ -125,11 +125,11 @@ def _execute_in_workspace(
                             env[instruction.id] = runtime.load_module(instruction.source)
                         elif instruction.kind == "bytes":
                             assert instruction.blob is not None
-                            env[instruction.id] = program.blob_bytes[instruction.blob]
+                            env[instruction.id] = bytes(program.blob_bytes[instruction.blob])
                         elif instruction.kind == "library":
                             assert instruction.blob is not None
                             env[instruction.id] = runtime.load_library(
-                                program.blob_bytes[instruction.blob]
+                                bytes(program.blob_bytes[instruction.blob])
                             )
                         else:
                             assert (
