@@ -19,8 +19,8 @@ Kernel contract (every candidate implements the same interface):
 
 from __future__ import annotations
 
-import tvm
-from tvm.script import tirx as T
+import tvm_tirx
+from tvm_tirx.script import tirx as T
 
 BLOCK = 16  # a BLOCK x BLOCK thread block computes a BLOCK x BLOCK tile of D
 
@@ -28,17 +28,17 @@ BLOCK = 16  # a BLOCK x BLOCK thread block computes a BLOCK x BLOCK tile of D
 @T.jit
 def gemm_tiled(
     # M, N and K are the constexpr parameters below; TIRx resolves them in specialize().
-    A: T.Buffer((M, K), "float16"),  # noqa: F821
-    B: T.Buffer((N, K), "float16"),  # noqa: F821
-    D: T.Buffer((M, N), "float16"),  # noqa: F821
+    A: T.Tensor((M, K), "float16"),  # noqa: F821
+    B: T.Tensor((N, K), "float16"),  # noqa: F821
+    D: T.Tensor((M, N), "float16"),  # noqa: F821
     *,
     M: T.constexpr,
     N: T.constexpr,
     K: T.constexpr,
 ):
-    T.device_entry()
-    bx, by = T.cta_id([N // BLOCK, M // BLOCK])
-    tx, ty = T.thread_id([BLOCK, BLOCK])
+    T.device_entry(launch=T.cuda.LaunchConfig(grid=(N // BLOCK, M // BLOCK), block=(BLOCK, BLOCK)))
+    bx, by = T.cuda.block_idx("x"), T.cuda.block_idx("y")
+    tx, ty = T.cuda.thread_idx("x"), T.cuda.thread_idx("y")
     A_tile = T.alloc_shared((BLOCK, BLOCK), "float16")
     B_tile = T.alloc_shared((BLOCK, BLOCK), "float16")
     acc = T.alloc_local((1,), "float32")
@@ -54,10 +54,10 @@ def gemm_tiled(
     D[by * BLOCK + ty, bx * BLOCK + tx] = T.Cast("float16", acc[0])
 
 
-def cuda_target() -> tvm.target.Target:
+def cuda_target() -> tvm_tirx.target.Target:
     """Target for the server's GPU, e.g. ``sm_110a`` on Thor (arch-specific features enabled)."""
-    major, minor = tvm.cuda(0).compute_version.split(".")
-    return tvm.target.Target({"kind": "cuda", "arch": f"sm_{major}{minor}a"})
+    major, minor = tvm_tirx.cuda(0).compute_version.split(".")
+    return tvm_tirx.target.Target({"kind": "cuda", "arch": f"sm_{major}{minor}a"})
 
 
 def build(M: int, N: int, K: int):
@@ -65,4 +65,4 @@ def build(M: int, N: int, K: int):
     target = cuda_target()
     kernel = gemm_tiled.specialize(M=M, N=N, K=K)
     with target:
-        return tvm.compile(tvm.IRModule({"main": kernel}), target=target, tir_pipeline="tirx")
+        return tvm_tirx.compile(tvm_tirx.IRModule({"main": kernel}), target=target, pipeline="tirx")

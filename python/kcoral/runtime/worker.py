@@ -91,7 +91,7 @@ def worker_main(
             os.setsid()
         except OSError:
             pass
-    # Select all assigned GPUs before the runtime imports torch/tvm.
+    # Select all assigned GPUs before the runtime imports torch/tvm_tirx.
     # Any value the server was launched with selects nothing here, so it goes.
     if device is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = device

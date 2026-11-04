@@ -109,6 +109,29 @@ filesystem isolation; see the isolation guide above for configuration.
 For deployment, see [Launch the server](../server-guide/launch-the-server.md)
 and [Remote Compilation](../tutorials/remote-compilation.md).
 
+## Standalone TIRx source installation
+
+TIRx compilation uses `tvm_tirx` from the `apache-tvm-tirx` distribution.
+Until a stable release is available, the server extra's dependency metadata
+remains unchanged. After installing the server environment, replace full TVM
+with a source install in that same environment:
+
+```bash
+git clone --recursive https://github.com/apache/tvm-tirx.git ../tvm-tirx
+CMAKE_BUILD_PARALLEL_LEVEL=16 CMAKE_ARGS='-DTVM_TIRX_USE_CUDA=ON' \
+  python -m pip install ../tvm-tirx
+python -m pip uninstall -y apache-tvm
+python -c "import importlib.util, tvm_tirx; assert importlib.util.find_spec('tvm') is None; print(tvm_tirx.__version__)"
+```
+
+This installs a non-editable wheel built from source. Pip's isolated build
+supplies CMake, Ninja, and the LLVM/Z3 SDKs; a C++20 compiler and CUDA toolkit
+must be available. Editable mode is useful when developing TIRx itself, but a
+regular install keeps the server independent of checkout edits. See the
+[upstream build guide](https://tvm.apache.org/tirx/dev/source_build.html).
+Remove any old TVM checkout entries from `PYTHONPATH` as well. Reinstalling
+`kcoral[server]` can bring full TVM back until the dependency metadata changes.
+
 ## Prepare for local compilation (optional)
 
 If you want to compile CUDA C libraries on the client, as in the

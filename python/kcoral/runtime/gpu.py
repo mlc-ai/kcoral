@@ -63,7 +63,7 @@ class LoadedFunction:
 class GPURuntime:
     """Construct inside the worker after its GPU is pinned. Building it checks that
     torch and tvm_ffi import (the mandatory deps), so a broken environment fails at
-    startup, not mid-run. Full tvm is optional; uploaded TIRx harnesses and
+    startup, not mid-run. TIRx is optional; uploaded TIRx harnesses and
     libraries containing TVM modules need it."""
 
     def __init__(self) -> None:
@@ -267,15 +267,15 @@ def _warm_up() -> None:
         torch.cuda.synchronize()  # creates this process's CUDA context
     except Exception:
         pass
-    _register_library_loaders()  # imports tvm and preloads the CuTe DSL runtime
+    _register_library_loaders()  # imports tvm_tirx and preloads the CuTe DSL runtime
     try:
-        # tvm reuses the context torch just made, but still opens its own CUDA
+        # tvm_tirx reuses the context torch just made, but still opens its own CUDA
         # device API on first use.
-        import tvm
+        import tvm_tirx
 
-        tvm.runtime.empty((1,), "float32", tvm.cuda(0))
+        tvm_tirx.runtime.empty((1,), "float32", tvm_tirx.cuda(0))
     except Exception:
-        pass  # tvm is optional
+        pass  # tvm_tirx is optional
     # The imports above live as long as the worker; freezing them out of the
     # collector's reach is what keeps the `gc.collect()` in `reset()` cheap.
     gc.collect()
@@ -289,7 +289,7 @@ def _require_torch_and_ffi() -> None:
     except Exception as exc:  # pragma: no cover - environment misconfiguration
         raise RuntimeError(
             "The GPU runtime requires torch and tvm_ffi in the worker environment "
-            f"(full tvm is optional). Importing them failed: {exc!r}"
+            f"(TIRx is optional). Importing them failed: {exc!r}"
         ) from exc
 
 
@@ -343,7 +343,7 @@ def _describe_versions() -> dict[str, str]:
     versions = {"torch": torch.__version__}
     if torch.version.cuda:
         versions["cuda"] = torch.version.cuda
-    for name in ("tvm", "tvm_ffi", "triton"):
+    for name in ("tvm_tirx", "tvm_ffi", "triton"):
         try:
             versions[name] = __import__(name).__version__
         except Exception:  # optional, or no version attribute
@@ -403,14 +403,14 @@ def _materialize_library(data: bytes) -> LoadedLibrary:
 
 
 def _register_library_loaders() -> None:
-    """Load TVM and CuTe host libraries once, normally during worker preparation."""
+    """Load TIRx and CuTe host libraries once, normally during worker preparation."""
     global _LOADERS_READY
     if _LOADERS_READY:
         return
     try:
-        import tvm  # noqa: F401
+        import tvm_tirx  # noqa: F401
     except Exception:
-        pass  # tvm is optional; only embedded-blob libraries depend on it
+        pass  # tvm_tirx is optional; only embedded-blob libraries depend on it
     _preload_cute_dsl_runtime()
     _LOADERS_READY = True
 

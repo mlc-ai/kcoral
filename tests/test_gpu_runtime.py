@@ -4,6 +4,7 @@ import importlib.util
 import os
 import pathlib
 import runpy
+import sys
 
 import pytest
 from support.programs import harness_call, python_call
@@ -41,24 +42,22 @@ def test_uploaded_tensor_has_independent_storage():
 
 
 KERNEL = """from __future__ import annotations
-from tvm.script import tirx as T
+from tvm_tirx.script import tirx as T
 
 @T.jit
-def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):
-    T.device_entry()
-    i = T.cta_id([N])
-    t = T.thread_id([1])
+def main(A: T.Tensor((N,), "float32"), B: T.Tensor((N,), "float32"), *, N: T.constexpr):
+    T.device_entry(launch=T.cuda.LaunchConfig(grid=N, block=1))
+    i = T.cuda.block_idx("x")
     B[i] = A[i] + 1.0
 """
 REF = "def main(a):\n    return a + 1.0\n"
 
-PRIM_KERNEL = """from tvm.script import tirx as T
+PRIM_KERNEL = """from tvm_tirx.script import tirx as T
 
-@T.prim_func
-def main(A: T.Buffer((256,), "float32"), B: T.Buffer((256,), "float32")):
-    T.device_entry()
-    i = T.cta_id([256])
-    t = T.thread_id([1])
+@T.function
+def main(A: T.Tensor((256,), "float32"), B: T.Tensor((256,), "float32")):
+    T.device_entry(launch=T.cuda.LaunchConfig(grid=256, block=1))
+    i = T.cuda.block_idx("x")
     B[i] = A[i] + 1.0
 """
 
@@ -150,17 +149,17 @@ def build_multi_entry_library(source, entries, tmp_path):
 def build_tirx_library(tmp_path):
     """Compile TIRx the way a client would, with an explicit target so no GPU is
     consulted. The exported name comes from the function, not the IRModule key."""
-    import tvm
+    import tvm_tirx
 
     from kcoral.runtime.gpu import GPURuntime, describe_target
 
     runtime = GPURuntime()
     module = runtime.load_module(PRIM_KERNEL.replace("def main(", "def add_one("))
     prim_func = runtime.get_function(module, "add_one")
-    target = tvm.target.Target({"kind": "cuda", "arch": describe_target()["arch"]})
+    target = tvm_tirx.target.Target({"kind": "cuda", "arch": describe_target()["arch"]})
     with target:  # the tirx pipeline reads the arch from Target.current()
-        executable = tvm.compile(
-            tvm.IRModule({"add_one": prim_func}), target=target, tir_pipeline="tirx"
+        executable = tvm_tirx.compile(
+            tvm_tirx.IRModule({"add_one": prim_func}), target=target, pipeline="tirx"
         )
     path = tmp_path / "tirx_add_one.so"
     executable.export_library(str(path))
@@ -309,6 +308,7 @@ def test_compile_correctness_and_benchmark():
     check = decode_structural(outcome.results["check"])
     timing = decode_structural(outcome.results["timing"])
     assert check["passed"] and check["max_abs_err"] == 0
+    assert not any(name == "tvm" or name.startswith("tvm.") for name in sys.modules)
     assert timing["latency_ms_median"] > 0 and timing["repeat"] == 20
 
 
@@ -917,7 +917,7 @@ def test_tirx_error_is_parse_failure():
     assert outcome.error["instruction_index"] == 4
 
 
-def test_prim_func_kernel_compiles_directly():
+def test_function_kernel_compiles_directly():
     outcome = execute_for_test(
         Program(
             [

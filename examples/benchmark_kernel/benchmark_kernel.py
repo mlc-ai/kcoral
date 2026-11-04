@@ -13,30 +13,29 @@ import os
 from pathlib import Path
 
 import torch
-import tvm
+import tvm_tirx
 import tvm_ffi
-from tvm.script import tirx as T
+from tvm_tirx.script import tirx as T
 from kcoral.builtins import benchmark
 
 @T.jit
-def add_one(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):
-    T.device_entry()
-    i = T.cta_id([N])
-    t = T.thread_id([1])
+def add_one(A: T.Tensor((N,), "float32"), B: T.Tensor((N,), "float32"), *, N: T.constexpr):
+    T.device_entry(launch=T.cuda.LaunchConfig(grid=N, block=1))
+    i = T.cuda.block_idx("x")
     B[i] = A[i] + 1.0
 
 
 def compile_kernel(arch):
     # An explicit architecture avoids querying the GPU during compilation.
-    target = tvm.target.Target({"kind": "cuda", "arch": arch})
-    module = tvm.IRModule({"add_one": add_one.specialize(N=256)})
+    target = tvm_tirx.target.Target({"kind": "cuda", "arch": arch})
+    module = tvm_tirx.IRModule({"add_one": add_one.specialize(N=256)})
     # NVRTC can initialize CUDA; use the CPU-only nvcc subprocess instead.
     key = "TVM_CUDA_COMPILE_MODE"
     previous = os.environ.get(key)
     os.environ[key] = "nvcc"
     try:
         with target:
-            compiled = tvm.compile(module, target=target, tir_pipeline="tirx")
+            compiled = tvm_tirx.compile(module, target=target, pipeline="tirx")
         compiled.export_library("add_one.so")
     finally:
         if previous is None:

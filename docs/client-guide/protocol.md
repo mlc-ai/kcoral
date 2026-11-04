@@ -96,7 +96,7 @@ Example response from a GPU server with two workers:
 
 Version strings above are illustrative; use the values returned by your server.
 The GPU runtime reports `torch`, `cuda` (the CUDA version used to build PyTorch),
-and available `tvm`, `tvm_ffi`, `triton`, `cutlass` and `flashinfer` versions.
+and available `tvm_tirx`, `tvm_ffi`, `triton`, `cutlass` and `flashinfer` versions.
 Optional entries can be absent; this is not an inventory of every installed
 compiler or command-line tool. CPU servers report the available `tvm_ffi` version.
 
@@ -242,7 +242,7 @@ TVM FFI can load is accepted. Three are usual:
 | Producer | Export | Server requirement |
 | --- | --- | --- |
 | C++ / `tvm_ffi.cpp.build` | `TVM_FFI_DLL_EXPORT_TYPED_FUNC` emits `__tvm_ffi_<name>`; `tvm_ffi.cpp.build_inline(functions=...)` adds it automatically. A code generator can emit the symbol directly. | TVM FFI |
-| `tvm.Executable.export_library` | Embedded module blob | TVM installed, including the loader registered by its CUDA runtime |
+| `tvm_tirx.codegen.Executable.export_library` | Embedded module blob | TIRx installed, including the loader registered by its CUDA runtime |
 | CuTeDSL with `--enable-tvm-ffi` | `__tvm_ffi_<name>`, linked against `libcute_dsl_runtime.so` | A compatible CuTeDSL runtime. Check `versions.cutlass`; incompatible runtime symbols can cause loading to fail. |
 
 The exported function determines its argument types. Build device code for
