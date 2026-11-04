@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+from functools import wraps
 from pathlib import Path
 
 from kcoral.tools.cli import build_program
@@ -30,6 +31,9 @@ def send_shell(
     afterwards. Nothing persists between calls: upload everything the script needs
     every time, and name every output you want back in ``fetch``.
 
+    ``COMPLETED`` means the protocol finished, not that validation passed. Check the
+    script's ``returncode``, ``missing`` artifacts and the benchmark's correctness results.
+
     :param endpoint: Server URL, for example ``http://127.0.0.1:8000``.
     :param shell_script: Script text; may span several lines.
     :param uploaded_files: Remote relative path -> local file or directory. A
@@ -41,7 +45,8 @@ def send_shell(
     :returns: ``status`` (``COMPLETED``, ``FAILED`` or ``ERROR``), the script's
         ``returncode``, ``stdout`` and ``stderr`` (and whether each was truncated),
         ``missing`` fetch paths, the local ``artifacts_dir``, the remote ``error``
-        when the request failed, ``request_id`` and ``elapsed_ms``.
+        when the request failed, ``request_id`` and ``elapsed_ms``. A local artifact-save
+        failure appears in ``result_errors`` while the script's outcome and logs are kept.
     """
     env = dict(env or {})
     for name in env:
@@ -61,15 +66,26 @@ def send_shell(
         out=None if out_dir is None else Path(out_dir),
     )
     program = build_program(args, "shell", ["bash", "-c", shell_script])
+    if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
     result, report = _execute(endpoint, program, timeout_seconds)
-    report.update(returncode=None, missing=[], artifacts_dir=None)
+    report.update(returncode=None, missing=[], artifacts_dir=None, result_errors={})
     if result is None:
         return report
-    if "artifacts" in result.results:
-        report["artifacts_dir"] = str(result["artifacts"].save(args.out))
     if "outcome" in result.results:
         report["returncode"] = result["outcome"]["returncode"]
         report["missing"] = result["outcome"]["missing"]
+    if "artifacts" in result.results:
+        try:
+            report["artifacts_dir"] = str(result["artifacts"].save(args.out))
+        except (OSError, ValueError) as exc:
+            error = {
+                "kind": "save_failed",
+                "message": f"cannot save artifacts to {args.out}: {exc}",
+            }
+            report["result_errors"]["artifacts"] = error
+            if report["status"] == "COMPLETED":
+                report.update(status="ERROR", error=error)
     return report
 
 
@@ -140,6 +156,231 @@ def send_python(
     return report
 
 
+def send_program(
+    endpoint: str,
+    program: list[dict],
+    out_dir: str | None = None,
+    timeout_seconds: int = 300,
+) -> dict:
+    """Run a KCoral program you wrote yourself: a list of protocol instructions.
+
+    Use this when the shell and python tools cannot express the request: several uploaded
+    modules or functions in one request, tensor or library uploads, ``cpu_only`` steps, or
+    returning a file or folder written by Python. Instructions run top to bottom and link
+    to earlier ones with ``{"$ref": "<id>"}``. The ops are ``upload`` (``kind`` is
+    ``module`` with ``source`` text, or ``file`` / ``bytes`` / ``library`` / ``tensor``
+    with ``local`` naming a local file to read, a tensor also giving ``dtype`` and
+    ``shape``, or ``folder`` with ``local`` naming a local directory and ``path`` its
+    remote path), ``get_function`` (``module`` ref, ``name``, optional ``cpu_only``),
+    ``run`` (``fn`` ref, ``args`` as JSON values or refs) and ``return`` (``key`` with a
+    ``value`` ref, or ``kind`` ``file`` / ``folder`` with a remote ``path`` or ref). Example::
+
+        [
+            {
+                "op": "upload",
+                "kind": "file",
+                "id": "w",
+                "local": "/abs/w.bin",
+                "path": "w.bin",
+            },
+            {
+                "op": "upload",
+                "kind": "module",
+                "id": "mod",
+                "source": "def main(n): ...",
+            },
+            {
+                "op": "get_function",
+                "id": "fn",
+                "module": {"$ref": "mod"},
+                "name": "main",
+            },
+            {"op": "run", "id": "out", "fn": {"$ref": "fn"}, "args": [4]},
+            {"op": "return", "key": "value", "value": {"$ref": "out"}},
+            {"op": "return", "key": "report", "kind": "folder", "path": "report"},
+        ]
+
+    Returned values must be JSON-compatible (convert tensors with ``.tolist()``); a file
+    or folder return is saved to ``out_dir/<key>``, so ``out_dir`` (a new directory) is
+    required for those and their keys must be single filenames. Scripts run as modules in
+    the request's working directory with no ``__file__``, and uploaded modules cannot import
+    each other: to use one module's function from another, pass its ``get_function`` ref as
+    a ``run`` argument. The program runs in KCoral's own Python environment, and nothing
+    persists between calls.
+
+    :returns: ``status``, ``results`` (key -> value or saved path), ``result_errors``
+        (key -> ``kind`` and ``message`` for a return that could not be delivered),
+        ``stdout``, ``stderr``, the remote ``error`` when the request failed, or an
+        ``invalid_program`` error with the offending ``instruction_index`` when the program
+        was rejected before being sent.
+    """
+    from kcoral.artifacts import ReturnedFile, ReturnedFolder
+    from kcoral.client import Program
+    from kcoral.errors import ValidationError
+    from kcoral.protocol import parse_program
+
+    built = Program()
+    for index, instruction in enumerate(program):
+        op = instruction.get("op") if isinstance(instruction, dict) else None
+        try:
+            _translate(built, instruction, out_dir)
+        except (TypeError, ValueError, OSError) as exc:
+            return _invalid(str(exc), index, op)
+    try:
+        parse_program({"instructions": built.instructions})
+    except ValidationError as exc:
+        return _invalid(str(exc), None, None)
+    if out_dir is not None:
+        if os.path.lexists(out_dir):
+            message = f"output directory already exists; choose a new out_dir: {out_dir}"
+            return {"status": "ERROR", "error": {"kind": "out_dir", "message": message}}
+        try:
+            Path(out_dir).mkdir(parents=True)
+        except OSError as exc:
+            message = f"cannot create out_dir {out_dir}: {exc}"
+            return {"status": "ERROR", "error": {"kind": "out_dir", "message": message}}
+    result, report = _execute(endpoint, built, timeout_seconds)
+    report.update(results={}, result_errors={})
+    if result is None:
+        return report
+    for key, value in result.results.items():
+        if isinstance(value, (ReturnedFile, ReturnedFolder)):
+            try:
+                report["results"][key] = str(value.save(Path(out_dir) / key))
+            except (OSError, ValueError) as exc:
+                message = f"could not save return {key!r} under {out_dir}: {exc}"
+                report["result_errors"][key] = {"kind": "save_failed", "message": message}
+            continue
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError):
+            message = (
+                f"return {key!r} is {type(value).__name__}; return JSON-compatible data "
+                "(numbers, strings, booleans, lists, dicts) or write it to a file"
+            )
+            report["result_errors"][key] = {"kind": "unsupported_value", "message": message}
+        else:
+            report["results"][key] = value
+    if report["status"] == "COMPLETED" and report["result_errors"]:
+        first = next(iter(report["result_errors"].values()))
+        report["status"] = "ERROR"
+        report["error"] = {
+            "kind": first["kind"],
+            "message": f"{len(report['result_errors'])} return(s) could not be delivered; "
+            "see result_errors",
+        }
+    return report
+
+
+def _invalid(message, index, op):
+    error = {"kind": "invalid_program", "message": message}
+    error.update(instruction_index=index, instruction_op=op)
+    return {"status": "ERROR", "error": error}
+
+
+def _translate(built, item, out_dir):
+    """Apply one agent-written instruction to the program builder."""
+    from kcoral.tools.runner import relative_path
+
+    if not isinstance(item, dict):
+        raise TypeError("instruction must be an object")
+    fields = dict(item)
+    op = fields.pop("op", None)
+    if op == "upload":
+        if "blob" in fields:
+            raise ValueError("'blob' is not accepted; give 'local' with a local file path")
+        kind = fields.pop("kind", None)
+        ident = fields.pop("id", None)
+        if kind == "module":
+            _only(fields, {"source"})
+            built.upload(id=ident, kind="module", source=fields.get("source"))
+        elif kind == "folder":
+            _only(fields, {"local", "path"})
+            if ident is not None:
+                raise ValueError("folder uploads take no id")
+            built.upload_folder(_local(fields, directory=True), path=fields.get("path"))
+        elif kind == "file":
+            _only(fields, {"local", "path"})
+            built.upload_file(id=ident, blob=_local(fields).read_bytes(), path=fields.get("path"))
+        elif kind in {"bytes", "library", "tensor"}:
+            _only(fields, {"local", "dtype", "shape"})
+            value = _local(fields).read_bytes()
+            built.upload(
+                id=ident,
+                kind=kind,
+                value=value,
+                dtype=fields.get("dtype"),
+                shape=fields.get("shape"),
+            )
+        else:
+            raise ValueError(f"unknown upload kind: {kind!r}")
+    elif op == "get_function":
+        _only(fields, {"id", "module", "name", "cpu_only"})
+        built.get_function(
+            id=fields.get("id"),
+            module=fields.get("module"),
+            name=fields.get("name"),
+            cpu_only=fields.get("cpu_only", False),
+        )
+    elif op == "run":
+        _only(fields, {"id", "fn", "args"})
+        args = fields.get("args", [])
+        if not isinstance(args, list):
+            raise TypeError("'args' must be a list")
+        built.run(
+            id=fields.get("id"),
+            fn=_register(fields.get("fn")),
+            args=[_register(argument) if _is_ref(argument) else argument for argument in args],
+        )
+    elif op == "return":
+        key, kind = fields.get("key"), fields.get("kind")
+        if "kind" not in fields:
+            _only(fields, {"key", "value"})
+            built.return_(key=key, value=fields.get("value"))
+        elif kind in {"file", "folder"}:
+            _only(fields, {"key", "kind", "path"})
+            if out_dir is None:
+                raise ValueError(f"return {key!r} of kind {kind} needs out_dir")
+            if not isinstance(key, str) or len(relative_path(key).parts) != 1:
+                raise ValueError(f"file and folder return keys must be single filenames: {key!r}")
+            path = fields.get("path")
+            select = built.return_file if kind == "file" else built.return_folder
+            select(key=key, path=_register(path) if _is_ref(path) else path)
+        else:
+            raise ValueError(f"unknown return kind: {kind!r}")
+    else:
+        raise ValueError(f"unknown op: {op!r}")
+
+
+def _only(fields, allowed):
+    extra = sorted(set(fields) - allowed)
+    if extra:
+        raise ValueError(f"unexpected fields: {extra}")
+
+
+def _is_ref(value):
+    return isinstance(value, dict) and set(value) == {"$ref"} and isinstance(value["$ref"], str)
+
+
+def _register(value):
+    from kcoral.client.program import Register
+
+    if not _is_ref(value):
+        raise ValueError("expected a {'$ref': id} reference")
+    return Register(value["$ref"])
+
+
+def _local(fields, *, directory=False):
+    local = fields.get("local")
+    if not isinstance(local, str) or not local:
+        raise ValueError("'local' must name a local path")
+    path = Path(local)
+    if path.is_symlink() or not (path.is_dir() if directory else path.is_file()):
+        what = "directory" if directory else "regular file"
+        raise ValueError(f"local input must be an existing {what}, not a symlink: {path}")
+    return path
+
+
 def _execute(endpoint, program, timeout_seconds):
     """Run a program; return the result (or None) and the report fields it determines."""
     from kcoral.client import Client
@@ -169,8 +410,25 @@ def build_server():
     from mcp.server.mcpserver import MCPServer
 
     server = MCPServer("kcoral")
-    server.tool(name="kcoral_send_shell")(send_shell)
-    server.tool(name="kcoral_send_python")(send_python)
+
+    def register(name, function):
+        @wraps(function)
+        def call(*args, **kwargs):
+            # Keep normal Python validation exceptions, but expose their explanations
+            # over MCP instead of letting the SDK mask them as unexpected tool errors.
+            try:
+                return function(*args, **kwargs)
+            except (TypeError, ValueError, OSError) as exc:
+                return {
+                    "status": "ERROR",
+                    "error": {"kind": "invalid_arguments", "message": str(exc)},
+                }
+
+        server.tool(name=name)(call)
+
+    register("kcoral_send_shell", send_shell)
+    register("kcoral_send_python", send_python)
+    register("kcoral_send_program", send_program)
     return server
 
 
