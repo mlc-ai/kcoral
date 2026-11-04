@@ -20,40 +20,40 @@ _COMPILED_LIMIT = 32
 
 
 def compile_tirx(fn: Any, bindings: Any = None) -> Any:
-    """Compile a ``@T.jit`` or ``@T.prim_func`` kernel handle. ``bindings`` supplies
+    """Compile a ``@T.jit`` or ``@T.function`` kernel handle. ``bindings`` supplies
     the ``T.constexpr`` values a ``@T.jit`` kernel is specialized on.
 
     Compiled executables are cached by structural hash, with at most 32 entries.
     This function can call CUDA while compiling and should run with GPU access.
     """
     try:
-        import tvm
-    except ImportError as exc:  # tvm is an optional server dependency
+        import tvm_tirx
+    except ImportError as exc:  # tvm_tirx is an optional server dependency
         raise ExecutionError(
             "unavailable",
-            "server-side compilation requires tvm, which is not installed on this server",
+            "server-side compilation requires tvm_tirx, which is not installed on this server",
         ) from exc
 
     if bindings is not None and not isinstance(bindings, dict):
         raise ExecutionError("compile", "compile_tirx bindings must be a dict of constexpr values")
     kwargs = bindings or {}
-    if isinstance(fn, tvm.tirx.PrimFunc):  # a @T.prim_func kernel — already concrete
+    if isinstance(fn, tvm_tirx.tirx.Function):  # a @T.function kernel — already concrete
         if kwargs:
             raise ExecutionError(
                 "compile",
-                "bindings apply only to @T.jit kernels; this kernel is already a PrimFunc",
+                "bindings apply only to @T.jit kernels; this kernel is already a Function",
             )
         pf = fn
     elif hasattr(fn, "specialize"):  # a @T.jit kernel handle (TIRJit)
         try:
             pf = fn.specialize(**kwargs)  # TIRX parse happens here
-        except tvm.error.DiagnosticError as exc:
+        except (SyntaxError, ValueError, NameError) as exc:
             raise ExecutionError("parse", _short(exc)) from exc
         except TypeError as exc:  # wrong, missing, or unhashable constexpr bindings
             raise ExecutionError("compile", _short(exc)) from exc
     else:
         raise ExecutionError(
-            "compile", "compile_tirx expects a @T.jit or @T.prim_func kernel handle"
+            "compile", "compile_tirx expects a @T.jit or @T.function kernel handle"
         )
     # Specializing is free and hashing costs microseconds; codegen is the 500ms.
     import tvm_ffi
@@ -64,11 +64,9 @@ def compile_tirx(fn: Any, bindings: Any = None) -> Any:
         _COMPILED.move_to_end(key)
         return cached
     try:
-        mod = tvm.IRModule({"main": pf})
-        executable = tvm.compile(mod, target=tvm.target.Target("cuda"), tir_pipeline="tirx")
-    except tvm.error.InternalError as exc:  # lowering
-        raise ExecutionError("compile", _short(exc)) from exc
-    except RuntimeError as exc:  # codegen (nvcc/nvrtc)
+        mod = tvm_tirx.IRModule({"main": pf})
+        executable = tvm_tirx.compile(mod, target=tvm_tirx.target.Target("cuda"), pipeline="tirx")
+    except (RuntimeError, ValueError, TypeError) as exc:  # lowering or codegen
         raise ExecutionError("compile", _short(exc)) from exc
     _COMPILED[key] = executable
     if len(_COMPILED) > _COMPILED_LIMIT:
@@ -116,7 +114,7 @@ def benchmark(mod: Any, *rest: Any) -> dict:
             call()
         torch.cuda.synchronize()
         times, activities_stable = _time_cupti(call, repeat, flush)
-    except RuntimeError as exc:  # a tvm run error or torch "CUDA error: ..."
+    except RuntimeError as exc:  # a tvm_tirx run error or torch "CUDA error: ..."
         raise ExecutionError("runtime", _short(exc)) from exc
     return {
         "latency_ms_median": statistics.median(times),
@@ -308,7 +306,7 @@ def _time_cupti(call: Callable, repeat: int, flush: Any) -> tuple[list[float], b
 
 
 def _short(text: str | Exception, limit: int = 600) -> str:
-    """Truncate text keeping both ends: a tvm diagnostic leads with its message,
+    """Truncate text keeping both ends: a tvm_tirx diagnostic leads with its message,
     a compiler failure ends with its diagnostic."""
     text = str(text).strip()
     if len(text) <= limit:

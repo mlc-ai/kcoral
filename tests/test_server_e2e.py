@@ -651,13 +651,12 @@ def test_timeout_kills_spawned_process_tree(tmp_path):
 
 
 KERNEL = """from __future__ import annotations
-from tvm.script import tirx as T
+from tvm_tirx.script import tirx as T
 
 @T.jit
-def main(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):
-    T.device_entry()
-    i = T.cta_id([N])
-    t = T.thread_id([1])
+def main(A: T.Tensor((N,), "float32"), B: T.Tensor((N,), "float32"), *, N: T.constexpr):
+    T.device_entry(launch=T.cuda.LaunchConfig(grid=N, block=1))
+    i = T.cuda.block_idx("x")
     B[i] = A[i] + 1.0
 """
 

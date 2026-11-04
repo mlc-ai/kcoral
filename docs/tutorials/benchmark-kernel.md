@@ -73,7 +73,7 @@ abridged here and the latency depending on your GPU:
 ```
 
 Inside `compile_kernel`, `add_one.specialize(N=256)` supplies the kernel's
-compile-time size. `tvm.compile` uses an explicit CUDA target architecture and
+compile-time size. `tvm_tirx.compile` uses an explicit CUDA target architecture and
 the `nvcc` subprocess backend, so compilation does not initialize CUDA in the
 worker. It exports the compiled library as
 `add_one.so` in the request's workspace and returns the executable together
