@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,8 +20,8 @@ from kcoral.protocol import (
 )
 from kcoral.schemas import DTYPE_ITEM_SIZES
 
-_HASH_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="kcoral-hash")
 _HASH_THRESHOLD = 1 << 20
+_HASH_WORKERS = 4
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,8 @@ class Program:
 
     _instructions: list[dict[str, Any]] = field(default_factory=list, init=False)
     _blob_data: dict[str, bytes] = field(default_factory=dict, init=False)
-    _pending_blobs: dict[Future, bytes] = field(default_factory=dict, init=False, repr=False)
+    # Placeholder digest -> snapshot, for large blobs not hashed yet.
+    _pending_blobs: dict[object, bytes] = field(default_factory=dict, init=False, repr=False)
     _ids: set[str] = field(default_factory=set, init=False)
     _next_id: int = field(default=0, init=False)
     _return_keys: set[str] = field(default_factory=set, init=False)
@@ -78,24 +79,36 @@ class Program:
 
     def _queue_blob(self, data: bytes):
         if len(data) >= _HASH_THRESHOLD:
-            digest = _HASH_POOL.submit(compute_blob_hash, data)
-            self._pending_blobs[digest] = data
-            return digest
+            placeholder = object()
+            self._pending_blobs[placeholder] = data
+            return placeholder
         digest = compute_blob_hash(data)
         self._blob_data.setdefault(digest, data)
         return digest
 
     def _finish_blobs(self) -> None:
-        if not self._pending_blobs:
+        # Readers may share a program across threads: each works from its own
+        # snapshot and drops pending entries only once their digests are in place.
+        pending = self._pending_blobs.copy()
+        if not pending:
             return
-        digests = {future: future.result() for future in self._pending_blobs}
-        for future, data in self._pending_blobs.items():
-            self._blob_data.setdefault(digests[future], data)
+        snapshots = list(pending.values())
+        if len(snapshots) == 1:
+            hashes = [compute_blob_hash(snapshots[0])]
+        else:
+            # A pool per call, joined on exit, leaves no idle threads in the client process.
+            workers = min(_HASH_WORKERS, len(snapshots))
+            with ThreadPoolExecutor(workers, thread_name_prefix="kcoral-hash") as pool:
+                hashes = list(pool.map(compute_blob_hash, snapshots))
+        digests = dict(zip(pending, hashes))
+        for placeholder, digest in digests.items():
+            self._blob_data.setdefault(digest, pending[placeholder])
         for instruction in self._instructions:
-            digest = instruction.get("blob")
-            if isinstance(digest, Future):
-                instruction["blob"] = digests[digest]
-        self._pending_blobs.clear()
+            blob = instruction.get("blob")
+            if blob in digests:
+                instruction["blob"] = digests[blob]
+        for placeholder in digests:
+            self._pending_blobs.pop(placeholder, None)
 
     def upload_file(self, *, blob: Any, path: str, id: str | None = None) -> Register:
         """Snapshot bytes-like data as a file in the request workspace.
@@ -123,7 +136,7 @@ class Program:
         blob_hash = compute_blob_hash(raw)
         id = self._add_id(id, op="upload")
         self._file_paths = paths
-        self._blobs.setdefault(blob_hash, raw)
+        self._blob_data.setdefault(blob_hash, raw)
         self._instructions.append(
             {"op": "upload", "id": id, "kind": "file", "blob": blob_hash, "path": normalized_path}
         )
@@ -158,7 +171,7 @@ class Program:
             instruction["id"] = self._add_id(None, op="upload")
             self._instructions.append(instruction)
         for digest, data in blobs.items():
-            self._blobs.setdefault(digest, data)
+            self._blob_data.setdefault(digest, data)
 
     def upload(
         self,
