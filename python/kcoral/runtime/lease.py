@@ -12,12 +12,15 @@ holder would leak such a mutex and deadlock its GPU for good.
 
 from __future__ import annotations
 
+import fcntl
+import os
 import threading
 import time
 from collections import deque
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:  # a type-only import: worker.py imports this module at runtime
@@ -127,6 +130,118 @@ class _LeaseRequest:
     count: int = 1
 
 
+class HostGPULocks:
+    """Per-GPU lock files that order separate servers on one host.
+
+    The server holds them, so the kernel drops them if it dies. A waiter keeps
+    ``.wait`` until it gets ``.lock``, so a server that just released cannot win
+    the GPU straight back from a peer that was already waiting (flock wakes
+    waiters in no order). Each file is opened once per server and flock locks
+    belong to the open file, so a second lock from the same server is a no-op:
+    :class:`GPULeases` admits one local holder per GPU and unlocks before
+    granting the next.
+    """
+
+    def __init__(self, directory: Path, uuids: dict[int, str]) -> None:
+        # Every server takes a set in UUID order, so no two waiters hold what the other needs.
+        self._order = {gpu: rank for rank, gpu in enumerate(sorted(uuids, key=uuids.__getitem__))}
+        self._paths = {
+            gpu: (directory / f"kcoral-gpu-{uuid}.wait", directory / f"kcoral-gpu-{uuid}.lock")
+            for gpu, uuid in uuids.items()
+        }
+        self._fds: dict[Path, int] = {}
+        # Set at shutdown so no wait outlives it: a peer may hold a lock until it
+        # exits too, and two servers draining at once would otherwise wait forever.
+        self.closing = threading.Event()
+        try:
+            for path in (path for pair in self._paths.values() for path in pair):
+                self._fds[path] = _open_lock_file(path)
+        except BaseException:
+            self.close()
+            raise
+
+    def acquire(self, gpu_ids: tuple[int, ...], stop: Callable[[], bool]) -> bool:
+        """Wait for every GPU's lock, or return False once ``stop()`` is true; the
+        caller then unlocks whatever part of the set it got."""
+        gpus = sorted((gpu for gpu in gpu_ids if gpu in self._paths), key=self._order.__getitem__)
+        waits = [self._fd(self._paths[gpu][0]) for gpu in gpus]
+        locks = [self._fd(self._paths[gpu][1]) for gpu in gpus]
+        queued: list[int] = []
+
+        def halted() -> bool:
+            if self.closing.is_set():
+                raise GPUUnavailable("server is shutting down")
+            return stop()
+
+        try:
+            for fd in waits:
+                while not _try_flock(fd):
+                    if halted():
+                        return False
+                    time.sleep(0.001)
+                queued.append(fd)
+            while not all(_try_flock(fd) for fd in locks):
+                if halted():
+                    return False
+                for fd in locks:  # all or nothing: never sit on a GPU a peer could use
+                    _unlock(fd)
+                time.sleep(0.001)
+            return True
+        finally:
+            for fd in queued:
+                _unlock(fd)
+
+    def unlock(self, gpu_id: int) -> None:
+        if gpu_id in self._paths:
+            _unlock(self._fds[self._paths[gpu_id][1]])
+
+    def close(self) -> None:
+        for fd in self._fds.values():
+            os.close(fd)
+        self._fds.clear()
+
+    def _fd(self, path: Path) -> int:
+        fd = self._fds[path]
+        if os.fstat(fd).st_nlink == 0:
+            # Deleted under us, e.g. by systemd-logind's RemoveIPC when its creator
+            # logged out: rejoin the file the other servers now use.
+            self._fds[path] = _open_lock_file(path)
+            os.close(fd)
+        return self._fds[path]
+
+
+def _open_lock_file(path: Path) -> int:
+    # In a shared directory, O_NOFOLLOW and O_NONBLOCK keep a planted symlink or
+    # FIFO from redirecting the lock or hanging the open.
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    while True:
+        try:  # open first: fs.protected_regular refuses O_CREAT on another user's file
+            return os.open(path, flags)
+        except FileNotFoundError:
+            pass
+        try:
+            fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            continue
+        os.fchmod(fd, 0o644)  # past the umask: other users only need to read it to lock it
+        return fd
+
+
+def _try_flock(fd: int) -> bool:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    except OSError as exc:  # callers would read a bare OSError as a dead worker pipe
+        raise GPUUnavailable(f"host GPU lock failed: {exc}") from exc
+    return True
+
+
+def _unlock(fd: int) -> None:
+    with suppress(OSError):  # runs under GPULeases._lock; raising would strand waiters
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
 class GPULeases:
     """Shared arbitration for workers bound to one GPU or a fixed set.
 
@@ -134,8 +249,9 @@ class GPULeases:
     the queue; independent pinned-device requests can still pass one another.
     """
 
-    def __init__(self, gpu_ids: list[int]) -> None:
+    def __init__(self, gpu_ids: list[int], host_locks: HostGPULocks | None = None) -> None:
         self._lock = threading.Lock()
+        self._host = host_locks
         self._initializers: dict[int, deque[Ticket]] = {gpu: deque() for gpu in gpu_ids}
         self._unavailable: set[int] = set()
         self._holder: dict[int, object | None] = dict.fromkeys(gpu_ids)
@@ -202,7 +318,33 @@ class GPULeases:
                     break
         if isinstance(request.ticket.value, GPUUnavailable):
             raise request.ticket.value
+        if self._host is not None and not self._acquire_host(
+            request.ticket.value, request.holder, cancelled
+        ):
+            return None
         return request.ticket.value, (time.monotonic() - started) * 1000
+
+    def _acquire_host(self, gpu_ids: tuple[int, ...], holder: object, cancelled) -> bool:
+        """Wait for other servers after the local grant, outside ``_lock`` so other
+        GPUs keep moving; any way out but success hands the local grant back."""
+
+        def stop() -> bool:
+            with self._lock:
+                if self._unavailable.intersection(gpu_ids):
+                    raise GPUUnavailable("worker cleanup failed; device unavailable")
+            return cancelled is not None and cancelled.is_set()
+
+        try:
+            if not self._host.acquire(gpu_ids, stop):
+                self.release_many(gpu_ids, holder)
+                return False
+        except BaseException:
+            self.release_many(gpu_ids, holder)
+            raise
+        with self._lock:  # until now another server had the GPU
+            for gpu in gpu_ids:
+                self._held_since_ns[gpu] = time.monotonic_ns()
+        return True
 
     def quarantine(self, gpu_ids: tuple[int, ...]) -> None:
         with self._lock:
@@ -221,6 +363,10 @@ class GPULeases:
                         self._history[gpu].append((since, time.monotonic_ns(), _request_of(holder)))
                     self._holder[gpu] = None
                     self._held_since_ns[gpu] = None
+                    if self._host is not None:
+                        # Before dispatch: the next local holder locks through the
+                        # same open file, a no-op while this one still holds it.
+                        self._host.unlock(gpu)
             self._dispatch_locked()
 
     def abandon(self, gpu_id: int | tuple[int, ...], holder: Worker) -> None:
@@ -256,7 +402,8 @@ class GPULeases:
                     continue
             for gpu in chosen:
                 self._holder[gpu] = entry.holder
-                self._held_since_ns[gpu] = time.monotonic_ns()
+                # With host locks, the clock starts once other servers let go.
+                self._held_since_ns[gpu] = None if self._host else time.monotonic_ns()
             self._waiters.remove(entry)
             entry.ticket.value = chosen
             entry.ticket.event.set()

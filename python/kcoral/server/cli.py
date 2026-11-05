@@ -129,6 +129,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="additional runtime dependency visible read-only to isolated workers; repeatable",
     )
+    parser.add_argument(
+        "--gpu-lock-dir",
+        default="/tmp",
+        help="per-GPU lock files shared by every server on this host; empty disables",
+    )
     parser.add_argument("--max-request-bytes", type=int, default=_DEFAULTS.max_request_bytes)
     parser.add_argument("--max-response-bytes", type=int, default=_DEFAULTS.max_response_bytes)
     parser.add_argument(
@@ -181,6 +186,7 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         max_requests_per_worker=args.max_requests_per_worker,
         sandbox=args.sandbox,
         sandbox_readonly_paths=args.sandbox_readonly_path,
+        gpu_lock_dir=Path(args.gpu_lock_dir) if args.gpu_lock_dir else None,
         worker_termination_grace_seconds=args.worker_termination_grace_seconds,
         max_request_bytes=args.max_request_bytes,
         max_response_bytes=args.max_response_bytes,

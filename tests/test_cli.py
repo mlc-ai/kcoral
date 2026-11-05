@@ -23,6 +23,7 @@ def test_defaults():
     assert config.disk_cache_capacity_mbytes == 16 * 1024
     assert config.sandbox == "bubblewrap"
     assert config.sandbox_readonly_paths == []
+    assert config.gpu_lock_dir == Path("/tmp")
 
 
 def test_filesystem_sandbox_flags():
@@ -173,6 +174,7 @@ def test_negative_max_requests_per_worker_rejected():
 
 def test_disk_cache_can_be_disabled_and_rejects_negative_budget():
     assert parse(["--disk-cache-dir", ""]).disk_cache_dir is None
+    assert parse(["--gpu-lock-dir", ""]).gpu_lock_dir is None
     assert parse(["--disk-cache-capacity-mbytes", "0"]).disk_cache_capacity_mbytes == 0
     with pytest.raises(SystemExit):
         parse(["--disk-cache-capacity-mbytes", "-1"])
