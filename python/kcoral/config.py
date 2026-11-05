@@ -28,6 +28,8 @@ class ServerConfig:
     ``logs``. The file-cache path defaults to an absolute ``XDG_CACHE_HOME``
     followed by ``kcoral/files``, or ``~/.cache/kcoral/files`` otherwise.
     Set ``disk_cache_dir=None`` or ``disk_cache_capacity_mbytes=0`` to disable it.
+    ``gpu_lock_dir=None`` leaves GPUs unlocked across servers; the command line
+    defaults it to ``/tmp``.
 
     See the configuration guide for the meaning and unit of every field.
     """
@@ -46,6 +48,7 @@ class ServerConfig:
     max_requests_per_worker: int = 1  # fresh process/context per request; 0 = unlimited
     sandbox: str = "bubblewrap"  # "none" explicitly disables filesystem isolation
     sandbox_readonly_paths: list[Path] = field(default_factory=list)
+    gpu_lock_dir: Path | None = None  # per-GPU lock files shared by all servers on the host
     worker_termination_grace_seconds: float = 5.0  # SIGTERM-to-SIGKILL window on kill
     max_request_bytes: int = 256 * 1024**2  # 256 MB request cap
     max_response_bytes: int = 256 * 1024**2  # cap on the serialized results payload
