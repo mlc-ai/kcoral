@@ -97,6 +97,63 @@ Nodes sharing a Router must have matching GPU targets and runtime versions;
 incompatible nodes cannot receive work. Use separate Routers for different GPU
 architectures or runtime environments.
 
+## Slurm allocations
+
+`kcoral slurm` keeps one GPU node in a foreground [Slurm](https://slurm.schedmd.com/)
+allocation and joins an existing Router. The compute node must reach the Router's
+address. Install the same KCoral version on the launcher and compute node, with
+the server dependencies and `kcoral-node` executable available on the compute node.
+Run from a login host with `srun` and `scancel` on `PATH`:
+
+```bash
+kcoral slurm --router http://router.internal:9000 \
+  --partition gpu --account my-account --gpus 2 --time 04:00:00 \
+  -- --workers-per-gpu 2
+```
+
+`--gpus` is the allocation's GPU count. The launcher discovers the allocated
+devices by CUDA UUID (unique device identity), then maps them to the physical
+indices used by KCoral. This handles Slurm and container GPU renumbering; startup
+fails if the devices cannot be identified or their count differs. Partitioned
+GPUs using NVIDIA Multi-Instance GPU (MIG) are not supported.
+
+The default allocation requests one node, one task, one GPU, eight CPUs, 32 GiB
+of memory and four hours. Use `--cpus-per-task`, `--mem`, `--time`, `--qos` and
+`--constraint` to adapt it to your cluster. `--node-id` defaults to a unique job
+name. The node listens on loopback using an automatically selected port; pass
+server options after `--`, such as `--port 8123` or `--log-dir /shared/logs`.
+GPU selection, node identity and Router settings are managed by the launcher.
+
+To launch from another machine, configure noninteractive SSH access and add
+`--ssh user@login-host`. Slurm commands run on that host, using its environment;
+`--python /shared/env/bin/python` selects the compute node's Python executable
+(default: `python3`). If the Router requires a node token, set
+`KCORAL_NODE_TOKEN` before launching. SSH sends it through standard input, without
+including it in command arguments. Code and environments must already be installed
+on the cluster; clients upload their programs through the usual KCoral API.
+
+Clusters with the Pyxis Slurm plugin can use a prebuilt server container:
+
+```bash
+kcoral slurm --ssh user@login-host --router http://router.internal:9000 \
+  --partition gpu --container-image /shared/images/kcoral.sqsh \
+  --container-mount /shared/cache:/cache --container-workdir /tmp \
+  -- --disk-cache-dir /cache/kcoral
+```
+
+The image must include KCoral, its server dependencies and `kcoral-node`.
+`--container-mount` is repeatable; the home directory is not mounted automatically.
+Without `--container-image`, no container plugin is required.
+
+The allocation persists across requests until the time limit, a node exit, or
+launcher termination. Ctrl+C, SIGTERM or SIGHUP cancels its uniquely named Slurm job,
+including a pending allocation. Cancellation or expiration can interrupt active
+requests; they are not automatically retried or resubmitted. If a network failure
+prevents cleanup, the launcher prints the job name and `scancel` command; the
+Slurm time limit still applies. Killing the launcher with SIGKILL bypasses cleanup.
+Use a separate launcher for each node; this command does not scale allocations
+automatically or launch a multi-node distributed job.
+
 ## Recover from failures and stop nodes
 
 A routed deployment can keep serving requests when a node becomes unavailable,

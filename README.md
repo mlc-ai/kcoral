@@ -92,6 +92,9 @@ See [Router deployment](docs/server-guide/router.md) for setup, scheduling and f
 handling, and the [Rust package guide](rust/kcoral/README.md) for implementation
 and integration test commands.
 
+For Slurm clusters, use `kcoral slurm --router URL` to allocate a GPU node.
+See [Slurm deployment](docs/server-guide/router.md#slurm-allocations) for setup and options.
+
 ## Logs
 
 Follow requests and worker events using the [logging guide](docs/server-guide/logging.md).
