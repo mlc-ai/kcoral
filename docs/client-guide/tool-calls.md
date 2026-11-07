@@ -41,6 +41,18 @@ each time; files and Python state do not persist between calls.
 machine running the MCP server. Directories are uploaded recursively under
 the specified remote path. Symlinks are not supported.
 
+`examples/tool_calls/mcp_client.py` calls all three tools from Python. It
+starts `kcoral mcp` as a subprocess and talks to it over standard input and
+output with the MCP Python SDK, the same way an agent does, so you can see
+each tool's arguments and report before configuring an agent:
+
+```bash
+KCORAL_URL=http://127.0.0.1:8000 python examples/tool_calls/mcp_client.py
+```
+
+{download}`Download the example <../../examples/tool_calls/mcp_client.py>` and
+{download}`the check.py it uploads <../../examples/tool_calls/check.py>`.
+
 ## Run a shell script
 
 Call `kcoral_send_shell` with these arguments to upload a local `experiment`
