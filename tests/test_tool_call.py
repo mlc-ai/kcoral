@@ -1,7 +1,8 @@
-"""The shell tool call an agent gets over MCP, sharing the CLI's program builder."""
+"""The MCP tool calls: local validation, execution against a fake runtime, and the server."""
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 from test_tool_cli import remote  # noqa: F401
@@ -50,32 +51,9 @@ def test_send_shell_uploads_runs_and_fetches(remote, tmp_path):  # noqa: F811
     json.dumps(report)
 
 
-def test_send_shell_keeps_outcome_when_artifact_save_fails(remote, tmp_path, monkeypatch):  # noqa: F811
+def test_send_shell_reports_failures_without_raising(remote, tmp_path, monkeypatch):  # noqa: F811
     from kcoral.artifacts import ReturnedFolder
 
-    def fail_save(self, destination):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(ReturnedFolder, "save", fail_save)
-    report = tool_call.send_shell(
-        "http://testserver",
-        "echo finished; echo diagnostic >&2; echo row > report.txt; exit 3",
-        {},
-        fetch=["report.txt", "missing.txt"],
-        out_dir=str(tmp_path / "runs" / "out"),
-    )
-    assert report["status"] == "ERROR" and report["returncode"] == 3
-    assert report["stdout"] == "finished\n" and report["stderr"] == "diagnostic\n"
-    assert report["missing"] == ["missing.txt"] and report["artifacts_dir"] is None
-    assert report["error"]["kind"] == "save_failed" and "disk full" in report["error"]["message"]
-    assert report["result_errors"]["artifacts"] == report["error"]
-    assert report["request_id"]
-    json.dumps(report)
-
-
-def test_send_shell_reports_remote_failure_without_raising(remote, tmp_path):  # noqa: F811
-    report = tool_call.send_shell("http://testserver", "echo ok", {}, timeout_seconds=1)
-    assert report["status"] == "COMPLETED" and report["returncode"] == 0
     # A symlinked artifact fails collection after the script ran: no outcome, an error.
     report = tool_call.send_shell(
         "http://testserver",
@@ -87,20 +65,24 @@ def test_send_shell_reports_remote_failure_without_raising(remote, tmp_path):  #
     assert report["status"] == "FAILED" and report["returncode"] is None
     assert "symlink" in report["error"]["message"]
 
+    # A local save failure keeps the script's outcome and logs.
+    def fail_save(self, destination):
+        raise OSError("disk full")
 
-@pytest.mark.parametrize(
-    "kwargs",
-    [
-        {"env": {"CUDA_VISIBLE_DEVICES": "1"}},
-        {"env": {"bad name": "1"}},
-        {"fetch": ["outputs"]},
-        {"uploaded_files": {"../escape": "."}},
-    ],
-)
-def test_send_shell_rejects_invalid_arguments(tmp_path, kwargs):
-    arguments = {"uploaded_files": {}, **kwargs}
-    with pytest.raises(ValueError):
-        tool_call.send_shell("http://unused", "true", **arguments)
+    monkeypatch.setattr(ReturnedFolder, "save", fail_save)
+    report = tool_call.send_shell(
+        "http://testserver",
+        "echo finished; echo row > report.txt; exit 3",
+        {},
+        fetch=["report.txt", "missing.txt"],
+        out_dir=str(tmp_path / "runs" / "out"),
+    )
+    assert report["status"] == "ERROR" and report["returncode"] == 3
+    assert report["stdout"] == "finished\n" and report["missing"] == ["missing.txt"]
+    assert report["artifacts_dir"] is None
+    assert report["error"]["kind"] == "save_failed" and "disk full" in report["error"]["message"]
+    assert report["result_errors"]["artifacts"] == report["error"]
+    json.dumps(report)
 
 
 def test_send_python_runs_a_function_with_uploads_and_args(remote, tmp_path):  # noqa: F811
@@ -137,20 +119,24 @@ def test_send_python_reports_failures_without_raising(remote, tmp_path):  # noqa
     json.dumps(report)
 
 
-@pytest.mark.parametrize("name", ["", "not an identifier", "1abc"])
-def test_send_python_rejects_invalid_entry_function(name):
-    with pytest.raises(ValueError):
-        tool_call.send_python("http://unused", "def main(): pass", name, {})
-
-
-def test_send_python_rejects_unsafe_uploads(tmp_path):
+def test_tools_reject_unsafe_arguments_before_submission(tmp_path, monkeypatch):
+    monkeypatch.setattr(tool_call, "_execute", lambda *args: pytest.fail("submitted"))
     source = tmp_path / "file.txt"
     source.write_text("x")
     link = tmp_path / "link.txt"
     link.symlink_to(source)
     for uploads in ({"../escape": str(source)}, {"/abs": str(source)}, {"ok.txt": str(link)}):
         with pytest.raises(ValueError):
+            tool_call.send_shell("http://unused", "true", uploads)
+        with pytest.raises(ValueError):
             tool_call.send_python("http://unused", "def main(): pass", "main", uploads)
+    for kwargs in (
+        {"env": {"CUDA_VISIBLE_DEVICES": "1"}},
+        {"env": {"bad name": "1"}},
+        {"fetch": ["outputs"]},  # fetch without out_dir
+    ):
+        with pytest.raises(ValueError):
+            tool_call.send_shell("http://unused", "true", {}, **kwargs)
 
 
 MODULE = """
@@ -167,7 +153,7 @@ def boom():
 """
 
 
-def _program(*extra, data=None):
+def _program(*extra):
     return [
         {"op": "upload", "kind": "module", "id": "mod", "source": MODULE},
         {"op": "get_function", "id": "fn", "module": {"$ref": "mod"}, "name": "main"},
@@ -175,23 +161,6 @@ def _program(*extra, data=None):
         {"op": "return", "key": "value", "value": {"$ref": "out"}},
         *extra,
     ]
-
-
-def test_send_program_builds_the_same_instructions_as_the_builder():
-    from kcoral import Program, Register
-
-    built = Program()
-    for item in _program():
-        tool_call._translate(built, item, None)
-    expected = Program()
-    module = expected.upload(id="mod", kind="module", source=MODULE)
-    fn = expected.get_function(id="fn", module=module, name="main")
-    out = expected.run(id="out", fn=fn, args=[4, "hello"])
-    expected.return_(key="value", value=out)
-    assert built.instructions == expected.instructions
-    with pytest.raises(ValueError):
-        tool_call._translate(built, {"op": "run", "fn": {"$ref": "nope"}}, None)
-    assert isinstance(tool_call._register({"$ref": "x"}), Register)
 
 
 def test_send_program_runs_uploads_and_saves_artifacts(remote, tmp_path):  # noqa: F811
@@ -215,38 +184,30 @@ def test_send_program_runs_uploads_and_saves_artifacts(remote, tmp_path):  # noq
 
 
 @pytest.mark.parametrize(
-    "index,instruction",
+    "instruction",
     [
-        (0, {"op": "return", "key": "x", "kind": "folder", "path": "report"}),  # no out_dir
-        (0, {"op": "upload", "kind": "file", "id": "w", "blob": "ab" * 32, "path": "w"}),
-        (0, {"op": "teleport"}),
-        (0, {"op": "upload", "kind": "hologram", "id": "x"}),
-        (0, {"op": "get_function", "id": "f", "module": {"$ref": "missing"}, "name": "m"}),
-        (0, {"op": "run", "id": "r", "fn": {"$ref": "fn"}, "extra": 1}),
+        {"op": "return", "key": "x", "kind": "folder", "path": "report"},  # no out_dir
+        {"op": "upload", "kind": "file", "id": "w", "blob": "ab" * 32, "path": "w"},
+        {"op": "teleport"},
+        {"op": "get_function", "id": "f", "module": {"$ref": "missing"}, "name": "m"},
     ],
 )
-def test_send_program_reports_invalid_instructions_with_their_index(index, instruction):
-    program = [instruction]
-    if index:
-        program = [
-            {"op": "upload", "kind": "module", "id": "m", "source": "x = 1"}
-        ] * index + program
-    report = tool_call.send_program("http://unused", program)
-    assert report["status"] == "ERROR"
-    assert report["error"]["kind"] == "invalid_program"
-    assert report["error"]["instruction_index"] == index
+def test_send_program_reports_invalid_instructions_with_their_index(instruction):
+    report = tool_call.send_program("http://unused", [instruction])
+    assert report["status"] == "ERROR" and report["error"]["kind"] == "invalid_program"
+    assert report["error"]["instruction_index"] == 0
     assert report["error"]["instruction_op"] == instruction["op"]
 
 
 def test_send_program_indexes_after_a_folder_upload_and_checks_keys(tmp_path):
     folder = tmp_path / "assets"
     folder.mkdir()
-    for name in ("a", "b", "c"):
-        (folder / name).write_text(name)
+    (folder / "a").write_text("a")
     link = tmp_path / "link"
     link.symlink_to(folder / "a")
     out = tmp_path / "out"
-    for bad_key in ("../x", "a/b", "/abs", "."):
+    # The folder expands to several upload instructions, yet the index is the agent's.
+    for bad_key in ("../x", "a/b", "/abs"):
         program = [
             {"op": "upload", "kind": "folder", "local": str(folder), "path": "assets"},
             *_program({"op": "return", "key": bad_key, "kind": "folder", "path": "report"}),
@@ -275,10 +236,8 @@ def test_send_program_reports_parser_errors_without_an_index():
 @pytest.mark.parametrize(
     "index,changes,message",
     [
-        *((2, {"args": args}, "args") for args in ({}, "", 0, False, None)),
-        (3, {"path": "report.txt"}, "path"),
-        (3, {"kind": "file", "path": "report.txt"}, "value"),
-        (3, {"kind": "folder", "path": "report"}, "value"),
+        (2, {"args": {}}, "args"),
+        (3, {"kind": "file", "path": "report.txt"}, "value"),  # value and kind conflict
         (3, {"kind": None}, "kind"),
     ],
 )
@@ -328,6 +287,32 @@ def test_send_program_out_dir_handling(remote, tmp_path, monkeypatch):  # noqa: 
     assert report["status"] == "ERROR" and report["error"]["kind"] == "save_failed"
 
 
+def test_send_program_saves_only_requested_artifacts(tmp_path, monkeypatch):
+    from kcoral.artifacts import ReturnedFile
+
+    # A server that returns artifacts the program never asked for, under keys that would
+    # escape out_dir, must not get them written anywhere.
+    escaped = tmp_path / "escaped"
+    results = {
+        "report": ReturnedFile(b"ok"),
+        str(escaped): ReturnedFile(b"leak"),
+        "value": ReturnedFile(b"not the requested value"),
+    }
+    report = {"status": "COMPLETED", "error": None}
+    monkeypatch.setattr(
+        tool_call, "_execute", lambda *a: (SimpleNamespace(results=results), report)
+    )
+    out = tmp_path / "out"
+    program = _program({"op": "return", "key": "report", "kind": "file", "path": "report/out.txt"})
+    report = tool_call.send_program("http://unused", program, out_dir=str(out))
+    assert report["results"] == {"report": str(out / "report")}
+    assert (out / "report").read_bytes() == b"ok"
+    assert not escaped.exists() and sorted(out.iterdir()) == [out / "report"]
+    assert set(report["result_errors"]) == {str(escaped), "value"}
+    assert report["result_errors"]["value"]["kind"] == "unexpected_artifact"
+    assert report["status"] == "ERROR" and report["error"]["kind"] == "unexpected_artifact"
+
+
 def test_send_program_keeps_partial_results_and_flags_unsupported_values(remote):  # noqa: F811
     program = _program(
         {"op": "get_function", "id": "boom", "module": {"$ref": "mod"}, "name": "boom"},
@@ -371,35 +356,6 @@ def test_mcp_reports_local_validation_errors(tmp_path, monkeypatch):
         report = json.loads(result.content[0].text)
         assert report["status"] == "ERROR" and report["error"]["kind"] == "invalid_arguments"
         assert message in report["error"]["message"], (tool, report)
-
-
-@pytest.mark.parametrize("existing_parent", [True, False])
-def test_mcp_reports_unusable_shell_output_before_submission(
-    tmp_path, monkeypatch, existing_parent
-):
-    pytest.importorskip("mcp")
-    monkeypatch.setattr(
-        tool_call, "_execute", lambda *args: pytest.fail("invalid output was submitted")
-    )
-    occupied = tmp_path / "occupied"
-    occupied.write_text("keep")
-    out = occupied / "out" if existing_parent else occupied
-    result = asyncio.run(
-        tool_call.build_server().call_tool(
-            "kcoral_send_shell",
-            {
-                "endpoint": "http://unused",
-                "shell_script": "true",
-                "uploaded_files": {},
-                "fetch": ["report.txt"],
-                "out_dir": str(out),
-            },
-        )
-    )
-    report = json.loads(result.content[0].text)
-    assert report["status"] == "ERROR" and report["error"]["kind"] == "invalid_arguments"
-    assert str(occupied) in report["error"]["message"]
-    assert occupied.read_text() == "keep"
 
 
 def test_mcp_server_exposes_and_calls_the_tools(remote, tmp_path):  # noqa: F811

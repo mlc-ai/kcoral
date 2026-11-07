@@ -202,7 +202,9 @@ def send_program(
 
     Returned values must be JSON-compatible (convert tensors with ``.tolist()``); a file
     or folder return is saved to ``out_dir/<key>``, so ``out_dir`` (a new directory) is
-    required for those and their keys must be single filenames. Scripts run as modules in
+    required for those and their keys must be single filenames. Only the file and folder
+    returns the program asked for are saved; anything else the server sends back as a
+    file or folder is reported in ``result_errors`` and left unsaved. Scripts run as modules in
     the request's working directory with no ``__file__``, and uploaded modules cannot import
     each other: to use one module's function from another, pass its ``get_function`` ref as
     a ``run`` argument. The program runs in KCoral's own Python environment, and nothing
@@ -239,12 +241,26 @@ def send_program(
         except OSError as exc:
             message = f"cannot create out_dir {out_dir}: {exc}"
             return {"status": "ERROR", "error": {"kind": "out_dir", "message": message}}
+    # Save only the artifacts this program requested: their keys were validated above,
+    # while a key invented by the server could name a path outside out_dir.
+    artifact_keys = {
+        item["key"]
+        for item in built.instructions
+        if item["op"] == "return" and item.get("kind") in {"file", "folder"}
+    }
     result, report = _execute(endpoint, built, timeout_seconds)
     report.update(results={}, result_errors={})
     if result is None:
         return report
     for key, value in result.results.items():
         if isinstance(value, (ReturnedFile, ReturnedFolder)):
+            if key not in artifact_keys:
+                message = (
+                    f"server returned a file or folder for {key!r}, which the program did "
+                    "not request; not saved"
+                )
+                report["result_errors"][key] = {"kind": "unexpected_artifact", "message": message}
+                continue
             try:
                 report["results"][key] = str(value.save(Path(out_dir) / key))
             except (OSError, ValueError) as exc:
