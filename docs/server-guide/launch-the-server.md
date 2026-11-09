@@ -195,6 +195,55 @@ other workspaces.
 This feature assumes **trusted programs**. It does not isolate hostile code
 sharing an interpreter or provide GPU memory isolation.
 
+## Run GPU work on Modal
+
+Without a local GPU, a local server can send execution to a KCoral server on
+[Modal](https://modal.com). The local server parses requests, keeps the cache
+and enforces limits, sending one program at a time to a B200 on Modal.
+
+From a KCoral source checkout, install the local server, then authenticate and
+deploy the Modal server:
+
+```bash
+pip install -e '.[modal]'
+modal token new
+modal deploy python/kcoral/modal_app.py
+```
+
+The deployment carries the installed KCoral version. At startup the local server
+compares its version with the Modal server's and refuses to start if they
+differ, so reinstall and redeploy together.
+
+Create a proxy auth token in the Modal dashboard (Settings, Proxy Auth Tokens),
+then start the local server with the URL that `modal deploy` printed:
+
+```bash
+export KCORAL_MODAL_KEY=wk-... KCORAL_MODAL_SECRET=ws-...
+kcoral server --backend modal --modal-url <URL printed by modal deploy>
+```
+
+The Modal server keeps one B200 container running, which is billed while idle.
+Stop it when you are done:
+
+```bash
+modal app stop kcoral-modal-worker
+```
+
+Each request runs in a fresh worker process, and a second worker stays ready
+so the next request does not wait for a replacement. Requests and responses can
+be up to 256 MB, including cached blobs the local server forwards, and run for
+up to 900 seconds. The local server refuses larger limits. If the connection
+drops or the Modal server loses a request, that request gets `500` and later
+requests get `503` until the Modal server has stayed idle for 30 seconds, or
+has been replaced if worker cleanup was not confirmed. The lost request is
+never retried.
+
+Modal runs GPU containers under gVisor, where bubblewrap cannot start, so the
+Modal server runs with `--sandbox none`. Programs can read the container's
+environment, keep files between requests and use the network. Only holders of
+the proxy auth token can reach it. Use it for your own trusted programs, not
+as a shared service.
+
 ## Configuration
 
 The following options configure a standalone server. Use `--help` to display

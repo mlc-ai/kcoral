@@ -19,6 +19,7 @@ SERVER_ONLY = (
     "tvm_ffi",
     "grpc",
     "google.protobuf",
+    "modal",
 )
 
 CHECK_CLIENT_IS_THIN = f"""
@@ -54,6 +55,7 @@ def test_create_app_still_reachable():
 
     assert kcoral.create_app is not None
     assert "create_app" in kcoral.__all__
+    assert "modal" not in sys.modules
 
 
 def test_unknown_attribute_still_raises():

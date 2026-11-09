@@ -52,6 +52,8 @@ class ServerConfig:
     output_limit_bytes: int = 1024**2  # per-request stdout/stderr capture cap
     max_output_limit_bytes: int = 16 * 1024**2  # cap on a client-requested limit
     device: str = "gpu"
+    backend: str = "local"
+    modal_url: str | None = None
     num_workers: int = 1  # CPU workers; ignored in GPU mode
     router_endpoint: str | None = None  # enables outbound gRPC data slots
     node_id: str | None = None

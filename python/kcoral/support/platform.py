@@ -68,12 +68,25 @@ def _environ() -> dict[str, str]:
 def _children(pid: int) -> set[int]:
     """Read every thread: native libraries can launch children off the main thread."""
     children: set[int] = set()
-    for task in Path(f"/proc/{pid}/task").glob("*"):
+    try:
+        tasks = list(Path(f"/proc/{pid}/task").iterdir())
+    except (FileNotFoundError, ProcessLookupError):
+        return children  # exited while the tree was being walked
+    for task in tasks:
         try:
             children.update(map(int, (task / "children").read_text().split()))
         except (FileNotFoundError, ProcessLookupError):
             pass
-    return children
+    # gVisor also lists the children's threads, which pidfd_open refuses; keep processes.
+    return {child for child in children if _is_process(child)}
+
+
+def _is_process(pid: int) -> bool:
+    try:
+        status = Path(f"/proc/{pid}/status").read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        return False  # already reaped, or a thread gVisor hides from /proc
+    return f"\nTgid:\t{pid}\n" in status
 
 
 def _descendants(pid: int) -> set[int]:
