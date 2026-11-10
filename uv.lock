@@ -1003,6 +1003,7 @@ name = "kcoral"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "mcp" },
     { name = "ml-dtypes" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
@@ -1010,9 +1011,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-client = [
-    { name = "mcp" },
-]
 server = [
     { name = "apache-tvm" },
     { name = "apache-tvm-ffi", extra = ["cpp"] },
@@ -1044,7 +1042,7 @@ requires-dist = [
     { name = "flashinfer-python", marker = "extra == 'server'", specifier = ">=0.6.17" },
     { name = "grpcio", marker = "extra == 'server'", specifier = ">=1.66.2" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "mcp", marker = "extra == 'client'", specifier = ">=2" },
+    { name = "mcp", specifier = ">=2" },
     { name = "ml-dtypes", specifier = ">=0.5" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "nvidia-cutlass-dsl", extras = ["cu13"], marker = "extra == 'server'", specifier = "==4.7.0" },
@@ -1052,7 +1050,7 @@ requires-dist = [
     { name = "torch", marker = "extra == 'server'", specifier = ">=2.14" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.29" },
 ]
-provides-extras = ["server", "client"]
+provides-extras = ["server"]
 
 [package.metadata.requires-dev]
 server = [{ name = "kcoral", extras = ["server"] }]

@@ -109,31 +109,6 @@ filesystem isolation; see the isolation guide above for configuration.
 For deployment, see [Launch the server](../server-guide/launch-the-server.md)
 and [Remote Compilation](../tutorials/remote-compilation.md).
 
-## Optional Dependencies
-
-The base package includes the Python client. Install extras for additional
-capabilities:
-
-| Extra | Purpose |
-| --- | --- |
-| `client` | Adds MCP support for `kcoral mcp`, so coding agents can call remote tools. No local GPU is needed. |
-| `server` | Adds the runtime dependencies for GPU execution and CPU compilation on Linux. |
-
-Install MCP support on the machine running your coding agent:
-
-```bash
-python -m pip install 'kcoral[client]'
-```
-
-To install both sets of dependencies, combine the extras:
-
-```bash
-python -m pip install 'kcoral[client,server]'
-```
-
-For an editable source installation, use `python -m pip install -e '.[client]'`
-or `python -m pip install -e '.[client,server]'`.
-
 ## Prepare for local compilation (optional)
 
 If you want to compile CUDA C libraries on the client, as in the

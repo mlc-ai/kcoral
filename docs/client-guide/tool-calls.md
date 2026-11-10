@@ -1,4 +1,4 @@
-# Tool Calls
+# Tool Calling and MCP Server
 
 Coding agents can use KCoral over MCP to run shell scripts, call Python
 functions, or submit a program to a remote worker. The MCP server runs beside
@@ -6,10 +6,10 @@ the agent; execution happens on an existing KCoral server or Router.
 
 ## Setup
 
-Install MCP support in the agent's environment:
+Install KCoral in the agent's environment:
 
 ```bash
-python -m pip install 'kcoral[client]'
+python -m pip install kcoral
 ```
 
 Configure the agent to start `kcoral mcp` over standard input and output. For
@@ -31,9 +31,9 @@ libraries and executables your experiment uses.
 
 | Tool | Use it to |
 | --- | --- |
-| `kcoral_send_shell` | Run a shell script, benchmark, or profiler and retrieve files. |
-| `kcoral_send_python` | Call a function from Python source and return a JSON-compatible value. |
-| `kcoral_send_program` | Submit an instruction list for a request that needs several modules, tensor uploads, or file returns. |
+| `kcoral_run_shell` | Run a shell script, benchmark, or profiler and retrieve files. |
+| `kcoral_run_python` | Call a function from Python source and return a JSON-compatible value. |
+| `kcoral_run_program` | Submit an instruction list for a request that needs several modules, tensor uploads, or file returns. |
 
 Every call starts in a fresh working directory. Upload everything it needs
 each time; files and Python state do not persist between calls.
@@ -55,7 +55,7 @@ KCORAL_URL=http://127.0.0.1:8000 python examples/tool_calls/mcp_client.py
 
 ## Run a shell script
 
-Call `kcoral_send_shell` with these arguments to upload a local `experiment`
+Call `kcoral_run_shell` with these arguments to upload a local `experiment`
 directory, run its script, and retrieve a report:
 
 ```json
@@ -80,7 +80,7 @@ explicit interpreter in the script, when a benchmark needs its own runtime.
 
 ## Call a Python function
 
-Call `kcoral_send_python` with source, a function name, and positional arguments:
+Call `kcoral_run_python` with source, a function name, and positional arguments:
 
 ```json
 {
@@ -99,7 +99,7 @@ with `.tolist()` or `float()`. Uploaded source runs as a module without
 
 ## Submit a program
 
-`kcoral_send_program` takes `endpoint` and a `program` list using the
+`kcoral_run_program` takes `endpoint` and a `program` list using the
 [protocol instructions](protocol.md): `upload`, `get_function`, `run`, and
 `return`. Reference earlier instruction IDs with `{"$ref": "id"}`.
 

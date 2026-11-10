@@ -15,7 +15,7 @@ _OUTPUT_LIMIT_BYTES = 256 * 1024**2
 _MANAGED_ENV = {"CUDA_VISIBLE_DEVICES", "KCORAL_DIR"}
 
 
-def send_shell(
+def run_shell(
     endpoint: str,
     shell_script: str,
     uploaded_files: dict[str, str],
@@ -89,7 +89,7 @@ def send_shell(
     return report
 
 
-def send_python(
+def run_python(
     endpoint: str,
     python_script: str,
     entry_function: str,
@@ -104,7 +104,7 @@ def send_python(
     function may import torch and use ``cuda``. It runs in KCoral's own Python environment
     (torch, flashinfer, CUTLASS), not in a task's benchmark environment, so use this for
     quick checks and experiments that return a value; run recorded benchmarks with
-    ``kcoral_send_shell``. The script is executed as a module from the request's working
+    ``kcoral_run_shell``. The script is executed as a module from the request's working
     directory, where the uploaded files are; it has no ``__file__``, so refer to uploads by
     relative path (for example ``sys.path.insert(0, "lib")``). Nothing persists between
     calls: upload everything the script needs every time.
@@ -156,7 +156,7 @@ def send_python(
     return report
 
 
-def send_program(
+def run_program(
     endpoint: str,
     program: list[dict],
     out_dir: str | None = None,
@@ -442,9 +442,9 @@ def build_server():
 
         server.tool(name=name)(call)
 
-    register("kcoral_send_shell", send_shell)
-    register("kcoral_send_python", send_python)
-    register("kcoral_send_program", send_program)
+    register("kcoral_run_shell", run_shell)
+    register("kcoral_run_python", run_python)
+    register("kcoral_run_program", run_program)
     return server
 
 

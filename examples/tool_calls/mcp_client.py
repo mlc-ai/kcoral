@@ -2,10 +2,10 @@
 
 The script starts ``kcoral mcp`` as a subprocess and talks to it over standard
 input and output, exactly as an MCP-enabled agent would. It lists the tools,
-then uses each one against a running KCoral server: ``kcoral_send_python``
-probes the worker, ``kcoral_send_shell`` uploads ``check.py``, runs it, and
-fetches its report, and ``kcoral_send_program`` returns both a value and a
-folder. Install the client extra first: ``pip install "kcoral[client]"``.
+then uses each one against a running KCoral server: ``kcoral_run_python``
+probes the worker, ``kcoral_run_shell`` uploads ``check.py``, runs it, and
+fetches its report, and ``kcoral_run_program`` returns both a value and a
+folder. Install KCoral first: ``pip install kcoral``.
 """
 
 import argparse
@@ -80,7 +80,7 @@ async def call_each_tool(client: Client, endpoint: str, out_dir: Path) -> None:
         "uploaded_files": {},
         "args": [4],
     }
-    result = await client.call_tool("kcoral_send_python", arguments)
+    result = await client.call_tool("kcoral_run_python", arguments)
     print("python:", completed(report_of(result), "python")["value"])
 
     # Run a shell script beside an uploaded file and fetch what it writes.
@@ -91,7 +91,7 @@ async def call_each_tool(client: Client, endpoint: str, out_dir: Path) -> None:
         "fetch": ["results/check.json"],
         "out_dir": str(out_dir / "shell"),
     }
-    result = await client.call_tool("kcoral_send_shell", arguments)
+    result = await client.call_tool("kcoral_run_shell", arguments)
     report = completed(report_of(result), "shell")
     if report["returncode"] != 0:
         raise ToolFailed(f"check.py exited with {report['returncode']}:\n{report['stderr']}")
@@ -109,7 +109,7 @@ async def call_each_tool(client: Client, endpoint: str, out_dir: Path) -> None:
         ],
         "out_dir": str(out_dir / "program"),
     }
-    result = await client.call_tool("kcoral_send_program", arguments)
+    result = await client.call_tool("kcoral_run_program", arguments)
     print("program:", completed(report_of(result), "program")["results"])
 
 
