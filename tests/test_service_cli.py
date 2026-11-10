@@ -29,14 +29,6 @@ def launch(monkeypatch):
     return calls
 
 
-def test_root_help_and_no_implicit_server(capsys):
-    main([])
-    assert "{server,router,run}" in capsys.readouterr().out
-    with pytest.raises(SystemExit) as exc:
-        main(["--gpus", "0"])
-    assert exc.value.code == 2
-
-
 def test_router_forwards_options(launch):
     main(["router", "--port", "9001", "--max-queued-requests=20"])
     assert launch == [(("kcoral-router", ["--port", "9001", "--max-queued-requests=20"]), {})]

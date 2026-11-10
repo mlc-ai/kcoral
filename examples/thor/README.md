@@ -2,7 +2,7 @@
 
 This example shows remote kernel development with KCoral. A coding agent runs
 on your workstation or laptop and optimizes an fp16 GEMM written in
-[TIRx](https://github.com/apache/tvm/tree/v0.26.0/docs/tirx). Every compile,
+[TIRx](https://tvm.apache.org/tirx/). Every compile,
 correctness check and benchmark executes on a remote NVIDIA Jetson Thor
 (sm_110a) KCoral server. The agent starts from a textbook CUDA-core kernel and
 works towards cuBLAS. You can re-check the correctness and the speedup it

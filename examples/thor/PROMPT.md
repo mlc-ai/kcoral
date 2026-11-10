@@ -67,7 +67,7 @@ def build(M: int, N: int, K: int):
 - Every call of `fn` must read `A` and `B` and fully overwrite `D`. The harness
   poisons `D` with NaN before checked calls and re-checks it after timing.
 - Every GPU kernel launched by `fn` must be authored in TIRx
-  (`tvm.script.tirx`) and compiled with `tvm.compile(..., tir_pipeline="tirx")`.
+  (`tvm_tirx.script.tirx`) and compiled with `tvm_tirx.compile(..., pipeline="tirx")`.
   No cuBLAS, `torch` operators, Triton, CuTeDSL, raw CUDA C modules or other
   libraries in `fn`. The harness records the launched kernel names and fails
   candidates that launch vendor GEMM kernels.
@@ -161,32 +161,22 @@ mistake; the request then times out and reports a remote error.
 ### Writing the kernels in TIRx
 
 - Start from `initial_kernel.py`: it shows a `@T.jit` kernel with constexpr
-  shape parameters, `specialize` and `tvm.compile`, and its `cuda_target()`
+  shape parameters, `specialize` and `tvm_tirx.compile`, and its `cuda_target()`
   compiles for the server's exact architecture with arch-specific features
   enabled; copy it.
-- The TVM repository at the server's version is the API reference. Take the
-  version from `versions.tvm` in `curl -fsS "$KCORAL_URL/health"`; its tag is
-  `v<version>` (for example `v0.26.0`; for a development build, use the closest
-  release tag). Fetch raw files from
-  `https://raw.githubusercontent.com/apache/tvm/<tag>/<path>`, or make a local
-  copy with `git clone --depth 1 --branch <tag> https://github.com/apache/tvm work/tvm`.
-- TVM sources: `python/tvm/tirx/script/builder/tirx.py` (tile operations),
-  `python/tvm/backend/cuda/tile_primitive/gemm_async/tcgen05.py`,
-  `.../copy_async/tma.py`, `python/tvm/tirx/lang/` (pipeline, tile scheduler and
-  warp-role helpers), `python/tvm/tirx/layout.py`.
-- TVM documentation and tests: `docs/tirx/tile_primitives/gemm_async.rst`,
-  `docs/tirx/tile_primitives/copy_async/tma.rst`,
-  `docs/tirx/tile_primitives/copy_async/tcgen05_ldst.rst`,
-  `docs/tirx/layout.rst`, `docs/tirx/native_basics/cuda/*.rst`, and
-  `tests/python/tirx/operator/tile_primitive/cuda/gemm_async/test_gemm_async.py`
-  (complete single-tile TMA + tcgen05 kernels, including `cta_group=2`).
+- Use the standalone [tvm-tirx repository](https://github.com/apache/tvm-tirx)
+  as the API reference. Check `versions.tvm_tirx` in the server's `/health`
+  response and use the matching source revision for development builds.
+- Sources live under `python/tvm_tirx/`; start with `tirx/script/ir_builder/`
+  and `backend/cuda/`. Runnable examples are in `examples/programming_guides/`
+  and `examples/quick_start/`; consult the matching checkout's tests for
+  advanced CUDA operations.
 - A production Thor GEMM written in the lower-level `tirx_lite` DSL, useful for
   its **algorithm and Thor tile configurations** only (do not import it):
   `https://raw.githubusercontent.com/mlc-ai/TIRx-kernels/860f381/tirx_kernels/basic/fp16_bf16_gemm.py`.
-- Declare the full thread hierarchy a kernel uses (`T.cta_id`,
-  `T.warpgroup_id`, `T.warp_id`, `T.lane_id`, `T.thread_id_in_wg`); declaring
-  only `warp_id` and `thread_id_in_wg` fails with "kernel has no thread launch
-  parameters".
+- Declare grid and block dimensions with
+  `T.device_entry(launch=T.cuda.LaunchConfig(grid=..., block=...))` and read
+  indices with `T.cuda.block_idx` and `T.cuda.thread_idx`.
 - To see what TIRx produced, return the generated CUDA C of a compiled kernel
   from your own KCoral program:
   `"\n".join(m.inspect_source() for m in fn.mod.imports)` for the `fn` your

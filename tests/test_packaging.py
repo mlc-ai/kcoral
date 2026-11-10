@@ -16,6 +16,7 @@ SERVER_ONLY = (
     "uvicorn",
     "torch",
     "tvm",
+    "tvm_tirx",
     "tvm_ffi",
     "grpc",
     "google.protobuf",

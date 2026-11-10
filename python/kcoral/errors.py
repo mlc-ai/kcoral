@@ -17,7 +17,7 @@ class ExecutionError(Exception):
     ``kind`` names the cause: ``parse``, ``compile``, ``runtime``, ``gpu_access``
     (a ``cpu_only`` function called CUDA), or ``correctness`` (an assertion the
     kernel failed) — all submitted-code faults — or ``unavailable`` when the
-    instruction needs an optional server dependency (e.g. tvm) that is not
+    instruction needs an optional server dependency (e.g. tvm_tirx) that is not
     installed.
     """
 
