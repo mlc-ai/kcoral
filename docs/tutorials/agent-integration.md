@@ -6,6 +6,9 @@ needs both the programming interface and a clear definition of success. This
 tutorial shows how to provide that context, ask for a runnable experiment, and
 review the results before iterating.
 
+For agents that support MCP, [Tool Calling and MCP Server](../client-guide/tool-calls.md)
+provides setup and examples for calling KCoral directly from the agent.
+
 ## Provide the KCoral skill
 
 Start by giving the agent the `kcoral-client` skill, which explains how to

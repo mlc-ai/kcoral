@@ -264,7 +264,10 @@ def run_tool(tool, args, forwarded):
 
 
 def pack_inputs(paths=()):
-    """Stable archives: preserve each selected file or directory's basename."""
+    """Stable archives: preserve each selected file or directory's basename.
+
+    An entry may also be a ``(name, path)`` pair to upload the path under ``name``.
+    """
     buffer, names = io.BytesIO(), set()
     with tarfile.open(fileobj=buffer, mode="w") as tar:
 
@@ -280,11 +283,15 @@ def pack_inputs(paths=()):
             info.mode = 0o700 if executable else 0o600
             tar.addfile(info, io.BytesIO(data))
 
-        for path in paths:
+        for entry in paths:
+            name, path = entry if isinstance(entry, tuple) else (None, entry)
+            path = Path(path)
             if path.is_symlink() or not path.exists():
                 raise ValueError(f"input must exist and not be a symlink: {path}")
             directory = path.is_dir()
-            basename = path.resolve().name if directory else path.name
+            if name is None:
+                name = path.resolve().name if directory else path.name
+            basename = name
             if not basename:
                 raise ValueError(f"input directory must have a name: {path}")
             for entry in sorted(path.rglob("*")) if directory else [path]:
