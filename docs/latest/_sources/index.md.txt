@@ -12,6 +12,7 @@ services can build kernels for a separate GPU server.
 | Run a Python function with a decorator | [Remote functions](client-guide/remote-functions.md) |
 | Write a client program | [Write a client program](client-guide/writing-a-program.md), [KCoral Protocol](client-guide/protocol.md) |
 | Run Python, checks, profilers, or shell commands | [Builtin CLI Tools](client-guide/builtin-cli-tools.md) |
+| Call remote tools from a coding agent | [Tool Calling and MCP Server](client-guide/tool-calls.md) |
 | Operate a service | [Launch the server](server-guide/launch-the-server.md), [Logging](server-guide/logging.md) and [Launch the router](server-guide/router.md) |
 | Compile remotely, then execute the returned library in another request | [Remote Compilation](tutorials/remote-compilation.md) |
 | Measure or automate a workload | [Benchmark a Kernel with KCoral](tutorials/benchmark-kernel.md) and [Agent Integration Guide](tutorials/agent-integration.md) |
@@ -42,6 +43,7 @@ client-guide/protocol
 client-guide/remote-functions
 client-guide/writing-a-program
 client-guide/builtin-cli-tools
+client-guide/tool-calls
 ```
 
 ```{toctree}
