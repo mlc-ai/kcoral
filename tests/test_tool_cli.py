@@ -235,7 +235,7 @@ def test_upload_names_permissions_and_path_validation(tmp_path):
 def test_all_tool_help_needs_only_client_dependencies():
     code = """
 import sys
-for name in ('fastapi', 'uvicorn', 'grpc', 'torch', 'tvm', 'tvm_ffi'):
+for name in ('fastapi', 'uvicorn', 'grpc', 'torch', 'tvm', 'tvm_tirx', 'tvm_ffi'):
     sys.modules[name] = None
 from kcoral.tools import COMMANDS
 from kcoral.tools.cli import run_main
