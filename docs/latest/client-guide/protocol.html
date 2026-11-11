@@ -474,7 +474,7 @@ options. Body-size limits include multipart framing.</p>
 </div>
 <p>Version strings above are illustrative; use the values returned by your server.
 The GPU runtime reports <code class="docutils literal notranslate"><span class="pre">torch</span></code>, <code class="docutils literal notranslate"><span class="pre">cuda</span></code> (the CUDA version used to build PyTorch),
-and available <code class="docutils literal notranslate"><span class="pre">tvm</span></code>, <code class="docutils literal notranslate"><span class="pre">tvm_ffi</span></code>, <code class="docutils literal notranslate"><span class="pre">triton</span></code>, <code class="docutils literal notranslate"><span class="pre">cutlass</span></code> and <code class="docutils literal notranslate"><span class="pre">flashinfer</span></code> versions.
+and available <code class="docutils literal notranslate"><span class="pre">tvm_tirx</span></code>, <code class="docutils literal notranslate"><span class="pre">tvm_ffi</span></code>, <code class="docutils literal notranslate"><span class="pre">triton</span></code>, <code class="docutils literal notranslate"><span class="pre">cutlass</span></code> and <code class="docutils literal notranslate"><span class="pre">flashinfer</span></code> versions.
 Optional entries can be absent; this is not an inventory of every installed
 compiler or command-line tool. CPU servers report the available <code class="docutils literal notranslate"><span class="pre">tvm_ffi</span></code> version.</p>
 <div class="table-wrapper colwidths-auto docutils container">
@@ -735,9 +735,9 @@ TVM FFI can load is accepted. Three are usual:</p>
 <td><p><code class="docutils literal notranslate"><span class="pre">TVM_FFI_DLL_EXPORT_TYPED_FUNC</span></code> emits <code class="docutils literal notranslate"><span class="pre">__tvm_ffi_&lt;name&gt;</span></code>; <code class="docutils literal notranslate"><span class="pre">tvm_ffi.cpp.build_inline(functions=...)</span></code> adds it automatically. A code generator can emit the symbol directly.</p></td>
 <td><p>TVM FFI</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">tvm.Executable.export_library</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">tvm_tirx.codegen.Executable.export_library</span></code></p></td>
 <td><p>Embedded module blob</p></td>
-<td><p>TVM installed, including the loader registered by its CUDA runtime</p></td>
+<td><p>TIRx installed, including the loader registered by its CUDA runtime</p></td>
 </tr>
 <tr class="row-even"><td><p>CuTeDSL with <code class="docutils literal notranslate"><span class="pre">--enable-tvm-ffi</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">__tvm_ffi_&lt;name&gt;</span></code>, linked against <code class="docutils literal notranslate"><span class="pre">libcute_dsl_runtime.so</span></code></p></td>
@@ -1601,7 +1601,7 @@ The same upload/get_function/run shape supports GPU harnesses and compiler tools
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=b20ae422"></script>
+</div><script src="../_static/documentation_options.js?v=1b82d334"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

@@ -370,15 +370,15 @@ CUDA toolkit, or TVM installation: the client sends source and data to the serve
 <span class="s2">from pathlib import Path</span>
 
 <span class="s2">import torch</span>
-<span class="s2">import tvm</span>
+<span class="s2">import tvm_tirx</span>
 <span class="s2">import tvm_ffi</span>
-<span class="s2">from tvm.script import tirx as T</span>
+<span class="s2">from tvm_tirx.script import tirx as T</span>
 <span class="s2">from kcoral.builtins import benchmark</span>
 
 <span class="s2">@T.jit</span>
-<span class="s2">def add_one(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):</span>
-<span class="s2">    T.device_entry()</span>
-<span class="s2">    i = T.cta_id([N])</span>
+<span class="s2">def add_one(A: T.Tensor((N,), "float32"), B: T.Tensor((N,), "float32"), *, N: T.constexpr):</span>
+<span class="s2">    T.device_entry(launch=T.cuda.LaunchConfig(grid=N, block=1))</span>
+<span class="s2">    i = T.cuda.block_idx("x")</span>
 </pre></div>
 </div>
 </div>
@@ -399,30 +399,28 @@ CUDA toolkit, or TVM installation: the client sends source and data to the serve
 <span class="s2">from pathlib import Path</span>
 
 <span class="s2">import torch</span>
-<span class="s2">import tvm</span>
+<span class="s2">import tvm_tirx</span>
 <span class="s2">import tvm_ffi</span>
-<span class="s2">from tvm.script import tirx as T</span>
+<span class="s2">from tvm_tirx.script import tirx as T</span>
 <span class="s2">from kcoral.builtins import benchmark</span>
 
 <span class="s2">@T.jit</span>
-<span class="s2">def add_one(A: T.Buffer((N,), "float32"), B: T.Buffer((N,), "float32"), *, N: T.constexpr):</span>
-<span class="s2">    T.device_entry()</span>
-<span class="s2">    i = T.cta_id([N])</span>
-<span class="s2">    t = T.thread_id([1])</span>
+<span class="s2">def add_one(A: T.Tensor((N,), "float32"), B: T.Tensor((N,), "float32"), *, N: T.constexpr):</span>
+<span class="s2">    T.device_entry(launch=T.cuda.LaunchConfig(grid=N, block=1))</span>
+<span class="s2">    i = T.cuda.block_idx("x")</span>
 <span class="s2">    B[i] = A[i] + 1.0</span>
 
 
 <span class="s2">def compile_kernel(arch):</span>
 <span class="s2">    # An explicit architecture avoids querying the GPU during compilation.</span>
-<span class="s2">    target = tvm.target.Target({"kind": "cuda", "arch": arch})</span>
-<span class="s2">    module = tvm.IRModule({"add_one": add_one.specialize(N=256)})</span>
+<span class="s2">    target = tvm_tirx.target.Target({"kind": "cuda", "arch": arch})</span>
+<span class="s2">    module = tvm_tirx.IRModule({"add_one": add_one.specialize(N=256)})</span>
 <span class="s2">    # NVRTC can initialize CUDA; use the CPU-only nvcc subprocess instead.</span>
 <span class="s2">    key = "TVM_CUDA_COMPILE_MODE"</span>
 <span class="s2">    previous = os.environ.get(key)</span>
 <span class="s2">    os.environ[key] = "nvcc"</span>
 <span class="s2">    try:</span>
-<span class="s2">        with target:</span>
-<span class="s2">            compiled = tvm.compile(module, target=target, tir_pipeline="tirx")</span>
+<span class="s2">        compiled = tvm_tirx.compile(module, target=target, pipeline="tirx")</span>
 <span class="s2">        compiled.export_library("add_one.so")</span>
 <span class="s2">    finally:</span>
 <span class="s2">        if previous is None:</span>
@@ -488,7 +486,7 @@ abridged here and the latency depending on your GPU:</p>
 </pre></div>
 </div>
 <p>Inside <code class="docutils literal notranslate"><span class="pre">compile_kernel</span></code>, <code class="docutils literal notranslate"><span class="pre">add_one.specialize(N=256)</span></code> supplies the kernel’s
-compile-time size. <code class="docutils literal notranslate"><span class="pre">tvm.compile</span></code> uses an explicit CUDA target architecture and
+compile-time size. <code class="docutils literal notranslate"><span class="pre">tvm_tirx.compile</span></code> uses an explicit CUDA target architecture and
 the <code class="docutils literal notranslate"><span class="pre">nvcc</span></code> subprocess backend, so compilation does not initialize CUDA in the
 worker. It exports the compiled library as
 <code class="docutils literal notranslate"><span class="pre">add_one.so</span></code> in the request’s workspace and returns the executable together
@@ -727,7 +725,7 @@ They run the tool on the server and retrieve its reports for you.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=b20ae422"></script>
+</div><script src="../_static/documentation_options.js?v=1b82d334"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
