@@ -117,7 +117,7 @@ the CUDA toolkit and a compatible C++ compiler on that machine. Add TVM FFI
 and its C++ build dependencies to the active client environment:
 
 ```bash
-python -m pip install 'apache-tvm-ffi[cpp]>=0.1.14.post0'
+python -m pip install 'apache-tvm-ffi[cpp]==0.1.16'
 ```
 
 These additional dependencies are needed only when compiling locally. The
