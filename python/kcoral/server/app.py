@@ -143,6 +143,7 @@ def create_app(
                 events=events,
                 sandbox=app.state.sandbox,
                 sandbox_readonly_paths=tuple(config.sandbox_readonly_paths),
+                gpu_lock_dir=config.gpu_lock_dir,
             )
         except BaseException as exc:
             events.emit(

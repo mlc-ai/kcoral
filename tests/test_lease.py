@@ -4,11 +4,13 @@ Waiter threads are daemons, so a broken handoff fails outright rather than
 stalling the suite on threads that will never be granted anything.
 """
 
+import fcntl
+import os
 import threading
 import time
 from dataclasses import dataclass
 
-from kcoral.runtime.lease import GPULeases
+from kcoral.runtime.lease import GPULeases, GPUUnavailable, HostGPULocks
 from kcoral.runtime.pool import IdleWorkers
 
 
@@ -167,3 +169,149 @@ def test_only_one_replacement_enters_lease_fifo_while_requests_progress():
     assert order == ["init0", "request", "init1", "init2"]
     assert leases.depth(0) == 0
     assert not leases._initializers[0]
+
+
+# Two GPULeases on one lock directory stand in for two servers on one host:
+# flock locks belong to the open file, so they exclude each other in one process.
+
+
+def server(directory, gpus=(0,)):
+    return GPULeases(list(gpus), HostGPULocks(directory, {gpu: f"GPU-{gpu}" for gpu in gpus}))
+
+
+def held(directory, gpu, kind="lock"):
+    """Whether a third open file is refused the lock, i.e. some server holds it."""
+    fd = os.open(directory / f"kcoral-gpu-GPU-{gpu}.{kind}", os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+    return False
+
+
+def acquire_in_thread(leases, gpu, name):
+    granted = threading.Event()
+    threading.Thread(target=lambda: (leases.acquire(gpu, name), granted.set()), daemon=True).start()
+    return granted
+
+
+def test_servers_sharing_a_lock_dir_never_hold_a_gpu_at_once(tmp_path):
+    a, b = server(tmp_path), server(tmp_path)
+    a.acquire(0, "a")
+    assert held(tmp_path, 0)
+    b_granted = acquire_in_thread(b, 0, "b")
+    until(lambda: held(tmp_path, 0, "wait"))  # b has its local grant and waits for a
+    assert not b_granted.is_set()
+    a.release(0, "a")
+    until(b_granted.is_set)
+    assert held(tmp_path, 0)
+
+
+def test_a_waiting_server_goes_before_the_releasing_servers_next_request(tmp_path):
+    """flock wakes waiters in no order, so without the turnstile a server could
+    hand the GPU to its own next request every time and starve its peer."""
+    a, b = server(tmp_path), server(tmp_path)
+    a.acquire(0, "a1")
+    a2_granted = acquire_in_thread(a, 0, "a2")
+    until(lambda: a.depth(0) == 2)
+    b_granted = acquire_in_thread(b, 0, "b")
+    until(lambda: held(tmp_path, 0, "wait"))
+    a.release(0, "a1")
+    until(b_granted.is_set)
+    assert not a2_granted.is_set()
+    b.release(0, "b")
+    until(a2_granted.is_set)
+
+
+def test_the_host_lock_is_released_before_the_next_local_holder_is_granted():
+    """The next holder locks through the same open file, which is a no-op while
+    the previous one still holds it; unlocking afterwards would leave it bare."""
+    holder_at_unlock = []
+
+    class Recorder:
+        def acquire(self, gpu_ids, stop):
+            return True
+
+        def unlock(self, gpu):
+            holder_at_unlock.append(leases._holder[gpu])
+
+    leases = GPULeases([0], Recorder())
+    leases.acquire(0, "first")
+    second = acquire_in_thread(leases, 0, "second")
+    until(lambda: leases.depth(0) == 2)
+    leases.release(0, "first")
+    until(second.is_set)
+    assert holder_at_unlock == [None]
+
+
+def test_a_waiting_set_never_sits_on_part_of_the_set(tmp_path):
+    a, b = server(tmp_path, (0, 1)), server(tmp_path, (0, 1))
+    a.acquire(1, "a")
+    result = []
+    threading.Thread(target=lambda: result.append(b.acquire_count(2, "b")), daemon=True).start()
+    until(lambda: held(tmp_path, 1, "wait"))
+    until(lambda: not held(tmp_path, 0))  # free between b's attempts
+    a.release(1, "a")
+    until(lambda: result)
+    assert result[0][0] == (0, 1)
+    assert held(tmp_path, 0) and held(tmp_path, 1)
+
+
+def test_cancelling_while_another_server_holds_the_gpu_returns_the_local_grant(tmp_path):
+    a, b = server(tmp_path), server(tmp_path)
+    a.acquire(0, "a")
+    cancelled, result = threading.Event(), []
+    threading.Thread(
+        target=lambda: result.append(b.acquire_count(1, "b", cancelled=cancelled)), daemon=True
+    ).start()
+    until(lambda: held(tmp_path, 0, "wait"))
+    cancelled.set()
+    until(lambda: result)
+    assert result == [None]
+    assert b.depth(0) == 0
+
+
+def test_shutdown_ends_a_wait_for_another_server(tmp_path):
+    """A peer can hold a lock until it exits, so a draining server must not wait."""
+    a, b = server(tmp_path), server(tmp_path)
+    a.acquire(0, "a")
+    errors = []
+    thread = threading.Thread(target=lambda: errors.append(_raises(b.acquire, 0, "b")), daemon=True)
+    thread.start()
+    until(lambda: held(tmp_path, 0, "wait"))
+    b._host.closing.set()
+    thread.join(2)
+    assert errors == [GPUUnavailable]
+    assert b.depth(0) == 0
+
+
+def _raises(fn, *args):
+    try:
+        fn(*args)
+    except Exception as exc:
+        return type(exc)
+
+
+def test_a_quarantined_gpu_keeps_other_servers_out(tmp_path):
+    a = server(tmp_path)
+    a.acquire(0, "a")
+    a.quarantine((0,))
+    a.release(0, "a")
+    assert held(tmp_path, 0)
+
+
+def test_a_lock_file_deleted_under_a_server_is_reopened(tmp_path):
+    """systemd-logind's RemoveIPC deletes a user's /dev/shm files at logout; a
+    server still on the old file would no longer exclude the others."""
+    a = server(tmp_path)
+    for path in tmp_path.iterdir():
+        path.unlink()
+    b = server(tmp_path)
+    a.acquire(0, "a")
+    b_granted = acquire_in_thread(b, 0, "b")
+    until(lambda: held(tmp_path, 0, "wait"))
+    assert not b_granted.is_set()
+    a.release(0, "a")
+    until(b_granted.is_set)
