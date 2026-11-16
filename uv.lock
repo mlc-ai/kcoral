@@ -114,7 +114,7 @@ wheels = [
 
 [[package]]
 name = "apache-tvm-tirx"
-version = "0.1.0rc2"
+version = "0.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "apache-tvm-ffi" },
@@ -125,11 +125,11 @@ dependencies = [
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/97/59/3b4714c1d7c43f681ece1ba912015a3f16d7f6d31cac25c45d5c10cfb2d2/apache_tvm_tirx-0.1.0rc2-py3-none-macosx_14_0_arm64.whl", hash = "sha256:0617433e845b2132258d3f599d9a1195118ab85cbc5ba2c53e4bb98ccb36a549", size = 36338064, upload-time = "2026-11-11T20:47:08.768Z" },
-    { url = "https://files.pythonhosted.org/packages/bb/62/f185a59e86c5adc37f74c610590a47cb5de2ccb5cf4e928afe7712ee7b5a/apache_tvm_tirx-0.1.0rc2-py3-none-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:1a64b6944d25b2c158e481f3414475f32df6f300d365e3ab5be49741b5cd85be", size = 42143805, upload-time = "2026-11-11T20:47:12.777Z" },
-    { url = "https://files.pythonhosted.org/packages/7e/16/a9bf6746b7ff022d00e344bd78275a025fab0675b068abc1a81feb0eca9e/apache_tvm_tirx-0.1.0rc2-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:62273d1cac80fc52bab31dc4a6798dcefc45423bea50ff9699b16a500e989d2c", size = 45962656, upload-time = "2026-11-11T20:47:16.336Z" },
-    { url = "https://files.pythonhosted.org/packages/6f/bc/57b0a85dbae8acaf9ef2883e892c3164a270286de63eddc3e0c73979a5e7/apache_tvm_tirx-0.1.0rc2-py3-none-win_amd64.whl", hash = "sha256:60afe74c7530c0f74b3baca251736d1fda1989aadbdcf7490cfa5d0acc6a1848", size = 31607319, upload-time = "2026-11-11T20:47:19.499Z" },
-    { url = "https://files.pythonhosted.org/packages/77/7f/c495b34a073ec3f19e53a08dcf02ec707f0e0b43972b0118279e08524ae8/apache_tvm_tirx-0.1.0rc2-py3-none-win_arm64.whl", hash = "sha256:ed4c497eca1cdda6a1eeba60375db50512981fc208fb3a867bb683c5753385fc", size = 30959216, upload-time = "2026-11-11T20:47:22.443Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/41/a00297ca320f53beca3a298628aa72af96a04a4ed1834a5199df422c1edd/apache_tvm_tirx-0.1.0-py3-none-macosx_14_0_arm64.whl", hash = "sha256:a4823552535bc04d1951234b96a3f7e7c1abc1491f18d0d5ad0532d4956794dc", size = 36343947, upload-time = "2026-11-13T19:58:51.255Z" },
+    { url = "https://files.pythonhosted.org/packages/86/2e/5473804e17ebd1903015342fa67712b08b7667135c5b4c924a443601e10a/apache_tvm_tirx-0.1.0-py3-none-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:acab18a927a70a5ec1dc011b585346380565ed703e77a9bb735f9adb70c5a278", size = 42149592, upload-time = "2026-11-13T19:58:54.556Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/0a/4374e43254aa5551823369bca389c0de306cbcafeab2688471663745ce71/apache_tvm_tirx-0.1.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a21a3f48a6839af317dfe999af85d8883def635fbdfc9ef56ee5a284a9e1c95c", size = 45968180, upload-time = "2026-11-13T19:58:57.303Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/da/09a4d5264111bb45973f05dfca5ea6e7d25de17272eaa6f62e3014958aaa/apache_tvm_tirx-0.1.0-py3-none-win_amd64.whl", hash = "sha256:2960edfbe2355b041fb91d9e6cdc7fc8235677e1a33e80228bdfc56371db68e6", size = 31613110, upload-time = "2026-11-13T19:59:00.181Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/05/b71909b26e316a61ad3ad00d40bb629d5fdf601b5765a2d52319a42c67ef/apache_tvm_tirx-0.1.0-py3-none-win_arm64.whl", hash = "sha256:e45ac720604d759b97e57ac9c90c68ca0db947fa2d76526ca48b8b38d36c3c71", size = 30965111, upload-time = "2026-11-13T19:59:02.8Z" },
 ]
 
 [[package]]
@@ -1068,7 +1068,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "apache-tvm-ffi", extras = ["cpp"], marker = "extra == 'server'", specifier = "==0.1.16" },
-    { name = "apache-tvm-tirx", marker = "extra == 'server'", specifier = "==0.1.0rc2" },
+    { name = "apache-tvm-tirx", marker = "extra == 'server'", specifier = "==0.1.0" },
     { name = "cupti-python", marker = "extra == 'server'", specifier = ">=13.0.1" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.110" },
     { name = "flashinfer-python", marker = "extra == 'server'", specifier = ">=0.6.17" },
