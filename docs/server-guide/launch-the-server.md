@@ -219,11 +219,21 @@ worker exclusive access to its GPU while it executes or measures GPU work.
 | `--worker-termination-grace-seconds` | `5` | — | Seconds between SIGTERM and SIGKILL when stopping a failed worker |
 | `--sandbox` | `bubblewrap` | — | Filesystem isolation; `none` disables it |
 | `--sandbox-readonly-path` | No additional paths | — | Additional read-only dependency path; repeatable |
+| `--gpu-lock-dir` | `/tmp` | — | Per-GPU lock files shared by every server on the host; empty disables |
 
 `--gpus` takes comma-separated physical device numbers such as `0,1`. Workers
 select their devices from this option, so setting `CUDA_VISIBLE_DEVICES` on the
 front-end does not restrict the server. All selected GPUs must report the same
 target architecture. CPU mode ignores `--gpus` and uses `--num-workers` instead.
+
+Leases are per server. To keep several servers on one machine off the same GPU
+at once, each server also holds a lock file per GPU, named by GPU UUID, in
+`--gpu-lock-dir`. Every server on the host must use the same local directory;
+containers need it mounted from the host. Avoid `/dev/shm`: systemd's
+`RemoveIPC` empties it when a user logs out, even while their server runs. Time
+spent waiting for another server is reported as `lease_wait_ms`, or as the next
+request's `queue_ms` when it waits for a replacement worker. Workers starting up
+or shutting down do not wait for the lock yet.
 
 The default replaces a worker after each request, giving the next request a
 fresh process and GPU context. Reusing workers can reduce replacement overhead,

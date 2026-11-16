@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from kcoral.runtime.lease import GPULeases, GPUUnavailable, NoopLeases, Ticket
+from kcoral.runtime.lease import GPULeases, GPUUnavailable, HostGPULocks, NoopLeases, Ticket
 from kcoral.runtime.worker import (
     Worker,
     WorkerCleanupError,
@@ -33,6 +33,7 @@ from kcoral.runtime.worker import (
     WorkerTimeout,
 )
 from kcoral.server.events import EventLogger
+from kcoral.support import cuda as nvml
 
 
 class IdleWorkers:
@@ -142,6 +143,7 @@ class WorkerPool:
         events: EventLogger | None = None,
         sandbox: str = "bubblewrap",
         sandbox_readonly_paths: tuple[Path, ...] = (),
+        gpu_lock_dir: Path | None = None,
     ) -> None:
         if max_requests_per_worker < 0:
             raise ValueError("max_requests_per_worker must be non-negative")
@@ -171,6 +173,16 @@ class WorkerPool:
         self._shutdown_done = False
         self._workers = []
         self._transient_workers: set[Worker] = set()
+        self._host_locks = None
+        if gpu_lock_dir is not None and cpu_workers is None:
+            # Named by UUID: an index would name different cards in different containers.
+            uuids = {gpu: nvml.device_uuid(gpu) for gpu in gpus}
+            if unnamed := [gpu for gpu, uuid in uuids.items() if uuid is None]:
+                raise RuntimeError(
+                    f"NVML cannot name GPUs {unnamed} for host GPU locks; "
+                    "give containers the 'utility' driver capability or set --gpu-lock-dir ''"
+                )
+            self._host_locks = HostGPULocks(gpu_lock_dir, uuids)
         try:
             for device, index in devices:
                 self._workers.append(
@@ -189,10 +201,14 @@ class WorkerPool:
         except BaseException:
             for worker in self._workers:
                 worker.close()
+            if self._host_locks is not None:
+                self._host_locks.close()
             raise
         self._gpus = list(dict.fromkeys(gpus))
         self._idle = IdleWorkers(self._workers)
-        self._leases = NoopLeases() if cpu_workers is not None else GPULeases(self._gpus)
+        self._leases = (
+            NoopLeases() if cpu_workers is not None else GPULeases(self._gpus, self._host_locks)
+        )
         self._replacing: dict[threading.Thread, Worker] = {}
         self._replacing_lock = threading.Lock()  # so shutdown can copy it mid-flight
         self._require_one_target()
@@ -476,6 +492,8 @@ class WorkerPool:
                 return
             self._closing.set()
             self._idle.close()
+            if self._host_locks is not None:
+                self._host_locks.closing.set()
             for worker in [*self._workers, *self._transient_workers]:
                 worker.begin_shutdown()
             self._events.emit("shutdown_started", remaining=self._active)
@@ -497,5 +515,9 @@ class WorkerPool:
             for worker in list(self._transient_workers):
                 worker.close()
                 self._transient_workers.remove(worker)
+            if self._host_locks is not None:
+                # Last: with no request, replacement or worker left, nothing can
+                # still be waiting on a descriptor this closes.
+                self._host_locks.close()
             self._shutdown_done = True
             self._events.emit("shutdown_complete")
