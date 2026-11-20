@@ -129,6 +129,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="additional runtime dependency visible read-only to isolated workers; repeatable",
     )
+    parser.add_argument(
+        "--lease-policy",
+        choices=("fifo", "fair"),
+        default=_DEFAULTS.lease_policy,
+        help="who gets a GPU next: fifo by arrival, or fair turns between clients (default: fifo)",
+    )
     parser.add_argument("--max-request-bytes", type=int, default=_DEFAULTS.max_request_bytes)
     parser.add_argument("--max-response-bytes", type=int, default=_DEFAULTS.max_response_bytes)
     parser.add_argument(
@@ -181,6 +187,7 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         max_requests_per_worker=args.max_requests_per_worker,
         sandbox=args.sandbox,
         sandbox_readonly_paths=args.sandbox_readonly_path,
+        lease_policy=args.lease_policy,
         worker_termination_grace_seconds=args.worker_termination_grace_seconds,
         max_request_bytes=args.max_request_bytes,
         max_response_bytes=args.max_response_bytes,

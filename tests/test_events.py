@@ -95,6 +95,43 @@ def test_request_trace_runs_arrival_to_worker_to_outcome(tmp_path):
     assert finished["queue_ms"] >= 0 and finished["elapsed_ms"] >= 0
 
 
+def _post_as(client, headers):
+    return client.post(
+        "/execute",
+        files={"program": (None, json.dumps(STRUCTURAL_PROGRAM), "application/json")},
+        headers=headers,
+    )
+
+
+def _granted_clients(client):
+    """Record the client of every request lease the server's pool grants."""
+    leases = client.app.state.pool._leases
+    acquire, granted = leases.acquire, []
+
+    def recording(gpu_id, holder, *, cancelled=None, maintenance=False):
+        if not maintenance:
+            granted.append(holder.client)
+        return acquire(gpu_id, holder, cancelled=cancelled, maintenance=maintenance)
+
+    leases.acquire = recording
+    return granted
+
+
+def test_a_named_client_reaches_the_lease(tmp_path):
+    with _make_client(tmp_path, lease_policy="fair") as client:
+        granted = _granted_clients(client)
+        for headers in ({"X-KCoral-Client": "tirx-rl"}, {}, {"X-KCoral-Client": "bad name"}):
+            assert _post_as(client, headers).status_code == 200
+    received = _named(_read_events(tmp_path), "request_received")
+    assert [event["client_name"] for event in received] == ["tirx-rl", None, None]
+    assert set(granted) <= {"tirx-rl", None} and granted[0] == "tirx-rl"
+
+
+def test_invalid_lease_policy_is_rejected():
+    with pytest.raises(ValueError, match="lease_policy"):
+        create_app(ServerConfig(lease_policy="lottery"), runtime_factory=fake_runtime_factory)
+
+
 def test_accepted_record_describes_the_workload(tmp_path):
     program = {
         "instructions": [

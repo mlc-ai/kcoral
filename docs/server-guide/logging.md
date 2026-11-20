@@ -34,7 +34,7 @@ A typical request produces four events:
 
 | Event | What it tells you |
 | --- | --- |
-| `request_received` | The request arrived; includes `request_id`, client address, and declared content length |
+| `request_received` | The request arrived; includes `request_id`, client address, `client_name` when the request names a client, and declared content length |
 | `request_accepted` | The program passed validation; includes the timeout, request size, instruction and upload counts, and saved program filename when available |
 | `request_routed` | A worker was assigned; includes `worker_id`, `gpu_id`, `generation`, `pid`, and `queue_ms` |
 | `request_finished` | The request ended; includes the HTTP status, `finish_reason`, and available execution or error details |

@@ -8,6 +8,8 @@ import threading
 import time
 from dataclasses import dataclass
 
+import pytest
+
 from kcoral.runtime.lease import GPULeases
 from kcoral.runtime.pool import IdleWorkers
 
@@ -27,6 +29,7 @@ class FakeWorker:
     gpu_id: int
     name: str
     request_id: str | None = None
+    client: str | None = None
 
 
 def test_the_gpu_goes_to_waiters_in_arrival_order():
@@ -167,3 +170,93 @@ def test_only_one_replacement_enters_lease_fifo_while_requests_progress():
     assert order == ["init0", "request", "init1", "init2"]
     assert leases.depth(0) == 0
     assert not leases._initializers[0]
+
+
+def grant_order(leases, holder, waiters, maintenance=()):
+    """Queue ``waiters`` behind ``holder`` one at a time, release, and return the
+    order the GPU went round in. Each waiter hands it back as soon as it has it."""
+    leases.acquire(0, holder)
+    granted: list[str] = []
+
+    def wait_for_it(waiter):
+        leases.acquire(0, waiter, maintenance=waiter.name in maintenance)
+        granted.append(waiter.name)
+        leases.release(0, waiter)
+
+    threads = []
+    for position, waiter in enumerate(waiters, start=2):
+        thread = threading.Thread(target=wait_for_it, args=(waiter,), daemon=True)
+        thread.start()
+        until(lambda p=position: leases.depth(0) == p)
+        threads.append(thread)
+    leases.release(0, holder)
+    for thread in threads:
+        thread.join(timeout=3)
+        assert not thread.is_alive()
+    return granted
+
+
+def queue_of(*names):
+    """Waiters named ``<client><n>``."""
+    return [FakeWorker(0, name, client=name[0]) for name in names]
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected"),
+    [
+        ("fifo", ["a1", "a2", "b1", "c1", "d1", "b2"]),
+        # d was never served, then c, b and a were served last in that order;
+        # each client's own requests stay in arrival order.
+        ("fair", ["d1", "c1", "b1", "a1", "b2", "a2"]),
+    ],
+)
+def test_fair_policy_takes_turns_between_clients(policy, expected):
+    """Turns follow the last grant each client received, not when it queued, so
+    one client's backlog no longer queues another client behind all of it."""
+    leases = GPULeases([0], policy)
+    for name in ("c0", "b0", "a0"):
+        worker = FakeWorker(0, name, client=name[0])
+        leases.acquire(0, worker)
+        leases.release(0, worker)
+    holder = FakeWorker(0, "holder", client="a")
+    waiters = queue_of("a1", "a2", "b1", "c1", "d1", "b2")
+    assert grant_order(leases, holder, waiters) == expected
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected"),
+    [("fifo", ["a1", "b1", "respawn"]), ("fair", ["respawn", "b1", "a1"])],
+)
+def test_fair_policy_serves_worker_maintenance_first(policy, expected):
+    """A replacement waiting behind requests would leave the pool a worker short
+    for longer; it does not count as any client's turn either."""
+    leases = GPULeases([0], policy)
+    holder = FakeWorker(0, "holder", client="a")
+    waiters = [*queue_of("a1", "b1"), FakeWorker(0, "respawn", client="a")]
+    assert grant_order(leases, holder, waiters, maintenance={"respawn"}) == expected
+
+
+def test_fair_policy_keeps_a_waiting_gpu_set_whole():
+    """Turn order changes who reserves first, not that a set waits whole."""
+    leases = GPULeases([0, 1], "fair")
+    busy = FakeWorker(0, "busy", client="a")
+    leases.acquire(0, busy)
+    big = FakeWorker(0, "big", client="b")
+    got: list[tuple[int, ...]] = []
+    thread = threading.Thread(
+        target=lambda: got.append(leases.acquire_count(2, big)[0]), daemon=True
+    )
+    thread.start()
+    until(lambda: leases.depth(1) == 1)
+    small = FakeWorker(1, "small", client="a")
+    granted = threading.Event()
+    waiter = threading.Thread(target=lambda: (leases.acquire(1, small), granted.set()), daemon=True)
+    waiter.start()
+    until(lambda: leases.depth(1) == 2)
+    assert not granted.wait(0.1), "a later client's turn took a device the set reserved"
+    leases.release(0, busy)
+    thread.join(timeout=3)
+    assert got == [(0, 1)]
+    leases.release_many((0, 1), big)
+    assert granted.wait(2.0)
+    leases.release(1, small)
