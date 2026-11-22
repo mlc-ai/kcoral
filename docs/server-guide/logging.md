@@ -57,6 +57,7 @@ The `finish_reason` explains the outcome:
 | `completed` | The program ran to completion | `INFO` |
 | `program_failed` | An instruction failed; error fields describe the failure | `INFO` |
 | `timeout` | The request exceeded its execution budget | `WARNING` |
+| `cancelled` | The client disconnected first; `http_status` is `499` | `INFO` |
 | `crashed` | The worker crashed while handling the request | `ERROR` |
 | `no_worker` | No worker became available, or the pool was shutting down; nothing ran | `WARNING` |
 | `rejected` | The request was rejected before execution | `WARNING` |
@@ -90,6 +91,7 @@ is being replaced:
 | `poisoned_context` | Runtime cleanup failed | `WARNING` |
 | `sandbox_cleanup` | Resources survived the request or workspace cleanup failed | `WARNING` |
 | `timeout` | The worker exceeded the execution timeout | `WARNING` |
+| `cancelled` | The client disconnected while the worker ran its request | `INFO` |
 | `crashed` | The worker crashed or could not execute a program | `ERROR` |
 
 A replacement produces `worker_ready` once initialized. If replacement fails,

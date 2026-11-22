@@ -53,9 +53,11 @@ RETIRE_REASON_LEVEL = {
     "request_limit": "INFO",
     "poisoned_context": "WARNING",
     "timeout": "WARNING",
+    "cancelled": "INFO",
     "crashed": "ERROR",
     "sandbox_cleanup": "WARNING",
 }
+_CANCEL_POLL_SECONDS = 0.1
 
 
 @dataclass
@@ -336,6 +338,10 @@ class WorkerCrashed(Exception):
     lease_held_ms: float = 0.0
 
 
+class RequestCancelled(Exception):
+    """The request's client went away; any worker it reached was killed and replaced."""
+
+
 class WorkerTimeout(Exception):
     worker_id: str | None = None
     gpu_id: int | None = None
@@ -596,10 +602,17 @@ class Worker:
             raise EOFError(f"worker supervisor requested cleanup: {status}")
         return False
 
-    def run(self, program, timeout: float, leases: GPULeases | NoopLeases) -> WorkerResult:
-        """Run a program, servicing its lease requests; kill+respawn on timeout or
-        crash, then re-raise. A poisoned context is respawned after preserving its
-        outcome. Returns the execution outcome, lease timings, and retirement reason.
+    def run(
+        self,
+        program,
+        timeout: float,
+        leases: GPULeases | NoopLeases,
+        cancelled: threading.Event | None = None,
+    ) -> WorkerResult:
+        """Run a program, servicing its lease requests; kill+respawn on timeout,
+        crash or ``cancelled``, then raise. A poisoned context is respawned after
+        preserving its outcome. Returns the execution outcome, lease timings, and
+        retirement reason.
 
         The parent owns the workspace so it is removed even when the child is
         killed before its own cleanup handlers can run.
@@ -615,7 +628,9 @@ class Worker:
             except OSError as exc:
                 self._abandon_and_respawn(leases, "sandbox_cleanup")
                 raise WorkerCrashed(f"cannot prepare sandbox workspace: {exc}") from exc
-            result = self._run_in_workspace(program, timeout, leases, sandboxing.WORKSPACE)
+            result = self._run_in_workspace(
+                program, timeout, leases, sandboxing.WORKSPACE, cancelled
+            )
             if result.retire_reason is None:
                 try:
                     sandbox.prepare()
@@ -626,7 +641,7 @@ class Worker:
                     result.retire_reason = "sandbox_cleanup"
             return result
         with tempfile.TemporaryDirectory(prefix="kcoral-program-") as workspace_dir:
-            return self._run_in_workspace(program, timeout, leases, workspace_dir)
+            return self._run_in_workspace(program, timeout, leases, workspace_dir, cancelled)
 
     def _run_in_workspace(
         self,
@@ -634,6 +649,7 @@ class Worker:
         timeout: float,
         leases: GPULeases | NoopLeases,
         workspace_dir: str,
+        cancelled: threading.Event | None = None,
     ) -> WorkerResult:
         """Worker protocol loop for a program whose workspace already exists.
 
@@ -654,7 +670,12 @@ class Worker:
                     _send_handle(self._conn, fd)
             while True:
                 waited_from = time.monotonic()
-                if not self._poll_response(remaining):  # no answer by the deadline -> hung
+                answered = self._await_response(remaining, cancelled)
+                if not answered and cancelled is not None and cancelled.is_set():
+                    # A message that beat the cancel is read first; if it is the
+                    # outcome, the worker finished and need not be replaced.
+                    raise self._cancel(leases)
+                if not answered:  # no answer by the deadline -> hung
                     timed_out = WorkerTimeout(
                         f"program exceeded {timeout}s in {self._description()}"
                     )
@@ -729,7 +750,10 @@ class Worker:
                     return WorkerResult(message, lease_wait_ms, lease_held_ms)
                 if message["__lease__"] == "acquire":
                     # The child is blocked until we answer, so this may wait freely.
-                    lease_wait_ms += leases.acquire(self._lease_key, self)
+                    waited_ms = leases.acquire(self._lease_key, self, cancelled=cancelled)
+                    if waited_ms is None:
+                        raise self._cancel(leases)
+                    lease_wait_ms += waited_ms
                     held_since = time.monotonic()
                     self._conn.send({"__lease__": "granted"})
                 else:
@@ -762,6 +786,23 @@ class Worker:
             )
             self._abandon_and_respawn(leases, "crashed")
             raise crash from exc
+
+    def _await_response(self, timeout: float, cancelled: threading.Event | None) -> bool:
+        """:meth:`_poll_response` that also returns False once ``cancelled`` is set."""
+        if cancelled is None:
+            return self._poll_response(timeout)
+        deadline = time.monotonic() + timeout
+        while not cancelled.is_set():
+            remaining = deadline - time.monotonic()
+            if self._poll_response(min(_CANCEL_POLL_SECONDS, max(0.0, remaining))):
+                return True
+            if remaining <= 0:
+                return False
+        return False
+
+    def _cancel(self, leases: GPULeases | NoopLeases) -> RequestCancelled:
+        self._abandon_and_respawn(leases, "cancelled")
+        return RequestCancelled(f"request cancelled in {self._description()}")
 
     def _output_tail(self) -> str:
         """What the worker had printed when it stopped answering. Its own copy

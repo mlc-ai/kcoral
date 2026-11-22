@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import threading
 import traceback
 import uuid
 import warnings
@@ -30,7 +31,12 @@ from kcoral.protocol import (
     parse_request,
 )
 from kcoral.runtime.pool import PoolBusy, SubmitOutcome, WorkerPool
-from kcoral.runtime.worker import WorkerCleanupError, WorkerCrashed, WorkerTimeout
+from kcoral.runtime.worker import (
+    RequestCancelled,
+    WorkerCleanupError,
+    WorkerCrashed,
+    WorkerTimeout,
+)
 from kcoral.schemas import Program, ProgramOutcome
 from kcoral.server.cache import ByteCache, DiskFileCache, _CacheMiss, resolve_blobs
 from kcoral.server.events import EventLogger, _keep_program, _program_shape
@@ -44,6 +50,7 @@ _FINISH_REASON_LEVEL = {
     "completed": "INFO",
     "program_failed": "INFO",
     "timeout": "WARNING",
+    "cancelled": "INFO",
     "crashed": "ERROR",
     "no_worker": "WARNING",
     "rejected": "WARNING",
@@ -368,16 +375,34 @@ def create_app(
         # with a FAILED program; these carry its cause onto that record.
         crash_exitcode: int | None = None
         crash_tail = ""
-        loop = asyncio.get_running_loop()
+        # Only the connection that sent a request can cancel it, by closing.
+        # Its result has nowhere else to go, so the work stops with it.
+        cancelled = threading.Event()
+
+        def submit() -> SubmitOutcome:
+            try:
+                return request.app.state.pool.submit(
+                    program,
+                    timeout,
+                    config.worker_wait_timeout_seconds,
+                    request_id,
+                    cancelled,
+                )
+            finally:
+                # Unpin when the worker is done with the blobs, not when a
+                # cancelled handler stops waiting for it.
+                cache.unpin(cache_keys)
+
+        watcher = asyncio.create_task(_cancel_on_disconnect(request.receive, cancelled))
         try:
-            outcome = await loop.run_in_executor(
-                None,
-                request.app.state.pool.submit,
-                program,
-                timeout,
-                config.worker_wait_timeout_seconds,
-                request_id,
-            )
+            outcome = await asyncio.get_running_loop().run_in_executor(None, submit)
+        except asyncio.CancelledError:  # the Router relayed the client's disconnect
+            cancelled.set()
+            finished(499, finish_reason="cancelled")
+            raise
+        except RequestCancelled:
+            finished(499, finish_reason="cancelled")
+            return _error_response(499, "cancelled", "client disconnected", request_id)
         except PoolBusy as exc:
             finished(503, finish_reason="no_worker", queue_ms=exc.queue_ms)
             response = _error_response(503, "busy", "server saturated", request_id)
@@ -443,7 +468,7 @@ def create_app(
             )
             crash_exitcode, crash_tail = exc.exitcode, exc.output_tail
         finally:
-            cache.unpin(cache_keys)
+            watcher.cancel()
 
         execution = outcome.execution
         if not isinstance(execution, ProgramOutcome):
@@ -537,6 +562,12 @@ def create_app(
         return StreamingResponse(_stream(chunks), status_code=200, headers=response_headers)
 
     return app
+
+
+async def _cancel_on_disconnect(receive, cancelled: threading.Event) -> None:
+    while (await receive())["type"] != "http.disconnect":
+        pass
+    cancelled.set()
 
 
 async def _stream(chunks: list[bytes]) -> AsyncIterator[bytes]:

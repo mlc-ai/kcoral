@@ -15,6 +15,7 @@ from kcoral.runtime import worker as worker_module
 from kcoral.runtime.lease import GPULeases, GPUUnavailable, NoopLeases
 from kcoral.runtime.pool import PoolBusy, WorkerPool
 from kcoral.runtime.worker import (
+    RequestCancelled,
     Worker,
     WorkerCleanupError,
     WorkerCrashed,
@@ -130,6 +131,13 @@ def test_crash_replaces_worker_and_recovers(pool):
     assert exc_info.value.instruction_index == 2 and exc_info.value.exitcode == 1
     # worker was respawned; the next request succeeds on the fresh worker
     assert pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
+
+
+def wait_until(predicate, timeout=10):
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition did not become true"
+        time.sleep(0.01)
 
 
 def settled(pool):
@@ -573,6 +581,49 @@ def test_killing_a_worker_frees_the_gpu_it_held(shared_gpu_pool):
     assert shared_gpu_pool.submit(successful_program(), timeout=10).execution.status == "COMPLETED"
 
 
+def _cancellable(pool, program, **kwargs):
+    """Submit on a thread; returns the cancel flag and a future for the outcome."""
+    cancelled = threading.Event()
+    executor = ThreadPoolExecutor(1)
+    future = executor.submit(pool.submit, program, 20, cancelled=cancelled, **kwargs)
+    executor.shutdown(wait=False)
+    return cancelled, future
+
+
+def test_cancelling_a_queued_request_leaves_the_busy_worker_alone(pool):
+    generation = pool._workers[0].generation
+    results: dict[str, object] = {}
+    holder = _submit_into(results, "holder", pool, prog(*harness_call("s", "sleep", [1.0])))
+    holder.start()
+    wait_until(lambda: pool.active_requests == 1)
+    cancelled, queued = _cancellable(pool, successful_program(), worker_wait_timeout=30)
+    wait_until(lambda: pool._idle.snapshot()[1] == 1)
+    cancelled.set()
+    with pytest.raises(RequestCancelled):
+        queued.result(timeout=1)
+    assert pool._idle.snapshot()[1] == 0
+    holder.join()
+    assert results["holder"].execution.status == "COMPLETED"
+    assert pool._workers[0].generation == generation
+
+
+def test_cancelling_a_gpu_waiter_leaves_the_gpu_holder_alone(shared_gpu_pool):
+    results: dict[str, object] = {}
+    holder = _submit_into(
+        results, "holder", shared_gpu_pool, prog(*harness_call("s", "sleep", [1.5]))
+    )
+    holder.start()
+    wait_until(lambda: shared_gpu_pool._leases.depth(0) == 1)
+    cancelled, waiter = _cancellable(shared_gpu_pool, successful_program())
+    wait_until(lambda: shared_gpu_pool._leases.depth(0) == 2)
+    cancelled.set()
+    with pytest.raises(RequestCancelled):
+        waiter.result(timeout=10)
+    holder.join()
+    assert results["holder"].execution.status == "COMPLETED"
+    assert shared_gpu_pool.health()["gpus"] == [{"gpu_id": 0, "lease_depth": 0}]
+
+
 def test_poison_replaces_only_the_corresponding_worker(shared_gpu_pool):
     before = [worker._proc.pid for worker in shared_gpu_pool._workers]
     outcome = shared_gpu_pool.submit(prog(*harness_call("bad", "poison", [])), timeout=10)
@@ -594,12 +645,12 @@ class _LeaseRecorder:
     def initialization(self, gpu_id):
         return self._inner.initialization(gpu_id)
 
-    def acquire(self, gpu_id, holder):
+    def acquire(self, gpu_id, holder, *, cancelled=None):
         # Reacquiring ownership does not start a new lease interval.
         with self._inner._lock:
             already_owned = self._inner._holder[gpu_id] is holder
-        waited = self._inner.acquire(gpu_id, holder)
-        if not already_owned:
+        waited = self._inner.acquire(gpu_id, holder, cancelled=cancelled)
+        if not already_owned and waited is not None:
             with self._lock:
                 self.log.append("grant")
         return waited
@@ -714,7 +765,7 @@ def test_parent_waits_for_retiring_process_exit_before_releasing_gpu(tmp_path):
     class Leases:
         held = False
 
-        def acquire(self, gpu_id, holder):
+        def acquire(self, gpu_id, holder, *, cancelled=None):
             self.held = True
             return 0.0
 

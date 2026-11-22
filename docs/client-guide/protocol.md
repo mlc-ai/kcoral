@@ -67,6 +67,15 @@ options. Body-size limits include multipart framing.
 
 See [Response](#response) for HTTP statuses, result fields, and value encodings.
 
+**Cancellation**
+
+Closing the connection before the response arrives cancels the request. A
+request still waiting for a worker or a GPU lease leaves the queue; a running
+program's worker is killed and replaced, as on timeout, which releases its GPU
+leases. Only the connection that sent a request can cancel it, and the result
+of a cancelled request is discarded. Through a [Router](../server-guide/router.md),
+the client's disconnect reaches the node in the same way.
+
 ### GET /health
 
 Read endpoint health, request load, and the compilation environment.

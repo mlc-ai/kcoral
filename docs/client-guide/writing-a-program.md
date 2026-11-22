@@ -120,6 +120,10 @@ Here, `timeout_seconds=30` gives the server a 30-second execution limit, and
 `output_limit_bytes=1024` captures up to 1 KiB each of standard output and
 standard error. The server runs `print(1 + 1)` after `client.execute(print_program, ...)`
 submits the program, rather than when `print_program.upload(...)` adds the instruction.
+To stop a program that runs too long, such as a kernel that hangs, interrupt the
+blocked `client.execute(...)` call, for example with Ctrl+C. That closes the
+connection, and the server kills the request's worker instead of waiting out
+the timeout.
 
 Each submission is independent: the server keeps no program session between
 requests. When a request finishes, its temporary files and values are discarded,
