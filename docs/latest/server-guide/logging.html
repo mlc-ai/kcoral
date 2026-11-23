@@ -408,23 +408,27 @@ worker output in <code class="docutils literal notranslate"><span class="pre">ou
 <td><p>The request exceeded its execution budget</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">WARNING</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">crashed</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">cancelled</span></code></p></td>
+<td><p>The client disconnected first; <code class="docutils literal notranslate"><span class="pre">http_status</span></code> is <code class="docutils literal notranslate"><span class="pre">499</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">INFO</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">crashed</span></code></p></td>
 <td><p>The worker crashed while handling the request</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">ERROR</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">no_worker</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">no_worker</span></code></p></td>
 <td><p>No worker became available, or the pool was shutting down; nothing ran</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">WARNING</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">rejected</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">rejected</span></code></p></td>
 <td><p>The request was rejected before execution</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">WARNING</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">cache_miss</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">cache_miss</span></code></p></td>
 <td><p>Required uploaded content was missing from the cache</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">INFO</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">server_error</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">server_error</span></code></p></td>
 <td><p>The server could not handle the request or produce its response</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">ERROR</span></code></p></td>
 </tr>
@@ -474,7 +478,11 @@ is being replaced:</p>
 <td><p>The worker exceeded the execution timeout</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">WARNING</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">crashed</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">cancelled</span></code></p></td>
+<td><p>The client disconnected while the worker ran its request</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">INFO</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">crashed</span></code></p></td>
 <td><p>The worker crashed or could not execute a program</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">ERROR</span></code></p></td>
 </tr>
@@ -567,7 +575,7 @@ replay it. Use <code class="docutils literal notranslate"><span class="pre">--no
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=92734c54"></script>
+</div><script src="../_static/documentation_options.js?v=c3813722"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

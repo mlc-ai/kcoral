@@ -452,7 +452,11 @@ its results, including the captured output:</p>
 <p>Here, <code class="docutils literal notranslate"><span class="pre">timeout_seconds=30</span></code> gives the server a 30-second execution limit, and
 <code class="docutils literal notranslate"><span class="pre">output_limit_bytes=1024</span></code> captures up to 1 KiB each of standard output and
 standard error. The server runs <code class="docutils literal notranslate"><span class="pre">print(1</span> <span class="pre">+</span> <span class="pre">1)</span></code> after <code class="docutils literal notranslate"><span class="pre">client.execute(print_program,</span> <span class="pre">...)</span></code>
-submits the program, rather than when <code class="docutils literal notranslate"><span class="pre">print_program.upload(...)</span></code> adds the instruction.</p>
+submits the program, rather than when <code class="docutils literal notranslate"><span class="pre">print_program.upload(...)</span></code> adds the instruction.
+To stop a program that runs too long, such as a kernel that hangs, interrupt the
+blocked <code class="docutils literal notranslate"><span class="pre">client.execute(...)</span></code> call, for example with Ctrl+C. That closes the
+connection, and the server kills the request’s worker instead of waiting out
+the timeout.</p>
 <p>Each submission is independent: the server keeps no program session between
 requests. When a request finishes, its temporary files and values are discarded,
 and its registers can no longer be used to access them. You can submit the same
@@ -733,7 +737,7 @@ method signatures or the underlying request and response formats.</p></li>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=92734c54"></script>
+</div><script src="../_static/documentation_options.js?v=c3813722"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
