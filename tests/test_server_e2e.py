@@ -1,10 +1,16 @@
+import asyncio
 import json
 import os
+import socket
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from threading import Event
 
+import httpx
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 from support.programs import harness_instructions, python_instructions
 from support.runtime import fake_runtime_factory
@@ -624,6 +630,68 @@ def test_timeout_and_worker_crash_statuses():
         "instruction_id": "crash",
         "traceback": "",
     }
+
+
+def _wait_until(predicate, timeout=15):
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition did not become true"
+        time.sleep(0.02)
+
+
+@contextmanager
+def _serving(app):
+    """Run ``app`` on a real uvicorn server, which reports client disconnects."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        _wait_until(lambda: server.started, timeout=120)
+        yield f"http://127.0.0.1:{port}/execute"
+    finally:
+        server.should_exit = True
+        thread.join(60)
+
+
+def _post_then_disconnect(url, program, started):
+    async def abandon():
+        async with httpx.AsyncClient() as client:
+            files = {"program": (None, json.dumps(program), "application/json")}
+            request = asyncio.create_task(client.post(url, files=files))
+            await asyncio.to_thread(_wait_until, started)
+            request.cancel()  # leaving the client closes the connection
+
+    asyncio.run(abandon())
+
+
+def _events(app):
+    path = app.state.events.run_dir / "events.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_client_disconnect_kills_the_running_request(tmp_path):
+    app = create_app(
+        ServerConfig(sandbox="none", device="cpu", num_workers=1, log_dir=tmp_path),
+        runtime_factory=fake_runtime_factory,
+    )
+    sleep = {"instructions": harness_instructions("sleep", "sleep", [60])}
+    with _serving(app) as url:
+        pool = app.state.pool
+        generation = pool._workers[0].generation
+        _post_then_disconnect(url, sleep, lambda: pool.active_requests == 1)
+        _wait_until(lambda: pool.active_requests == 0)
+        assert pool._workers[0].generation == generation + 1
+        finished = [e for e in _events(app) if e["event"] == "request_finished"]
+        assert [(e["finish_reason"], e["http_status"]) for e in finished] == [("cancelled", 499)]
+        assert any(
+            e["event"] == "worker_retired" and e["reason"] == "cancelled" for e in _events(app)
+        )
+        quick = json.dumps({"instructions": harness_instructions("x", "structural")})
+        response = httpx.post(url, files={"program": (None, quick, "application/json")})
+        assert response.json()["status"] == "COMPLETED"
 
 
 def test_poisoned_context_returns_runtime_then_next_request_recovers():

@@ -13,7 +13,7 @@ from pathlib import Path
 import grpc
 import httpx
 import pytest
-from support.programs import harness_function
+from support.programs import harness_function, harness_instructions
 from support.runtime import fake_runtime_factory
 
 from kcoral import Client, Program
@@ -371,6 +371,46 @@ async def _restart_during_retry(tmp_path):
         assert attempts[0]["missing_blobs"] == [compute_blob_hash(second)]
         assert attempts[1]["missing_blobs"] == [compute_blob_hash(first)]
         assert len(attempts) == 3
+
+
+def test_client_disconnect_through_the_router_kills_the_running_request(tmp_path):
+    asyncio.run(_disconnect_through_router(tmp_path))
+
+
+async def _disconnect_through_router(tmp_path):
+    async with running_router(tmp_path) as url:
+        async with running_app(url, "cancel", tmp_path / "node") as app:
+            await ready_nodes(url, 1)
+            pool = app.state.pool
+            worker = pool._workers[0]
+            generation = worker.generation
+            sleep = json.dumps({"instructions": harness_instructions("sleep", "sleep", [60])})
+            async with httpx.AsyncClient() as client:
+                request = asyncio.create_task(
+                    client.post(
+                        url + "/execute", files={"program": (None, sleep, "application/json")}
+                    )
+                )
+
+                async def running():
+                    return pool.active_requests == 1
+
+                await wait_until(running)
+                request.cancel()
+
+            async def replaced():
+                return pool.active_requests == 0 and worker.generation == generation + 1
+
+            await wait_until(replaced, timeout=15)
+            events = [
+                json.loads(line)
+                for line in (app.state.events.run_dir / "events.jsonl").read_text().splitlines()
+            ]
+            finished = [e for e in events if e["event"] == "request_finished"]
+            assert [e["finish_reason"] for e in finished] == ["cancelled"]
+            assert any(
+                e["event"] == "worker_retired" and e["reason"] == "cancelled" for e in events
+            )
 
 
 def test_tunnel_shutdown_delivers_the_active_response_before_closing(tmp_path):

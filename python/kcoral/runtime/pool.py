@@ -27,6 +27,7 @@ from pathlib import Path
 
 from kcoral.runtime.lease import GPULeases, GPUUnavailable, NoopLeases, Ticket
 from kcoral.runtime.worker import (
+    RequestCancelled,
     Worker,
     WorkerCleanupError,
     WorkerCrashed,
@@ -54,8 +55,9 @@ class IdleWorkers:
             self._assigned.setdefault(worker.gpu_id, 0)
         self._waiters: deque[Ticket] = deque()  # requests with no worker yet
 
-    def acquire(self, timeout: float) -> Worker | None:
-        """A worker from the least-loaded GPU, or None if none frees up in time."""
+    def acquire(self, timeout: float, cancelled: threading.Event | None = None) -> Worker | None:
+        """A worker from the least-loaded GPU, or None if none frees up in time
+        or ``cancelled`` is set first."""
         with self._lock:
             if self._closed:
                 return None
@@ -66,7 +68,7 @@ class IdleWorkers:
                 return None
             ticket = Ticket()
             self._waiters.append(ticket)
-        if not ticket.event.wait(timeout):
+        if not _wait_unless(ticket.event, timeout, cancelled):
             with self._lock:
                 if ticket.value is None and not self._closed:  # nothing arrived while we timed out
                     self._waiters.remove(ticket)
@@ -104,6 +106,29 @@ class IdleWorkers:
         with self._lock:
             idle = {id(w) for workers in self._idle.values() for w in workers}
             return idle, len(self._waiters)
+
+
+def _wait_unless(event: threading.Event, timeout: float, cancelled: threading.Event | None) -> bool:
+    """``event.wait(timeout)`` that also gives up once ``cancelled`` is set."""
+    if cancelled is None:
+        return event.wait(timeout)
+    deadline = time.monotonic() + timeout
+    while not cancelled.is_set():
+        if event.wait(min(0.1, max(0.0, deadline - time.monotonic()))):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+    return event.is_set()
+
+
+class _EitherEvent:
+    """Read-only ``is_set`` over two events."""
+
+    def __init__(self, first: threading.Event, second: threading.Event | None) -> None:
+        self._events = (first, second) if second is not None else (first,)
+
+    def is_set(self) -> bool:
+        return any(event.is_set() for event in self._events)
 
 
 class MixedTargets(Exception):
@@ -203,7 +228,10 @@ class WorkerPool:
         timeout: float,
         worker_wait_timeout: float = 0.0,
         request_id: str | None = None,
+        cancelled: threading.Event | None = None,
     ) -> SubmitOutcome:
+        """Run ``program`` on a worker; setting ``cancelled`` abandons it at any
+        stage with :class:`RequestCancelled`, killing the worker if it was reached."""
         gpu_count = program.options.get("gpu_count")
         if gpu_count is not None and not 1 <= gpu_count <= min(8, len(self._gpus)):
             raise ValueError("gpu_count exceeds this GPU server's configured capacity")
@@ -211,14 +239,19 @@ class WorkerPool:
             if self._closing.is_set():
                 raise PoolBusy("server is shutting down")
         queue_started = time.monotonic()
-        worker = self._idle.acquire(worker_wait_timeout)
+        worker = self._idle.acquire(worker_wait_timeout, cancelled)
         queue_ms = (time.monotonic() - queue_started) * 1000
         if worker is None:
+            if cancelled is not None and cancelled.is_set():
+                raise RequestCancelled("request cancelled while waiting for a worker")
             raise PoolBusy("all workers busy", queue_ms=queue_ms)
         with self._condition:
             if self._closing.is_set():
                 self._idle.release(worker)
                 raise PoolBusy("server is shutting down", queue_ms=queue_ms)
+            if cancelled is not None and cancelled.is_set():  # granted as it was cancelled
+                self._idle.release(worker)
+                raise RequestCancelled("request cancelled while waiting for a worker")
             self._active += 1
         run_started = time.monotonic()
         retire_reason = None
@@ -229,8 +262,12 @@ class WorkerPool:
         worker.request_id = request_id
         try:
             if gpu_count is not None:
-                allocation = self._leases.acquire_count(gpu_count, slot, cancelled=self._closing)
+                allocation = self._leases.acquire_count(
+                    gpu_count, slot, cancelled=_EitherEvent(self._closing, cancelled)
+                )
                 if allocation is None:
+                    if cancelled is not None and cancelled.is_set():
+                        raise RequestCancelled("request cancelled while waiting for GPUs")
                     raise PoolBusy("server is shutting down", queue_ms)
                 gpu_ids, initial_wait_ms = allocation
                 initialized_at = time.monotonic()
@@ -273,7 +310,7 @@ class WorkerPool:
                 pid=worker.pid,
                 queue_ms=queue_ms,
             )
-            result = worker.run(program, timeout, self._leases)
+            result = worker.run(program, timeout, self._leases, cancelled)
             retire_reason = result.retire_reason
             return SubmitOutcome(
                 result.execution,

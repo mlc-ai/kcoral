@@ -92,7 +92,7 @@ class NoopLeases:
     while every reported lease timing remains zero.
     """
 
-    def acquire(self, gpu_id: None, holder: Worker) -> float:
+    def acquire(self, gpu_id: None, holder: Worker, *, cancelled=None) -> float:
         return 0.0
 
     def release(self, gpu_id: None, holder: Worker) -> None:
@@ -167,14 +167,20 @@ class GPULeases:
                 if pending:
                     pending[0].event.set()
 
-    def acquire(self, gpu_id: int | tuple[int, ...], holder: Worker) -> float:
+    def acquire(
+        self,
+        gpu_id: int | tuple[int, ...],
+        holder: Worker,
+        *,
+        cancelled: threading.Event | None = None,
+    ) -> float | None:
+        """Wait for the device(s); returns the wait in ms, or None once ``cancelled``."""
         devices = (gpu_id,) if isinstance(gpu_id, int) else gpu_id
         with self._lock:
             if all(self._holder[gpu] is holder for gpu in devices):
                 return 0.0
-        result = self._acquire(_LeaseRequest(holder, Ticket(), devices))
-        assert result is not None
-        return result[1]
+        result = self._acquire(_LeaseRequest(holder, Ticket(), devices), cancelled)
+        return None if result is None else result[1]
 
     def acquire_count(
         self, count: int, holder: object, *, cancelled: threading.Event | None = None
