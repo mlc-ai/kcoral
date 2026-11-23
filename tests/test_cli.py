@@ -195,3 +195,9 @@ def test_disk_cache_default_uses_only_absolute_xdg_cache_home(
             monkeypatch.setenv("XDG_CACHE_HOME", xdg_cache_home)
         expected = tmp_path / "home" / ".cache"
     assert ServerConfig().disk_cache_dir == expected / "kcoral" / "files"
+
+
+def test_lease_policy():
+    assert parse([]).lease_policy == "fifo"
+    with pytest.raises(SystemExit):
+        parse(["--lease-policy", "lottery"])

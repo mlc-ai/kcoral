@@ -354,6 +354,7 @@ class Worker:
     """One worker bound to a CPU, one GPU, or a fixed GPU set."""
 
     request_id: str | None = None  # set by the pool while a request is served
+    client: str | None = None  # the request's client, which the fair lease policy groups by
 
     # Identity for the log. ``worker_id`` names a seat on a GPU and outlives the
     # processes that sit in it; ``generation`` and ``pid`` say which one does now.
@@ -845,7 +846,7 @@ class Worker:
             with leases.initialization(self.gpu_id):
                 if getattr(self, "_closing", None) is not None and self._closing.is_set():
                     return
-                leases.acquire(self._lease_key, self)
+                leases.acquire(self._lease_key, self, maintenance=True)
                 try:
                     self._initialize_process()
                 except WorkerCleanupError:
@@ -870,7 +871,7 @@ class Worker:
             self._kill()
             return 0.0, 0.0
         try:
-            wait_ms = leases.acquire(self._lease_key, self)
+            wait_ms = leases.acquire(self._lease_key, self, maintenance=True)
         except GPUUnavailable:
             # A different request may quarantine a device during our CPU phase.
             # No new job may use any part of this tree's allocation while it is

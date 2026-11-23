@@ -195,6 +195,35 @@ other workspaces.
 This feature assumes **trusted programs**. It does not isolate hostile code
 sharing an interpreter or provide GPU memory isolation.
 
+## Share GPUs fairly between clients
+
+By default a GPU's lease goes to waiting workers in arrival order, so one
+client's long holds can queue another client's short requests behind all of
+them. With `--lease-policy fair`, clients take turns: the lease goes to the
+client served least recently, and each client's own requests stay in arrival
+order. A holder is never interrupted, so a waiting client waits for about
+one hold by each other client, and a worker replacement waits for at most the
+current holder.
+
+```bash
+kcoral server --lease-policy fair
+```
+
+```python
+client = kcoral.Client("http://gpu-server:8000", client="kernel-search")
+```
+
+The `client` option sends the `X-KCoral-Client` header. Names have 1-64
+letters, digits, `.`, `-` or `_`. Requests with no valid name share one default
+client and one turn, so `fair` only helps clients that set `Client(client=...)`.
+Names are trusted claims: a client could take extra turns under fresh names,
+so use `fair` only where every client is trusted.
+
+Fairness applies only to GPU leases; waiting for a free worker stays
+first-come. Turns are counted per lease, not per request or GPU time: a request
+that gives up the GPU partway through, such as for a CPU-only phase, waits for
+another turn each time it needs the GPU back.
+
 ## Configuration
 
 The following options configure a standalone server. Use `--help` to display
@@ -219,6 +248,7 @@ worker exclusive access to its GPU while it executes or measures GPU work.
 | `--worker-termination-grace-seconds` | `5` | — | Seconds between SIGTERM and SIGKILL when stopping a failed worker |
 | `--sandbox` | `bubblewrap` | — | Filesystem isolation; `none` disables it |
 | `--sandbox-readonly-path` | No additional paths | — | Additional read-only dependency path; repeatable |
+| `--lease-policy` | `fifo` | — | Lease grant order: `fifo` by arrival, `fair` takes turns between clients |
 
 `--gpus` takes comma-separated physical device numbers such as `0,1`. Workers
 select their devices from this option, so setting `CUDA_VISIBLE_DEVICES` on the

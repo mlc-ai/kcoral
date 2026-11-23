@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import re
 import threading
 import traceback
 import uuid
@@ -30,6 +31,7 @@ from kcoral.protocol import (
     _encode_response,
     parse_request,
 )
+from kcoral.runtime.lease import LEASE_POLICIES
 from kcoral.runtime.pool import PoolBusy, SubmitOutcome, WorkerPool
 from kcoral.runtime.worker import (
     RequestCancelled,
@@ -45,6 +47,7 @@ from kcoral.support import sandbox
 _TRACEBACK_LIMIT = 8192
 _MESSAGE_LIMIT = 2048
 _STREAM_CHUNK_BYTES = 1024 * 1024
+_CLIENT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 _FINISH_REASON_LEVEL = {
     "completed": "INFO",
@@ -71,8 +74,8 @@ def create_app(
         primarily for custom integration and testing. By default the selected
         CPU or GPU mode determines the runtime.
     :returns: An application to run with an HTTP server such as uvicorn.
-    :raises ValueError: If the device mode, disk cache capacity or sandbox
-        configuration is invalid.
+    :raises ValueError: If the device mode, disk cache capacity, sandbox or
+        lease policy configuration is invalid.
 
     Worker processes start during the application's serving lifecycle, not
     when this function is imported. Install the ``server`` extra to use it.
@@ -86,6 +89,8 @@ def create_app(
         raise ValueError("sandbox must be 'none' or 'bubblewrap'")
     if config.sandbox_readonly_paths and config.sandbox == "none":
         raise ValueError("sandbox_readonly_paths requires sandbox='bubblewrap'")
+    if config.lease_policy not in LEASE_POLICIES:
+        raise ValueError(f"lease_policy must be one of {', '.join(LEASE_POLICIES)}")
     worker_gpus = config.gpus if config.device == "gpu" else []
     cpu_workers = config.num_workers if config.device == "cpu" else None
     worker_count = (
@@ -150,6 +155,7 @@ def create_app(
                 events=events,
                 sandbox=app.state.sandbox,
                 sandbox_readonly_paths=tuple(config.sandbox_readonly_paths),
+                lease_policy=config.lease_policy,
             )
         except BaseException as exc:
             events.emit(
@@ -286,10 +292,12 @@ def create_app(
         headers = {"X-Request-ID": request_id}
         events: EventLogger = request.app.state.events
         client = request.client
+        client_name = _client_name(request)
         events.emit(
             "request_received",
             request_id=request_id,
             client=client.host if client else None,
+            client_name=client_name,
             content_length=request.headers.get("content-length"),
         )
 
@@ -387,6 +395,7 @@ def create_app(
                     config.worker_wait_timeout_seconds,
                     request_id,
                     cancelled,
+                    client_name,
                 )
             finally:
                 # Unpin when the worker is done with the blobs, not when a
@@ -625,6 +634,18 @@ def _error_response(status: int, kind: str, message: str, request_id: str) -> JS
         status_code=status,
         headers={"X-Request-ID": request_id},
     )
+
+
+def _client_name(request: Request) -> str | None:
+    """The client whose GPU turns a request counts against; None is the default.
+
+    A missing, repeated or invalid ``X-KCoral-Client`` header falls back to the
+    default client rather than rejecting the request.
+    """
+    values = request.headers.getlist("x-kcoral-client")
+    if len(values) == 1 and _CLIENT_NAME.fullmatch(values[0]):
+        return values[0]
+    return None
 
 
 def _request_id(request: Request) -> str:

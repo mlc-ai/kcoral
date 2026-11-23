@@ -18,10 +18,13 @@ from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 if TYPE_CHECKING:  # a type-only import: worker.py imports this module at runtime
     from kcoral.runtime.worker import Worker
+
+LeasePolicy = Literal["fifo", "fair"]
+LEASE_POLICIES: tuple[LeasePolicy, ...] = ("fifo", "fair")
 
 
 class Ticket:
@@ -92,7 +95,9 @@ class NoopLeases:
     while every reported lease timing remains zero.
     """
 
-    def acquire(self, gpu_id: None, holder: Worker, *, cancelled=None) -> float:
+    def acquire(
+        self, gpu_id: None, holder: Worker, *, cancelled=None, maintenance: bool = False
+    ) -> float:
         return 0.0
 
     def release(self, gpu_id: None, holder: Worker) -> None:
@@ -125,16 +130,32 @@ class _LeaseRequest:
     ticket: Ticket
     gpu_ids: tuple[int, ...] | None = None
     count: int = 1
+    client: str | None = None  # whose request; None is the default client
+    maintenance: bool = False  # True: killing or starting a worker; False: serving a request
 
 
 class GPULeases:
     """Shared arbitration for workers bound to one GPU or a fixed set.
 
-    A waiting set never holds a subset. Older requests reserve their place in
-    the queue; independent pinned-device requests can still pass one another.
+    A waiting set never holds a subset. Earlier requests in grant order reserve
+    their place; independent pinned-device requests can still pass one another.
+
+    The lease policy sets the grant order. ``fifo`` grants in arrival order.
+    ``fair`` takes turns between clients, so one client's long holds cannot
+    queue another's short ones behind all of them: maintenance leases (killing
+    or starting a worker) come first, then the client served least recently,
+    each client's own requests in arrival order. A holder's client is its
+    ``client`` attribute, which the pool sets per request. Under either policy
+    the GPU changes hands only when its holder releases it.
     """
 
-    def __init__(self, gpu_ids: list[int]) -> None:
+    def __init__(self, gpu_ids: list[int], policy: LeasePolicy = "fifo") -> None:
+        if policy not in LEASE_POLICIES:
+            raise ValueError(f"unknown lease policy: {policy!r}")
+        self._policy = policy
+        # Clients by the last grant they received, least recent first. Bounded:
+        # a client forgotten here ranks as never served, which it nearly was.
+        self._served: dict[str | None, None] = {}
         self._lock = threading.Lock()
         self._initializers: dict[int, deque[Ticket]] = {gpu: deque() for gpu in gpu_ids}
         self._unavailable: set[int] = set()
@@ -173,13 +194,21 @@ class GPULeases:
         holder: Worker,
         *,
         cancelled: threading.Event | None = None,
+        maintenance: bool = False,
     ) -> float | None:
-        """Wait for the device(s); returns the wait in ms, or None once ``cancelled``."""
+        """Wait for the device(s); returns the wait in ms, or None once ``cancelled``.
+
+        ``fair`` grants ``maintenance`` leases first without counting them as
+        any client's turn; ``fifo`` ignores the flag.
+        """
         devices = (gpu_id,) if isinstance(gpu_id, int) else gpu_id
         with self._lock:
             if all(self._holder[gpu] is holder for gpu in devices):
                 return 0.0
-        result = self._acquire(_LeaseRequest(holder, Ticket(), devices), cancelled)
+        request = _LeaseRequest(
+            holder, Ticket(), devices, client=_client_of(holder), maintenance=maintenance
+        )
+        result = self._acquire(request, cancelled)
         return None if result is None else result[1]
 
     def acquire_count(
@@ -188,7 +217,8 @@ class GPULeases:
         """Wait for any complete set; cancellation removes the whole request."""
         if not 1 <= count <= len(self._holder):
             raise ValueError("GPU count exceeds this server's capacity")
-        return self._acquire(_LeaseRequest(holder, Ticket(), count=count), cancelled)
+        request = _LeaseRequest(holder, Ticket(), count=count, client=_client_of(holder))
+        return self._acquire(request, cancelled)
 
     def _acquire(
         self, request: _LeaseRequest, cancelled: threading.Event | None = None
@@ -235,8 +265,14 @@ class GPULeases:
         self.release(gpu_id, holder)
 
     def _dispatch_locked(self) -> None:
+        # One grant per pass, so the fair order is recomputed after each grant.
+        # Under fifo the order never changes and this equals one full pass.
+        while self._grant_next_locked():
+            pass
+
+    def _grant_next_locked(self) -> bool:
         blocked: set[int] = set()
-        for entry in list(self._waiters):
+        for entry in self._grant_order_locked():
             if (
                 entry.gpu_ids is not None and self._unavailable.intersection(entry.gpu_ids)
             ) or entry.count > len(self._holder) - len(self._unavailable):
@@ -264,8 +300,28 @@ class GPULeases:
                 self._holder[gpu] = entry.holder
                 self._held_since_ns[gpu] = time.monotonic_ns()
             self._waiters.remove(entry)
+            if not entry.maintenance:
+                self._served.pop(entry.client, None)
+                self._served[entry.client] = None
+                if len(self._served) > _REMEMBERED_CLIENTS:
+                    del self._served[next(iter(self._served))]
             entry.ticket.value = chosen
             entry.ticket.event.set()
+            return True
+        return False
+
+    def _grant_order_locked(self) -> list[_LeaseRequest]:
+        if self._policy == "fifo":
+            return list(self._waiters)
+        maintenance = [entry for entry in self._waiters if entry.maintenance]
+        by_client: dict[str | None, list[_LeaseRequest]] = {}
+        for entry in self._waiters:
+            if not entry.maintenance:
+                by_client.setdefault(entry.client, []).append(entry)
+        rank = {client: position for position, client in enumerate(self._served)}
+        # Stable: clients never served keep the order of their first request.
+        clients = sorted(by_client, key=lambda client: rank.get(client, -1))
+        return maintenance + [entry for client in clients for entry in by_client[client]]
 
     def depth(self, gpu_id: int) -> int:
         with self._lock:
@@ -284,5 +340,12 @@ class GPULeases:
             return None
 
 
+_REMEMBERED_CLIENTS = 1024
+
+
 def _request_of(holder: Worker) -> str | None:
     return getattr(holder, "request_id", None)
+
+
+def _client_of(holder: object) -> str | None:
+    return getattr(holder, "client", None)

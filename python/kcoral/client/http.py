@@ -36,12 +36,15 @@ class Client:
         self,
         base_url: str,
         *,
+        client: str | None = None,
         headers: dict[str, str] | None = None,
         connect_timeout_seconds: float = 10.0,
     ) -> None:
         """Create a client without contacting the server.
 
         :param base_url: Server address, such as ``http://127.0.0.1:8000``.
+        :param client: Optional name a ``--lease-policy fair`` server schedules
+            this client's requests under, sent as ``X-KCoral-Client``.
         :param headers: Optional HTTP headers sent with every request.
         :param connect_timeout_seconds: Limit for establishing a connection.
 
@@ -49,6 +52,8 @@ class Client:
         to :meth:`execute` to request a server-side execution limit.
         """
         timeout = httpx.Timeout(None, connect=connect_timeout_seconds)
+        if client is not None:
+            headers = {**(headers or {}), "X-KCoral-Client": client}
         self._http = httpx.Client(base_url=base_url.rstrip("/"), headers=headers, timeout=timeout)
 
     def __enter__(self) -> Client:
