@@ -496,6 +496,31 @@ other workspaces.</p>
 <p>This feature assumes <strong>trusted programs</strong>. It does not isolate hostile code
 sharing an interpreter or provide GPU memory isolation.</p>
 </section>
+<section id="share-gpus-fairly-between-clients">
+<h2>Share GPUs fairly between clients<a class="headerlink" href="#share-gpus-fairly-between-clients" title="Link to this heading">¶</a></h2>
+<p>By default a GPU’s lease goes to waiting workers in arrival order, so one
+client’s long holds can queue another client’s short requests behind all of
+them. With <code class="docutils literal notranslate"><span class="pre">--lease-policy</span> <span class="pre">fair</span></code>, clients take turns: the lease goes to the
+client served least recently, and each client’s own requests stay in arrival
+order. A holder is never interrupted, so a waiting client waits for about
+one hold by each other client, and a worker replacement waits for at most the
+current holder.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kcoral<span class="w"> </span>server<span class="w"> </span>--lease-policy<span class="w"> </span>fair
+</pre></div>
+</div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">client</span> <span class="o">=</span> <span class="n">kcoral</span><span class="o">.</span><span class="n">Client</span><span class="p">(</span><span class="s2">"http://gpu-server:8000"</span><span class="p">,</span> <span class="n">client</span><span class="o">=</span><span class="s2">"kernel-search"</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">client</span></code> option sends the <code class="docutils literal notranslate"><span class="pre">X-KCoral-Client</span></code> header. Names have 1-64
+letters, digits, <code class="docutils literal notranslate"><span class="pre">.</span></code>, <code class="docutils literal notranslate"><span class="pre">-</span></code> or <code class="docutils literal notranslate"><span class="pre">_</span></code>. Requests with no valid name share one default
+client and one turn, so <code class="docutils literal notranslate"><span class="pre">fair</span></code> only helps clients that set <code class="docutils literal notranslate"><span class="pre">Client(client=...)</span></code>.
+Names are trusted claims: a client could take extra turns under fresh names,
+so use <code class="docutils literal notranslate"><span class="pre">fair</span></code> only where every client is trusted.</p>
+<p>Fairness applies only to GPU leases; waiting for a free worker stays
+first-come. Turns are counted per lease, not per request or GPU time: a request
+that gives up the GPU partway through, such as for a CPU-only phase, waits for
+another turn each time it needs the GPU back.</p>
+</section>
 <section id="configuration">
 <h2>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">¶</a></h2>
 <p>The following options configure a standalone server. Use <code class="docutils literal notranslate"><span class="pre">--help</span></code> to display
@@ -565,6 +590,11 @@ worker exclusive access to its GPU while it executes or measures GPU work.</p>
 <td><p>No additional paths</p></td>
 <td><p>—</p></td>
 <td><p>Additional read-only dependency path; repeatable</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--lease-policy</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">fifo</span></code></p></td>
+<td><p>—</p></td>
+<td><p>Lease grant order: <code class="docutils literal notranslate"><span class="pre">fifo</span></code> by arrival, <code class="docutils literal notranslate"><span class="pre">fair</span></code> takes turns between clients</p></td>
 </tr>
 </tbody>
 </table>
@@ -779,6 +809,7 @@ See <a class="reference internal" href="logging.html"><span class="std std-doc">
 </li>
 <li><a class="reference internal" href="#add-a-cpu-server-for-compilation">Add a CPU server for compilation</a></li>
 <li><a class="reference internal" href="#isolate-worker-files-with-bubblewrap">Isolate worker files with bubblewrap</a></li>
+<li><a class="reference internal" href="#share-gpus-fairly-between-clients">Share GPUs fairly between clients</a></li>
 <li><a class="reference internal" href="#configuration">Configuration</a><ul>
 <li><a class="reference internal" href="#binding-and-worker-selection">Binding and worker selection</a></li>
 <li><a class="reference internal" href="#time-and-size-limits">Time and size limits</a></li>
@@ -797,7 +828,7 @@ See <a class="reference internal" href="logging.html"><span class="std std-doc">
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=c3813722"></script>
+</div><script src="../_static/documentation_options.js?v=e9f76301"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

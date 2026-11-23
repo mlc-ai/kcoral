@@ -363,7 +363,7 @@ console. Use the request ID to correlate Router and server events.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">request_received</span></code></p></td>
-<td><p>The request arrived; includes <code class="docutils literal notranslate"><span class="pre">request_id</span></code>, client address, and declared content length</p></td>
+<td><p>The request arrived; includes <code class="docutils literal notranslate"><span class="pre">request_id</span></code>, client address, <code class="docutils literal notranslate"><span class="pre">client_name</span></code> when the request names a client, and declared content length</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">request_accepted</span></code></p></td>
 <td><p>The program passed validation; includes the timeout, request size, instruction and upload counts, and saved program filename when available</p></td>
@@ -575,7 +575,7 @@ replay it. Use <code class="docutils literal notranslate"><span class="pre">--no
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=c3813722"></script>
+</div><script src="../_static/documentation_options.js?v=e9f76301"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
