@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 from kcoral.artifacts import ReturnedFile, ReturnedFolder
 from kcoral.client import (
     Client,
+    JobHandle,
+    JobStatus,
     KCoralError,
     Program,
     ProgramResult,
@@ -25,6 +27,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Client",
+    "JobHandle",
+    "JobStatus",
     "KCoralError",
     "Program",
     "ProgramResult",

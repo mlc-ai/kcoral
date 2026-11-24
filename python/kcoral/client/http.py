@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Callable
+from contextlib import closing
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 
 import httpx
 
+from kcoral.client.jobs import JobHandle
 from kcoral.client.program import Program
 from kcoral.client.result import ProgramResult, _json_body, _parse_program_result, _response_body
 from kcoral.errors import KCoralError, ProtocolError, TransportError
@@ -136,19 +139,7 @@ class Client:
         """
         if not isinstance(program, Program):
             raise TypeError("execute expects a Program")
-        options: dict[str, Any] = {}
-        if gpu_count is not None:
-            if (
-                isinstance(gpu_count, bool)
-                or not isinstance(gpu_count, int)
-                or not 1 <= gpu_count <= 8
-            ):
-                raise ValueError("gpu_count must be an integer between 1 and 8")
-            options["gpu_count"] = gpu_count
-        if timeout_seconds is not None:
-            options["timeout_seconds"] = timeout_seconds
-        if output_limit_bytes is not None:
-            options["output_limit_bytes"] = output_limit_bytes
+        options = _execution_options(timeout_seconds, gpu_count, output_limit_bytes)
 
         body, binary_parts, route = self._post_program(
             program, options, include_blobs=set(), route=None
@@ -175,6 +166,68 @@ class Client:
             if body.get("status") == "CACHE_MISS":
                 raise ProtocolError("server still reports CACHE_MISS after a complete blob resend")
         return _parse_program_result(body, binary_parts)
+
+    def submit(
+        self,
+        program: Program,
+        *,
+        timeout_seconds: float | None = None,
+        gpu_count: int | None = None,
+        output_limit_bytes: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> JobHandle:
+        """Upload a complete program to a router and return its durable job handle.
+
+        Requires a router started with ``--job-dir``. Uploads every referenced
+        blob before returning, independently of worker availability. Keep the
+        job ID to reconnect through :meth:`get_job` from another client.
+
+        A transport failure is retried once with the same idempotency key. If
+        both attempts fail, ``TransportError.idempotency_key`` can be used to
+        repeat this submission safely during the job's retention period.
+        Supply your own key to recover across client process restarts.
+        """
+        if not isinstance(program, Program):
+            raise TypeError("submit expects a Program")
+        options = _execution_options(timeout_seconds, gpu_count, output_limit_bytes)
+        key = str(uuid.uuid4()) if idempotency_key is None else idempotency_key
+        if (
+            not isinstance(key, str)
+            or not 1 <= len(key) <= 128
+            or any(not 33 <= ord(char) <= 126 for char in key)
+        ):
+            raise ValueError("idempotency_key must contain 1-128 visible ASCII characters")
+        files = _program_files(program, options, set(program._blobs))
+        for attempt in range(2):
+            try:
+                with closing(
+                    self._request(
+                        "POST",
+                        "/jobs",
+                        files=files,
+                        headers={"Idempotency-Key": key},
+                        stream=True,
+                    )
+                ) as response:
+                    if response.status_code != 202:
+                        raise _server_error(response)
+                    body = _json_body(response)
+                job_id = body.get("job_id")
+                try:
+                    handle = self.get_job(job_id)
+                except (TypeError, ValueError) as exc:
+                    raise ProtocolError("submission returned an invalid job ID") from exc
+                return handle
+            except TransportError as exc:
+                if attempt == 1:
+                    raise TransportError(str(exc), idempotency_key=key) from exc
+        raise AssertionError("unreachable")
+
+    def get_job(self, job_id: str) -> JobHandle:
+        """Restore a handle for this router without making a network request."""
+        if not isinstance(job_id, str) or str(uuid.UUID(job_id)) != job_id:
+            raise ValueError("job_id must be a canonical lowercase UUID")
+        return JobHandle(job_id, self)
 
     def health(self) -> dict[str, Any]:
         """Read endpoint status, load, and compilation environment.
@@ -216,29 +269,7 @@ class Client:
         include_blobs: set[str],
         route: str | None,
     ) -> tuple[dict[str, Any], dict[str, bytes | memoryview], str | None]:
-        payload: dict[str, Any] = {"instructions": program.instructions}
-        if options:
-            payload["options"] = options
-        files: list[tuple[str, tuple[None, bytes, str]]] = [
-            (
-                "program",
-                (
-                    None,
-                    json.dumps(
-                        payload,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ).encode("utf-8"),
-                    "application/json",
-                ),
-            )
-        ]
-        files.extend(
-            (f"blob:{blob_hash}", (None, data, "application/octet-stream"))
-            for blob_hash, data in program._blobs.items()
-            if blob_hash in include_blobs
-        )
+        files = _program_files(program, options, include_blobs)
         headers = {"X-KCoral-Node": route} if route else None
         response = self._request("POST", "/execute", files=files, headers=headers, stream=True)
         try:
@@ -287,3 +318,47 @@ def _server_error(response: httpx.Response) -> KCoralError:
         kind = None
     request_id = body.get("request_id") if isinstance(body, dict) else None
     return KCoralError(response.status_code, message, kind=kind, request_id=request_id)
+
+
+def _execution_options(
+    timeout_seconds: float | None, gpu_count: int | None, output_limit_bytes: int | None
+) -> dict[str, Any]:
+    options: dict[str, Any] = {}
+    if gpu_count is not None:
+        if isinstance(gpu_count, bool) or not isinstance(gpu_count, int) or not 1 <= gpu_count <= 8:
+            raise ValueError("gpu_count must be an integer between 1 and 8")
+        options["gpu_count"] = gpu_count
+    if timeout_seconds is not None:
+        options["timeout_seconds"] = timeout_seconds
+    if output_limit_bytes is not None:
+        options["output_limit_bytes"] = output_limit_bytes
+    return options
+
+
+def _program_files(
+    program: Program, options: dict[str, Any], include_blobs: set[str]
+) -> list[tuple[str, tuple[None, bytes, str]]]:
+    payload: dict[str, Any] = {"instructions": program.instructions}
+    if options:
+        payload["options"] = options
+    files: list[tuple[str, tuple[None, bytes, str]]] = [
+        (
+            "program",
+            (
+                None,
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8"),
+                "application/json",
+            ),
+        )
+    ]
+    files.extend(
+        (f"blob:{blob_hash}", (None, data, "application/octet-stream"))
+        for blob_hash, data in program._blobs.items()
+        if blob_hash in include_blobs
+    )
+    return files

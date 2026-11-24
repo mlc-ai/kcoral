@@ -45,7 +45,7 @@ async fn health_handler(State(pool): State<NodePool>) -> Response {
 }
 
 // Request accounting follows the response body, including cancellation.
-struct RequestTrace {
+pub(super) struct RequestTrace {
     id: String,
     started: Instant,
     state: std::sync::Mutex<TraceState>,
@@ -62,7 +62,7 @@ struct TraceState {
 }
 
 impl RequestTrace {
-    fn new() -> Arc<Self> {
+    pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             id: Uuid::new_v4().to_string(),
             started: Instant::now(),
@@ -105,7 +105,7 @@ impl Drop for RequestTrace {
 }
 
 #[derive(Debug)]
-enum ForwardError {
+pub(super) enum ForwardError {
     InvalidRequest(&'static str),
     ClientBody,
     TooLarge,
@@ -114,9 +114,14 @@ enum ForwardError {
     Transport,
     UploadTransport,
     InvalidResponse,
+    Shutdown,
+    JobStorage,
 }
 
 impl ForwardError {
+    pub(super) fn is_shutdown(&self) -> bool {
+        matches!(self, Self::Shutdown)
+    }
     fn reason(&self) -> &'static str {
         match self {
             Self::ClientBody => "client_disconnected",
@@ -128,8 +133,18 @@ impl ForwardError {
         }
     }
 
-    fn response(&self, trace: &RequestTrace) -> Response {
+    pub(super) fn response(&self, trace: &RequestTrace) -> Response {
         let (status, kind, message) = match self {
+            Self::Shutdown => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "router_busy",
+                "router is shutting down",
+            ),
+            Self::JobStorage => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "job_storage",
+                "could not persist dispatch state",
+            ),
             Self::InvalidRequest(message) => (StatusCode::BAD_REQUEST, "invalid_request", *message),
             Self::ClientBody => (
                 StatusCode::BAD_REQUEST,
@@ -260,16 +275,17 @@ impl Transfer {
 
 async fn execute_handler(State(pool): State<NodePool>, request: HttpRequest<Body>) -> Response {
     let trace = RequestTrace::new();
-    match forward_request(pool, request, trace.clone()).await {
+    match forward_request(pool, request, trace.clone(), None).await {
         Ok(response) => response,
         Err(error) => error.response(&trace),
     }
 }
 
-async fn forward_request(
+pub(super) async fn forward_request(
     pool: NodePool,
     request: HttpRequest<Body>,
     trace: Arc<RequestTrace>,
+    dispatch: Option<super::jobs::Dispatch>,
 ) -> Result<Response, ForwardError> {
     let preferred = request
         .headers()
@@ -282,7 +298,15 @@ async fn forward_request(
     }
     let queued_at = Instant::now();
     trace.state.lock().unwrap().queued_at = Some(queued_at);
-    let acquired = pool.acquire(preferred, &trace.id).await;
+    let acquired = if let Some(ref dispatch) = dispatch {
+        tokio::select! {
+            biased;
+            _ = dispatch.cancelled() => return Err(ForwardError::Shutdown),
+            acquired = pool.acquire(preferred, &trace.id) => acquired,
+        }
+    } else {
+        pool.acquire(preferred, &trace.id).await
+    };
     {
         let mut state = trace.state.lock().unwrap();
         state.queue_ms = queued_at.elapsed().as_millis();
@@ -293,6 +317,13 @@ async fn forward_request(
         AcquireError::TimedOut => ForwardError::QueueTimeout,
     })?;
     trace.state.lock().unwrap().node = Some(guard.node_id.clone());
+    if let Some(dispatch) = dispatch {
+        if let Err(error) = dispatch.started(&guard.node_id, &trace.id).await {
+            tracing::error!(%error, "job_dispatch_storage_failed");
+            guard.finish().await;
+            return Err(ForwardError::JobStorage);
+        }
+    }
     let (parts, body) = request.into_parts();
     let mut request_headers = headers::forwarded(
         &parts.headers,

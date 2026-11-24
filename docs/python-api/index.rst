@@ -10,8 +10,20 @@ Client
 ------
 
 .. autoclass:: Client
-   :members: function, execute, health, target, close
+   :members: function, execute, submit, get_job, health, target, close
    :special-members: __init__, __enter__, __exit__
+
+Job handles
+-----------
+
+Routers started with ``--job-dir`` accept durable asynchronous submissions.
+See :doc:`../server-guide/router` for storage and recovery settings.
+
+.. autoclass:: JobHandle
+   :members: id, status, result
+
+.. autoclass:: JobStatus
+   :members:
 
 Remote functions
 ----------------

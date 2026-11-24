@@ -14,18 +14,24 @@ bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
+fs2 = "0.4"
 http = "1"
 http-body-util = "0.1"
 nix = { version = "0.29", features = ["process", "signal"] }
+multer = "3"
 prost = "0.13"
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["net", "sync"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
+tempfile = "3"
 tonic = { version = "0.12", features = ["tls-webpki-roots", "transport"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -34,9 +40,6 @@ uuid = { version = "1", features = ["v4"] }
 [build-dependencies]
 protoc-bin-vendored = "3"
 tonic-build = "0.12"
-
-[dev-dependencies]
-tempfile = "3"
 
 [[bin]]
 name = "kcoral-router"
