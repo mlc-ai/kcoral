@@ -97,73 +97,8 @@ Nodes sharing a Router must have matching GPU targets and runtime versions;
 incompatible nodes cannot receive work. Use separate Routers for different GPU
 architectures or runtime environments.
 
-## Submit asynchronous jobs
-
-Enable durable jobs by giving the Router a storage directory on a persistent volume.
-
-```bash
-kcoral router --port 9000 --job-dir /var/lib/kcoral/jobs
-```
-
-The Router saves complete inputs before returning a job ID. Its background tasks
-wait for a node slot, execute the program, and save the full response for later
-downloads. The client can exit after submission and reconnect using the job ID.
-
-```python
-from kcoral import Client, Program
-
-program = Program()
-value = program.upload(kind="bytes", value=b"hello")
-program.return_(key="value", value=value)
-
-with Client("http://127.0.0.1:9000") as client:
-    job_id = client.submit(program, idempotency_key="experiment-001").id
-
-with Client("http://127.0.0.1:9000") as client:
-    job = client.get_job(job_id)
-    print(job.status().state)
-    result = job.result(timeout=60)
-    assert result["value"] == b"hello"
-```
-
-`submit()` uploads all referenced blobs and waits for admission. `status()` reads
-metadata, and `result()` polls until it can download a result. A local waiting
-timeout raises `TimeoutError` while the job continues. The `timeout_seconds`
-option on `submit()` controls the node's execution budget. `FAILED` returns a
-`ProgramResult` containing the instruction error. `ERROR` raises `KCoralError`.
-
-The SDK generates an idempotency key and retries a transport failure once with
-that key. If both attempts fail, the exception's `idempotency_key` allows another
-submission with the same input. An explicit key also supports recovery across
-client process restarts. Keys are scoped to the Router's job store and expire
-with their jobs. Keep the same key for retries of one submission and use a new
-key for an intentional new execution.
-
-The store uses SQLite for metadata and separate files for inputs and responses.
-One Router holds an exclusive lock on the directory. Completed downloads can
-be repeated until retention cleanup removes the job, its files and its key.
-Cleanup runs every second and removes terminal jobs after their retention
-interval. Active jobs retain their inputs until completion.
-
-On restart, the Router resumes `QUEUED` jobs. It marks jobs that were
-`DISPATCHED` as `ERROR` with `error.kind="execution_unknown"`. Those programs
-may have run. A node connection failure also produces an unknown-outcome error.
-Choose a new submission explicitly if the program is safe to run again.
-Graceful shutdown saves queued work and waits for dispatched jobs to finish.
-
-| Router option | Default | Meaning |
-| --- | --- | --- |
-| `--job-dir` | Disabled | Enable `/jobs` and store durable job data in this directory |
-| `--job-retention-seconds` | `86400` | How long to retain each terminal job and its idempotency key |
-| `--max-jobs` | `1024` | Maximum stored jobs, including active and terminal jobs; full stores reject new jobs with HTTP 503 |
-| `--max-job-result-bytes` | `268435456` | Maximum complete response size per job, including multipart framing |
-
-The existing `--max-request-bytes` bounds each upload, and at most four job
-uploads are processed concurrently. Node assignment uses the existing scheduling
-queue and its wait timeout. A scheduling failure after admission becomes a stored
-`ERROR` result. Configure capacity and retention together to fit the storage
-volume. See the [job protocol](../client-guide/protocol.md#router-job-endpoints)
-for HTTP endpoints and state definitions.
+For durable job submission, polling, and storage settings, see the
+[Async API](../client-guide/async-api.md).
 
 ## Recover from failures and stop nodes
 

@@ -17,7 +17,7 @@ Job handles
 -----------
 
 Routers started with ``--job-dir`` accept durable asynchronous submissions.
-See :doc:`../server-guide/router` for storage and recovery settings.
+See :doc:`../client-guide/async-api` for usage, storage and recovery settings.
 
 .. autoclass:: JobHandle
    :members: id, status, result

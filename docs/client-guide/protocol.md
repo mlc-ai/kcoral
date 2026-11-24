@@ -1,8 +1,12 @@
 # KCoral Protocol
 
-KCoral executes an ordered list of instructions as one program. This page describes
-the direct server's execution protocol. The [Router](../server-guide/router.md)
-adds node selection, routing metadata and optional durable job endpoints.
+A direct server exposes two client HTTP endpoints. A program is an ordered list of
+instructions, executed in one request with no persistent session handles.
+This page describes a direct server. The [Router](../server-guide/router.md) preserves
+the execution protocol while adding node selection and routing metadata.
+
+For the Router's durable submission and polling endpoints, see the
+[Async API](async-api.md).
 
 ## Endpoints
 
@@ -130,53 +134,6 @@ when `requests_waiting` is zero.
 
 On the router, `instance_id` and `started_at` describe the router process.
 For choosing a compilation target, see [Remote Compilation](../tutorials/remote-compilation.md#read-the-gpu-target).
-
-## Router job endpoints
-
-A Router configured with `--job-dir` accepts asynchronous jobs. Each job owns its
-inputs and complete result through its retention period. `job_id` is a canonical
-lowercase UUID. It identifies the job across polling requests and Router restarts.
-The execution attempt retains its own `X-Request-ID` for log correlation.
-
-| Endpoint | Response |
-| --- | --- |
-| `POST /jobs` | `202`, a job snapshot and `Location: /jobs/{job_id}` after durable admission |
-| `GET /jobs/{job_id}` | `200` and the current snapshot |
-| `GET /jobs/{job_id}/result` | `202` and `Retry-After: 1` while pending; the stored execution response when terminal |
-
-Submission uses the same multipart format as `/execute` and includes every
-referenced blob. The Router validates multipart input, JSON syntax, blob hashes
-and completeness before admission. Node-side validation of program instructions
-and execution options happens when the job is dispatched, and errors become
-stored results. Invalid submissions return `400`, oversized uploads return `413`,
-and a full job store or upload admission limit returns `503` with `Retry-After: 1`.
-
-`Idempotency-Key` is optional and accepts one header containing 1–128 visible
-ASCII characters. Repeating a key with identical program JSON bytes, blob hashes and
-`X-KCoral-Client` identity returns the existing job. Multipart boundaries and part
-ordering do not affect the fingerprint. Different
-input with the same key returns `409`. The key is forgotten when the job expires.
-
-Snapshots include `job_id`, `state`, `submitted_at`, `dispatched_at`, `finished_at`,
-`node_id`, `request_id`, and an optional `error`. Timestamps are Unix milliseconds;
-events that have not occurred use `null`. A submission response may already show
-a later state when its idempotency key refers to an existing job.
-
-| State | Meaning |
-| --- | --- |
-| `QUEUED` | Saved and awaiting a Router slot |
-| `DISPATCHED` | Assigned to a node; may be waiting for a worker or GPU |
-| `COMPLETED` | The complete successful program response is available |
-| `FAILED` | The complete failed program response is available |
-| `ERROR` | The stored result contains an HTTP execution, scheduling, transport or storage error |
-
-Successful and failed program results preserve `/execute` encodings, including
-multipart tensors and returned files. HTTP execution errors preserve their
-status and error payload. Router restart or connection loss after dispatch
-produces `502` with `error.kind="execution_unknown"`. A result exceeding the
-Router's configured size limit produces `500` with `error.kind="response_too_large"`.
-Status queries remain lightweight even for large results. Reading a result is
-repeatable, and unknown or expired job IDs return `404`.
 
 ## Operations
 
