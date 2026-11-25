@@ -135,6 +135,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=_DEFAULTS.lease_policy,
         help="who gets a GPU next: fifo by arrival, or fair turns between clients (default: fifo)",
     )
+    parser.add_argument(
+        "--gpu-lock-dir",
+        default="",
+        help="share GPUs with other servers on this host through per-GPU lock files in this "
+        "directory (e.g. /tmp); off by default",
+    )
     parser.add_argument("--max-request-bytes", type=int, default=_DEFAULTS.max_request_bytes)
     parser.add_argument("--max-response-bytes", type=int, default=_DEFAULTS.max_response_bytes)
     parser.add_argument(
@@ -188,6 +194,7 @@ def config_from_args(args: argparse.Namespace) -> ServerConfig:
         sandbox=args.sandbox,
         sandbox_readonly_paths=args.sandbox_readonly_path,
         lease_policy=args.lease_policy,
+        gpu_lock_dir=Path(args.gpu_lock_dir) if args.gpu_lock_dir else None,
         worker_termination_grace_seconds=args.worker_termination_grace_seconds,
         max_request_bytes=args.max_request_bytes,
         max_response_bytes=args.max_response_bytes,
