@@ -298,6 +298,29 @@ def test_a_replacement_that_fails_is_not_silent(tmp_path):
     assert failed["worker_id"] == "gpu0/w0"
 
 
+def test_a_dead_worker_is_revived_before_it_runs_the_next_request(tmp_path):
+    """A failed replacement must not fail the next request routed to that worker."""
+    config = ServerConfig(
+        sandbox="none",
+        gpus=[0],
+        log_dir=tmp_path / "logs",
+        workers_per_gpu=1,
+        log_console=False,
+    )
+    app = create_app(config, runtime_factory=fake_runtime_factory)
+    with TestClient(app) as client:
+        worker = app.state.pool._workers[0]
+        start_process = worker._start_process
+        worker._start_process = _raise_respawn_failure
+        assert _post(client, STRUCTURAL_PROGRAM).status_code == 200
+        _settled(app.state.pool)
+        worker._start_process = start_process
+        assert _post(client, STRUCTURAL_PROGRAM).status_code == 200
+        _settled(app.state.pool)
+    reasons = [e["reason"] for e in _read_events(tmp_path) if e["event"] == "worker_retired"]
+    assert reasons[:2] == ["request_limit", "dead"]
+
+
 def _raise_respawn_failure():
     raise RuntimeError("no process to be had")
 
