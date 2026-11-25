@@ -56,6 +56,7 @@ RETIRE_REASON_LEVEL = {
     "cancelled": "INFO",
     "crashed": "ERROR",
     "sandbox_cleanup": "WARNING",
+    "dead": "WARNING",  # the failed respawn before it was already logged at ERROR
 }
 _CANCEL_POLL_SECONDS = 0.1
 
@@ -618,6 +619,10 @@ class Worker:
         The parent owns the workspace so it is removed even when the child is
         killed before its own cleanup handlers can run.
         """
+        if getattr(self, "_respawn_failed", False):
+            # A failed respawn leaves the pool a worker with no process. Revive it
+            # before sending the program, or this request fails for that one's sake.
+            self._abandon_and_respawn(leases, "dead")
         if self._sandbox_mode == "bubblewrap":
             sandbox = self._sandbox
             if sandbox is None:
@@ -841,6 +846,7 @@ class Worker:
         leases.abandon(self._lease_key, self)
         if getattr(self, "_closing", None) is not None and self._closing.is_set():
             return
+        self._respawn_failed = True  # until a replacement initializes; see run
         try:
             self._start_process()
             with leases.initialization(self.gpu_id):
@@ -856,6 +862,7 @@ class Worker:
                     raise
                 finally:
                     leases.release(self._lease_key, self)
+            self._respawn_failed = False
         except Exception as exc:
             if isinstance(exc, WorkerCleanupError):
                 leases.quarantine(self.gpu_ids)

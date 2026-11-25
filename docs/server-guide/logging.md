@@ -93,6 +93,7 @@ is being replaced:
 | `timeout` | The worker exceeded the execution timeout | `WARNING` |
 | `cancelled` | The client disconnected while the worker ran its request | `INFO` |
 | `crashed` | The worker crashed or could not execute a program | `ERROR` |
+| `dead` | An earlier replacement failed; the next request routed to the worker respawns it first | `WARNING` |
 
 A replacement produces `worker_ready` once initialized. If replacement fails,
 look for `worker_failed` or `worker_replace_failed`, both at `ERROR`. During
