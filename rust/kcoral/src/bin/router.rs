@@ -1,9 +1,10 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use clap::Parser;
 use kcoral::{
     init_tracing, nonnegative_duration, positive_duration,
-    router::{serve, NodePool, RouterConfig},
+    router::{app, JobConfig, Jobs, NodePool, RouterConfig},
     shutdown_signal, DEFAULT_MAX_REQUEST_BYTES,
 };
 use tokio::sync::watch;
@@ -37,6 +38,15 @@ struct Args {
     max_request_bytes: u64,
     #[arg(long, env = "KCORAL_NODE_TOKEN", hide_env_values = true)]
     node_token: Option<String>,
+    /// Enable durable /jobs APIs using this directory (one router per directory).
+    #[arg(long)]
+    job_dir: Option<PathBuf>,
+    #[arg(long, default_value_t = 86400.0)]
+    job_retention_seconds: f64,
+    #[arg(long, default_value_t = 1024)]
+    max_jobs: usize,
+    #[arg(long, default_value_t = DEFAULT_MAX_REQUEST_BYTES)]
+    max_job_result_bytes: u64,
 }
 
 #[tokio::main]
@@ -64,8 +74,42 @@ async fn main() -> anyhow::Result<()> {
     let pool = NodePool::new(config)?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let health_task = tokio::spawn(pool.clone().run_status_loop(shutdown_rx));
-    serve(listen, pool, shutdown_signal()).await?;
+    let jobs = if let Some(directory) = args.job_dir {
+        Some(
+            Jobs::open(
+                JobConfig {
+                    directory,
+                    retention: positive_duration(args.job_retention_seconds, "job retention")?,
+                    max_jobs: args.max_jobs,
+                    max_result_bytes: args.max_job_result_bytes,
+                },
+                pool.clone(),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let mut application = app(pool);
+    if let Some(ref jobs) = jobs {
+        application = application.merge(jobs.routes());
+    }
+    let listener = tokio::net::TcpListener::bind(listen).await?;
+    tracing::info!(listen = %listener.local_addr()?, "KCoral router listening");
+    let shutdown_jobs = jobs.clone();
+    let serving = axum::serve(listener, application)
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            if let Some(jobs) = shutdown_jobs {
+                jobs.begin_shutdown();
+            }
+        })
+        .await;
+    if let Some(jobs) = jobs {
+        jobs.shutdown().await;
+    }
     let _ = shutdown_tx.send(true);
     health_task.await?;
+    serving?;
     Ok(())
 }

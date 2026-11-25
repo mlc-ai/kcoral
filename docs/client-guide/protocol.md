@@ -1,9 +1,12 @@
 # KCoral Protocol
 
-KCoral exposes two client HTTP endpoints. A program is an ordered list of
+A direct server exposes two client HTTP endpoints. A program is an ordered list of
 instructions, executed in one request with no persistent session handles.
 This page describes a direct server. The [Router](../server-guide/router.md) preserves
 the execution protocol while adding node selection and routing metadata.
+
+For the Router's durable submission and polling endpoints, see the
+[Async API](async-api.md).
 
 ## Endpoints
 

@@ -42,6 +42,7 @@ client-guide/protocol
 
 client-guide/remote-functions
 client-guide/writing-a-program
+client-guide/async-api
 client-guide/builtin-cli-tools
 client-guide/tool-calls
 ```

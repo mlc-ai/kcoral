@@ -97,6 +97,9 @@ Nodes sharing a Router must have matching GPU targets and runtime versions;
 incompatible nodes cannot receive work. Use separate Routers for different GPU
 architectures or runtime environments.
 
+For durable job submission, polling, and storage settings, see the
+[Async API](../client-guide/async-api.md).
+
 ## Recover from failures and stop nodes
 
 A routed deployment can keep serving requests when a node becomes unavailable,

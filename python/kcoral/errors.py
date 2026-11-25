@@ -66,7 +66,14 @@ class KCoralError(Exception):
 
 
 class TransportError(Exception):
-    """The request did not produce an HTTP response."""
+    """The request did not produce a usable HTTP response.
+
+    Failed job submissions carry ``idempotency_key`` for safe resubmission.
+    """
+
+    def __init__(self, message: str, *, idempotency_key: str | None = None) -> None:
+        super().__init__(message)
+        self.idempotency_key = idempotency_key
 
 
 class ProtocolError(Exception):

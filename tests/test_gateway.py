@@ -47,7 +47,7 @@ async def wait_until(check, timeout=8):
 
 
 @asynccontextmanager
-async def running_router(directory, *options):
+async def running_router(directory, *options, include_process=False):
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
@@ -71,7 +71,7 @@ async def running_router(directory, *options):
                         return False
 
                 await wait_until(started)
-            yield url
+            yield (url, process) if include_process else url
         finally:
             process.terminate()
             try:

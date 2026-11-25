@@ -1,10 +1,14 @@
 //! HTTP dispatch, outbound gRPC registration, and node scheduling.
 mod gateway;
 mod http;
+mod job_store;
+mod jobs;
 mod pool;
 mod slot;
 
 pub use http::{app, serve};
+pub use job_store::JobConfig;
+pub use jobs::Jobs;
 use pool::AcquireError;
 pub use pool::{NodePool, RouterConfig};
 use slot::SlotGuard;
